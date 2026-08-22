@@ -1,0 +1,171 @@
+# Written inline on purpose. The estate's convention (banksy/.github/workflows)
+# is three lines delegating to a reusable workflow in rootstockmfg/cm, which a
+# personal repo cannot reach and, more to the point, which fit-check cannot read
+# inside: its rule 3 downgrades any absent verdict behind an external workflow to
+# "could not determine". Five of twenty-five entries would come back as shrugs.
+name: pr-checks
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # Entry 5 — no CI on drafts. The spelling is load-bearing: `draft == false`
+  # compares a boolean to a boolean. `draft == 'false'` coerces the string to
+  # NaN, never matches, and blocks every run; fit-check calls that a defect.
+  # Every job below repeats the guard, because a job-level `if` is the only
+  # place it can live once the jobs are independent.
+
+  open-boxes:
+    name: no undispositioned open boxes
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: grep the spec directory for open boxes
+        run: |
+          # The slug comes from the pull request's head ref, never from
+          # `git branch --show-current` — this runs on a detached HEAD, where
+          # that returns empty and the path collapses to an unscoped sweep of
+          # dev-path/, failing this spec on a neighbour's open boxes.
+          # `test -d` is what makes a wrong slug red: grep -r on a missing
+          # directory exits 2, and a leading `!` would turn that into a pass.
+          SPEC="dev-path/${GITHUB_HEAD_REF:?not a pull request build}"
+          test -d "$SPEC" && ! grep -rn '^- \[ \]' "$SPEC/"
+
+  lwc-tests:
+    name: LWC jest suite
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      # Entry 19 — the suite the scaffold already provides. Corroborated by
+      # @salesforce/sfdx-lwc-jest in devDependencies rather than by this line
+      # alone. --passWithNoTests keeps it honest before the first LWC exists,
+      # instead of green because the runner found nothing and shrugged.
+      - name: npm run test:unit
+        run: npm run test:unit -- --passWithNoTests
+
+  changed-lines:
+    name: added lines carry no debug statements
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Entry 17 — scoped to the changed lines, not the changed files and not
+      # the repo. --unified=0 drops context lines, so every `+` this sees was
+      # actually added by this pull request.
+      - name: git diff --unified=0 over the added lines
+        run: |
+          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+          BASE=$(git merge-base "origin/$GITHUB_BASE_REF" HEAD)
+          ADDED=$(git diff --unified=0 "$BASE"...HEAD -- 'force-app/**' \
+                  | grep '^+' | grep -v '^+++' || true)
+          BAD=$(printf '%s\n' "$ADDED" \
+                | grep -nE 'System\.debug\(|console\.log\(' || true)
+          if [ -n "$BAD" ]; then
+            echo "Added lines carry debug statements:"
+            printf '%s\n' "$BAD"
+            exit 1
+          fi
+          echo "No debug statements in added force-app lines."
+
+  flow-status:
+    name: flows are Active or Obsolete
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Entry 18 — the Navigator has no flows, so today this asserts over an
+      # empty set and passes. Written anyway: three lines, and the entry goes
+      # from "not observable" to observable the moment a flow lands.
+      - name: assert every flow's status
+        run: |
+          BAD=$(grep -l '<status>' -r force-app --include='*.flow-meta.xml' 2>/dev/null \
+                | xargs -r grep -L '<status>\(Active\|Obsolete\)</status>' || true)
+          if [ -n "$BAD" ]; then
+            echo "Flows whose status is neither Active nor Obsolete:"
+            printf '%s\n' "$BAD"
+            exit 1
+          fi
+          echo "Flow status check passed (empty set is a pass here)."
+
+  metadata-scope:
+    name: does this pull request carry metadata
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    outputs:
+      has_metadata: ${{ steps.scope.outputs.has_metadata }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Entry 20 — the guard is read off the change, never off a slice's
+      # `touches`, which is empty on exactly the create-only slices this
+      # judges. And it is an `if:` on this output rather than `on.*.paths`:
+      # a path filter on a *required* check has the opposite effect, because a
+      # check that never reports is a check that never goes green.
+      - id: scope
+        run: |
+          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+          BASE=$(git merge-base "origin/$GITHUB_BASE_REF" HEAD)
+          N=$(git diff --name-only "$BASE"...HEAD -- 'force-app/**' | wc -l | tr -d ' ')
+          echo "changed metadata files: $N"
+          if [ "$N" -gt 0 ]; then
+            echo "has_metadata=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_metadata=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy-gate:
+    name: deploy gate
+    needs: metadata-scope
+    if: >-
+      github.event.pull_request.draft == false &&
+      needs.metadata-scope.outputs.has_metadata == 'true'
+    runs-on: ubuntu-latest
+    # The secret is mapped to an env var here rather than read in a step `if`.
+    # The secrets context is not available in an if expression; mapping it to
+    # env at job level is the supported way to branch on a secret's presence.
+    env:
+      HAS_CI_ORG: ${{ secrets.SFDX_AUTH_URL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # This repo holds no CI credential, so the gate is declared and not
+      # exercised. It is gated on a secret that does not exist rather than left
+      # to fail on authentication, because a permanently red required check
+      # cannot be merged past and would deadlock the trial. This annotation
+      # exists so the skip cannot be read as a pass.
+      - name: report that the gate is unexercised
+        if: env.HAS_CI_ORG != 'true'
+        run: |
+          echo "::warning title=Deploy gate declared, not exercised::This repository holds no CI Salesforce credential. The guard and the test level are written and correct; nothing has run them against a real org. Do not read this job green as a passing deploy."
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_CI_ORG == 'true'
+        with:
+          node-version: "20"
+
+      - name: authenticate, deploy and run local tests
+        if: env.HAS_CI_ORG == 'true'
+        env:
+          SFDX_AUTH_URL: ${{ secrets.SFDX_AUTH_URL }}
+        run: |
+          npm install --global @salesforce/cli
+          printf '%s' "$SFDX_AUTH_URL" > "$RUNNER_TEMP/authurl.txt"
+          sf org login sfdx-url --sfdx-url-file "$RUNNER_TEMP/authurl.txt" --alias ci --set-default
+          # RunLocalTests, not RunSpecifiedTests: the whole-spec gate asserts
+          # the package's own suite, and a named subset would let an untouched
+          # class rot behind a green check.
+          sf project deploy start --test-level RunLocalTests --wait 60

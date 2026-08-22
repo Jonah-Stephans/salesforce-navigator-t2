@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "extraKnownMarketplaces": {
+    "rstk-team-tooling": {
+      "source": {
+        "source": "directory",
+        "path": "/Users/jonahstephans/Rootstock/rstk-claude-plugins"
+      }
+    },
+    "jonah-stephans": {
+      "source": {
+        "source": "github",
+        "repo": "Jonah-Stephans/dev-path"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "rstk@rstk-team-tooling": true,
+    "rstk-librarian@rstk-team-tooling": true,
+    "dev-path@jonah-stephans": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *.cls|*.trigger|*.js|*.html|*.css|*.json|*.xml) npx prettier --write \"$f\" 2>/dev/null || true;; esac",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "F=$(jq -r '.tool_input.file_path // \"\"'); case \"$F\" in *dev-path/*/spec.md) P=\"Intent|Outcomes|Out of scope|Open questions|Evidence|Current state|Design|Outcome checks|dev-path feedback\";; *dev-path/*/slices/*.md) P=\"What to build|Acceptance criteria|Deviations|Critique findings\";; *) exit 0;; esac; grep -n '^## ' \"$F\" | grep -Ev \"^[0-9]+:## ($P)$\" && echo \"dev-path: $F carries a heading outside the schema\"; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "orgName": "Salesforce Navigator",
+  "edition": "Developer",
+  "features": ["AddCustomApps:30"],
+  "settings": {
+    "lightningExperienceSettings": {
+      "enableS1DesktopEnabled": true
+    },
+    "apexSettings": {
+      "enableCompileOnDeploy": true
+    }
+  }
+}

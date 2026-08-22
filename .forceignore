@@ -1,0 +1,21 @@
+# List files or directories below to ignore them when running force:source:push, force:source:pull, and force:source:status
+# More information: https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_exclude_source.htm
+#
+
+package.xml
+
+# LWC configuration files
+**/jsconfig.json
+**/.eslintrc.json
+
+# LWC Jest
+**/__tests__/**
+
+node_modules/
+
+# Rootstock estate conventions, copied from ~/Rootstock/banksy: profiles and
+# org settings are org-shaped rather than source-shaped, and the jest harness
+# is dev/CI-only and must never reach a packaged org.
+**.profile-meta.xml
+**.settings-meta.xml
+**/jest.config.js
