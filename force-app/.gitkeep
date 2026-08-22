@@ -1,0 +1,6 @@
+# Git does not track empty directories, so without this file a fresh clone has
+# no force-app at all — the working copy and the clone disagree about the repo's
+# shape. fit-check entry 15 checks that every packageDirectories path exists on
+# disk, and that check would report a false absent against a clone.
+#
+# Remove once force-app carries tracked source.
