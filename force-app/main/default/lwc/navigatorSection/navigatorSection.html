@@ -1,0 +1,64 @@
+<template>
+  <article class="rstk-nav-section">
+    <header class="rstk-nav-section__header">
+      <template lwc:if={isRenaming}>
+        <lightning-input
+          class="rstk-nav-section__rename"
+          label="Section name"
+          variant="label-hidden"
+          value={draftName}
+          onchange={handleRenameChange}
+          oncommit={handleRenameCommit}
+          onkeydown={handleRenameKeydown}
+        ></lightning-input>
+      </template>
+      <template lwc:else>
+        <h2 class="rstk-nav-section__title">{name}</h2>
+      </template>
+
+      <lightning-button-menu
+        alternative-text={name}
+        icon-size="x-small"
+        menu-alignment="auto"
+        variant="border-filled"
+        onselect={handleMenuSelect}
+      >
+        <lightning-menu-item
+          value="rename"
+          label="Rename section…"
+        ></lightning-menu-item>
+        <lightning-menu-divider></lightning-menu-divider>
+        <lightning-menu-subheader label="Columns"></lightning-menu-subheader>
+        <template for:each={columnChoices} for:item="choice">
+          <lightning-menu-item
+            key={choice.value}
+            value={choice.value}
+            label={choice.label}
+            checked={choice.checked}
+          ></lightning-menu-item>
+        </template>
+        <lightning-menu-divider></lightning-menu-divider>
+        <lightning-menu-item
+          value="delete"
+          label="Delete section"
+        ></lightning-menu-item>
+      </lightning-button-menu>
+    </header>
+
+    <ul class={gridClass}>
+      <template for:each={items} for:item="item">
+        <li key={item.id} class="rstk-nav-section__cell">
+          <c-navigator-item
+            tab-id={item.id}
+            label={item.label}
+            page-reference={item.pageReference}
+          ></c-navigator-item>
+        </li>
+      </template>
+    </ul>
+
+    <template lwc:if={isEmpty}>
+      <p class="rstk-nav-section__empty">This section has no items yet.</p>
+    </template>
+  </article>
+</template>

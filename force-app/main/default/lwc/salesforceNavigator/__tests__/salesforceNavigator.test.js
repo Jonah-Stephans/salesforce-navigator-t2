@@ -3,6 +3,30 @@ import SalesforceNavigator from "c/salesforceNavigator";
 import { getNavItems } from "lightning/uiAppsApi";
 import { getNavigateCalledWith } from "lightning/navigation";
 import { MAX_PAGE_SIZE, NAV_ITEMS_CONFIG } from "c/navigatorTabSource";
+import { SCHEMA_VERSION } from "c/navigatorLayoutModel";
+import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
+import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
+import updateLayout from "@salesforce/apex/NavigatorLayoutController.updateLayout";
+
+// The Apex seam. Without these, `@lwc/jest-transformer` substitutes a plain
+// function returning `Promise.resolve()` that records nothing — the same
+// shape of gap the repo already closed for `lightning/navigation`, and it
+// would make every assertion below about *what was saved* unwritable.
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.getLayouts",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.createLayout",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.updateLayout",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
 
 // Five distinct pageReference types were verified against a live org (174
 // nav items, API v66.0), two of which — standard__cmsPage and
@@ -29,6 +53,24 @@ const ACTION_HUB_ITEM = {
   }
 };
 
+const CONTACT_ITEM = {
+  developerName: "Contact",
+  label: "Contacts",
+  pageReference: {
+    type: "standard__objectPage",
+    attributes: { objectApiName: "Contact", actionName: "home" },
+    state: {}
+  }
+};
+
+const EXISTING_LAYOUT_ID = "a0X000000000001AAA";
+const CREATED_LAYOUT_ID = "a0X000000000002AAA";
+
+// One second, matching the component's debounce. Named here rather than
+// repeated so a test cannot silently start advancing past a debounce it was
+// meant to be sitting inside.
+const AUTOSAVE_DELAY_MS = 1000;
+
 function buildItem(index) {
   return {
     developerName: `Custom_Tab_${index}`,
@@ -54,11 +96,82 @@ async function flush() {
   await Promise.resolve();
 }
 
+/**
+ * Items now live inside `c-navigator-section`, and under
+ * `@lwc/synthetic-shadow` — which the jest preset loads, so retargeting
+ * reproduces faithfully — a parent's `shadowRoot` query cannot see into a
+ * child's. This walks the section shadow roots so the assertions themselves
+ * stay exactly what they were when items were rendered flat.
+ */
+function queryItems(element) {
+  return Array.from(
+    element.shadowRoot.querySelectorAll("c-navigator-section")
+  ).flatMap((section) =>
+    Array.from(section.shadowRoot.querySelectorAll("c-navigator-item"))
+  );
+}
+
+function querySections(element) {
+  return Array.from(element.shadowRoot.querySelectorAll("c-navigator-section"));
+}
+
+/** The layout the component last sent to Apex, parsed back out of the call. */
+function lastSavedLayout(apexMock) {
+  const calls = apexMock.mock.calls;
+  return JSON.parse(calls[calls.length - 1][0].layoutJson);
+}
+
+/** Drives one section's overflow menu the way a user would. */
+function selectSectionMenuItem(element, sectionIndex, value) {
+  const section = querySections(element)[sectionIndex];
+  section.shadowRoot
+    .querySelector("lightning-button-menu")
+    .dispatchEvent(new CustomEvent("select", { detail: { value } }));
+}
+
+/** One change in a burst: made, rendered, and 100ms of the debounce spent. */
+async function burstChange(element, columns) {
+  selectSectionMenuItem(element, 0, `columns-${columns}`);
+  await flush();
+  jest.advanceTimersByTime(100);
+}
+
+async function settleAutosave() {
+  jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+  await flush();
+  await flush();
+}
+
 describe("c-salesforce-navigator", () => {
-  afterEach(() => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    getLayouts.mockResolvedValue([]);
+    createLayout.mockResolvedValue({
+      layoutId: CREATED_LAYOUT_ID,
+      name: "My Navigator",
+      isActive: true
+    });
+    updateLayout.mockResolvedValue({
+      layoutId: EXISTING_LAYOUT_ID,
+      name: "My Navigator",
+      isActive: true
+    });
+  });
+
+  afterEach(async () => {
     while (document.body.firstChild) {
       document.body.removeChild(document.body.firstChild);
     }
+    // Removing the element runs `disconnectedCallback`, which flushes any
+    // save still sitting in the debounce. That save's promise chain must be
+    // allowed to settle *here*, before `clearAllMocks` — otherwise its
+    // `createLayout` call lands in the next test's microtask queue, on a
+    // mock that has already been cleared, and shows up there as a save that
+    // test never made.
+    jest.runOnlyPendingTimers();
+    await flush();
+    await flush();
+    jest.useRealTimers();
     jest.clearAllMocks();
   });
 
@@ -69,7 +182,7 @@ describe("c-salesforce-navigator", () => {
     });
     await flush();
 
-    const items = element.shadowRoot.querySelectorAll("c-navigator-item");
+    const items = queryItems(element);
     expect(items).toHaveLength(2);
     expect(items[0].label).toBe(ACCOUNT_ITEM.label);
     expect(items[1].label).toBe(ACTION_HUB_ITEM.label);
@@ -82,7 +195,7 @@ describe("c-salesforce-navigator", () => {
     });
     await flush();
 
-    const item = element.shadowRoot.querySelector("c-navigator-item");
+    const item = queryItems(element)[0];
     expect(item.pageReference).toEqual(ACCOUNT_ITEM.pageReference);
   });
 
@@ -93,7 +206,7 @@ describe("c-salesforce-navigator", () => {
     });
     await flush();
 
-    const item = element.shadowRoot.querySelector("c-navigator-item");
+    const item = queryItems(element)[0];
     const anchor = item.shadowRoot.querySelector("a");
     anchor.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true })
@@ -142,7 +255,7 @@ describe("c-salesforce-navigator", () => {
     getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
     await flush();
 
-    const items = element.shadowRoot.querySelectorAll("c-navigator-item");
+    const items = queryItems(element);
     expect(items).toHaveLength(totalCount);
     // And it must stop advancing once the platform reports no further page.
     expect(getNavItems.getLastConfig().page).toBe(1);
@@ -169,13 +282,13 @@ describe("c-salesforce-navigator", () => {
     getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
     await flush();
 
-    let items = element.shadowRoot.querySelectorAll("c-navigator-item");
+    let items = queryItems(element);
     expect(items).toHaveLength(totalCount);
 
     getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
     await flush();
 
-    items = element.shadowRoot.querySelectorAll("c-navigator-item");
+    items = queryItems(element);
     expect(items).toHaveLength(totalCount);
   });
 
@@ -186,8 +299,426 @@ describe("c-salesforce-navigator", () => {
 
     const alert = element.shadowRoot.querySelector('[role="alert"]');
     expect(alert).not.toBeNull();
-    expect(
-      element.shadowRoot.querySelectorAll("c-navigator-item")
-    ).toHaveLength(0);
+    expect(queryItems(element)).toHaveLength(0);
+  });
+
+  describe("first open", () => {
+    it("shows every reachable tab in one section named All Items", async () => {
+      const element = createNavigator();
+      getNavItems.emit({
+        navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM]
+      });
+      await flush();
+
+      const sections = querySections(element);
+      expect(sections).toHaveLength(1);
+      expect(sections[0].shadowRoot.querySelector("h2").textContent).toBe(
+        "All Items"
+      );
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Action Plans",
+        "Contacts"
+      ]);
+    });
+
+    it("writes no layout record for a user who has only ever looked", async () => {
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+      // Well past the autosave debounce — nothing scheduled it, so nothing
+      // fires. A component that persisted the seeded layout on mount would
+      // generate a row for every user who ever opens the tab, to store what
+      // the platform already knows.
+      await settleAutosave();
+
+      expect(queryItems(element)).toHaveLength(2);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("sections, names and column counts", () => {
+    async function navigatorWithTabs() {
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+      return element;
+    }
+
+    it("creates a new section on request, alongside the seeded one", async () => {
+      const element = await navigatorWithTabs();
+
+      element.shadowRoot.querySelector("lightning-button").click();
+      await flush();
+
+      const names = querySections(element).map(
+        (section) => section.shadowRoot.querySelector("h2").textContent
+      );
+      expect(names).toEqual(["All Items", "New section"]);
+    });
+
+    it("renames the section the user renamed, and saves the new name", async () => {
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "rename");
+      await flush();
+      const section = querySections(element)[0];
+      const input = section.shadowRoot.querySelector("lightning-input");
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Daily work" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+
+      expect(
+        querySections(element)[0].shadowRoot.querySelector("h2").textContent
+      ).toBe("Daily work");
+
+      await settleAutosave();
+      expect(lastSavedLayout(createLayout).sections[0].name).toBe("Daily work");
+    });
+
+    it("deletes the section the user deleted, and saves the layout without it", async () => {
+      const element = await navigatorWithTabs();
+      element.shadowRoot.querySelector("lightning-button").click();
+      await flush();
+      expect(querySections(element)).toHaveLength(2);
+
+      selectSectionMenuItem(element, 0, "delete");
+      await flush();
+
+      const names = querySections(element).map(
+        (section) => section.shadowRoot.querySelector("h2").textContent
+      );
+      expect(names).toEqual(["New section"]);
+
+      await settleAutosave();
+      expect(
+        lastSavedLayout(createLayout).sections.map((section) => section.name)
+      ).toEqual(["New section"]);
+    });
+
+    it.each([1, 2, 3, 4, 5, 6])(
+      "renders the section in %i columns once the user chooses that count, and stores it",
+      async (columns) => {
+        const element = await navigatorWithTabs();
+
+        selectSectionMenuItem(element, 0, `columns-${columns}`);
+        await flush();
+
+        const grid = querySections(element)[0].shadowRoot.querySelector("ul");
+        expect(grid.className).toContain(`cols-${columns}`);
+
+        await settleAutosave();
+        expect(lastSavedLayout(createLayout).sections[0].columns).toBe(columns);
+      }
+    );
+  });
+
+  describe("surviving a reload", () => {
+    it("renders the stored sections, names and column counts rather than the seeded layout", async () => {
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "My Navigator",
+          isActive: true,
+          schemaVersion: SCHEMA_VERSION,
+          layoutJson: JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            sections: [
+              { name: "Daily work", columns: 5, items: [{ id: "Contact" }] },
+              { name: "Occasional", columns: 1, items: [{ id: "Account" }] }
+            ]
+          })
+        }
+      ]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const sections = querySections(element);
+      expect(
+        sections.map(
+          (section) => section.shadowRoot.querySelector("h2").textContent
+        )
+      ).toEqual(["Daily work", "Occasional"]);
+      expect(sections[0].shadowRoot.querySelector("ul").className).toContain(
+        "cols-5"
+      );
+      expect(sections[1].shadowRoot.querySelector("ul").className).toContain(
+        "cols-1"
+      );
+      // And the stored order, not the platform's alphabetical one.
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Contacts",
+        "Accounts"
+      ]);
+    });
+
+    it("prefers the user's active layout over the first one they own", async () => {
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: "a0X000000000009AAA",
+          name: "Old",
+          isActive: false,
+          layoutJson: JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            sections: [{ name: "Stale", columns: 1, items: [] }]
+          })
+        },
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "Current",
+          isActive: true,
+          layoutJson: JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            sections: [{ name: "Live", columns: 2, items: [] }]
+          })
+        }
+      ]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM] });
+      await flush();
+
+      expect(
+        querySections(element).map(
+          (section) => section.shadowRoot.querySelector("h2").textContent
+        )
+      ).toEqual(["Live"]);
+    });
+  });
+
+  describe("autosave", () => {
+    async function navigatorWithTabs() {
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+      return element;
+    }
+
+    it("saves nothing at all until the debounce elapses", async () => {
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-4");
+      await flush();
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS - 1);
+      await flush();
+
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("coalesces a burst of rapid changes into one save carrying the last of them", async () => {
+      const element = await navigatorWithTabs();
+
+      // Five changes 100ms apart — well inside one debounce window, and
+      // written out rather than looped because each has to be awaited and
+      // `no-await-in-loop` is on.
+      await burstChange(element, 2);
+      await burstChange(element, 3);
+      await burstChange(element, 4);
+      await burstChange(element, 5);
+      await burstChange(element, 6);
+      await settleAutosave();
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).not.toHaveBeenCalled();
+      // One save, and it is the *last* change — a debounce that fired on the
+      // leading edge would save 2 columns and lose the other four changes.
+      expect(lastSavedLayout(createLayout).sections[0].columns).toBe(6);
+    });
+
+    it("updates the record the first change created rather than creating a second one", async () => {
+      // The trap this guards is the one the controller's two-method split
+      // exists for: a client that keeps sending "save" without the id it was
+      // given ends up with a new record per change, or worse, silently
+      // overwriting whichever layout the server picked.
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-2");
+      await flush();
+      await settleAutosave();
+      expect(createLayout).toHaveBeenCalledTimes(1);
+
+      selectSectionMenuItem(element, 0, "columns-3");
+      await flush();
+      await settleAutosave();
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout.mock.calls[0][0].layoutId).toBe(CREATED_LAYOUT_ID);
+      expect(lastSavedLayout(updateLayout).sections[0].columns).toBe(3);
+    });
+
+    it("updates the layout it loaded, by that layout's own id, and never creates", async () => {
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "My Navigator",
+          isActive: true,
+          layoutJson: JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            sections: [{ name: "Daily work", columns: 2, items: [] }]
+          })
+        }
+      ]);
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      await settleAutosave();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout.mock.calls[0][0].layoutId).toBe(EXISTING_LAYOUT_ID);
+    });
+
+    it("never asks the controller to update a null id", async () => {
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-2");
+      await flush();
+      await settleAutosave();
+      selectSectionMenuItem(element, 0, "columns-3");
+      await flush();
+      await settleAutosave();
+
+      for (const call of updateLayout.mock.calls) {
+        expect(call[0].layoutId).toBeTruthy();
+      }
+    });
+
+    it("saves the seeded arrangement along with the first change, so seeding is not lost", async () => {
+      const element = await navigatorWithTabs();
+
+      element.shadowRoot.querySelector("lightning-button").click();
+      await flush();
+      await settleAutosave();
+
+      const saved = lastSavedLayout(createLayout);
+      expect(saved.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(saved.sections.map((section) => section.name)).toEqual([
+        "All Items",
+        "New section"
+      ]);
+      expect(saved.sections[0].items.map((item) => item.id)).toEqual([
+        "Account",
+        "Contact"
+      ]);
+    });
+
+    it("flushes a pending save when the component goes away, rather than dropping it", async () => {
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-4");
+      await flush();
+      document.body.removeChild(element);
+      await flush();
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(lastSavedLayout(createLayout).sections[0].columns).toBe(4);
+    });
+
+    it("keeps the user's change on screen, and its id, when the save is refused", async () => {
+      createLayout.mockRejectedValue({
+        body: {
+          message: "That layout no longer exists, or does not belong to you."
+        }
+      });
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-4");
+      await flush();
+      await settleAutosave();
+
+      const grid = querySections(element)[0].shadowRoot.querySelector("ul");
+      expect(grid.className).toContain("cols-4");
+      expect(
+        element.shadowRoot.querySelector('[role="alert"]').textContent
+      ).toContain("does not belong to you");
+    });
+  });
+
+  describe("losing and regaining access to a tab", () => {
+    const STORED_THREE = {
+      layoutId: EXISTING_LAYOUT_ID,
+      name: "My Navigator",
+      isActive: true,
+      layoutJson: JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
+        sections: [
+          {
+            name: "Daily work",
+            columns: 3,
+            items: [
+              { id: "Account" },
+              { id: "Contact" },
+              { id: "standard-ActionHub" }
+            ]
+          }
+        ]
+      })
+    };
+
+    it("stops rendering an item the user can no longer reach", async () => {
+      getLayouts.mockResolvedValue([STORED_THREE]);
+
+      const element = createNavigator();
+      // Contact is gone from the platform's accessible set.
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM] });
+      await flush();
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Action Plans"
+      ]);
+    });
+
+    it("leaves the stored layout carrying the lost item, even across a save", async () => {
+      // The sharpest form of this criterion: the item is not rendered, then
+      // the user changes something else and the autosave runs. If the render
+      // -time intersection were a mutation of stored state instead, this save
+      // would quietly write the pruned list and the item would never come
+      // back.
+      getLayouts.mockResolvedValue([STORED_THREE]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM] });
+      await flush();
+
+      selectSectionMenuItem(element, 0, "columns-5");
+      await flush();
+      await settleAutosave();
+
+      expect(lastSavedLayout(updateLayout).sections[0].items).toEqual([
+        { id: "Account" },
+        { id: "Contact" },
+        { id: "standard-ActionHub" }
+      ]);
+    });
+
+    it("restores the item in its original position when access returns", async () => {
+      getLayouts.mockResolvedValue([STORED_THREE]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM] });
+      await flush();
+      expect(queryItems(element)).toHaveLength(2);
+
+      // Access comes back — the same stored layout, a wider accessible set.
+      getNavItems.emit({
+        navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM],
+        nextPageUrl: null
+      });
+      await flush();
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Contacts",
+        "Action Plans"
+      ]);
+    });
   });
 });

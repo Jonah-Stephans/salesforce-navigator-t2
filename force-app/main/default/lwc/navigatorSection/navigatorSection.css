@@ -1,0 +1,75 @@
+/* SLDS 2 removes borders from cards, so a section card is a surface
+   container with elevation and no border — not a bordered box. */
+.rstk-nav-section {
+  padding: var(--slds-g-spacing-4, 1rem);
+  border-radius: var(--slds-g-radius-border-2, 0.25rem);
+  background-color: var(--slds-g-color-surface-container-1, #ffffff);
+  box-shadow: var(--slds-g-shadow-1, 0 2px 2px 0 #e5e5e5);
+}
+
+.rstk-nav-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--slds-g-spacing-3, 0.75rem);
+  margin-bottom: var(--slds-g-spacing-3, 0.75rem);
+}
+
+/* on-surface-3 is the title colour, and the weight stays regular — SLDS 2
+   uses colour rather than bold for headings. */
+.rstk-nav-section__title {
+  font-size: var(--slds-g-font-scale-3, 1.25rem);
+  font-weight: var(--slds-g-font-weight-4, 400);
+  color: var(--slds-g-color-on-surface-3, #181818);
+}
+
+.rstk-nav-section__rename {
+  flex: 1 1 auto;
+}
+
+.rstk-nav-section__empty {
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+  color: var(--slds-g-color-on-surface-1, #747474);
+}
+
+/* The column count is a computed class, `cols-1` … `cols-6`, and each is a
+   CSS Grid of that many equal tracks.
+
+   Not `lightning-layout`: its `size` is a 1–12 integer span and cannot
+   express five columns at all. Not an inline `style` either — that would
+   mean `width`, which the SLDS linter validates and flags, whereas
+   `grid-template-columns` is not on its validated-property list. The styling
+   rule actively pushes toward a computed class, and this is it.
+
+   `minmax(0, 1fr)` rather than `1fr`: a grid track's default minimum is
+   `auto`, so a long tab label would push its column wider than its share and
+   the columns would stop being equal. */
+.rstk-nav-section__grid {
+  display: grid;
+  gap: var(--slds-g-spacing-2, 0.5rem);
+  list-style: none;
+}
+
+.cols-1 {
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+
+.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.cols-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.cols-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.cols-6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
