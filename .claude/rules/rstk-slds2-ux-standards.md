@@ -24,7 +24,7 @@ than inventing one. Fallbacks in this document are the linter's own suggestions.
 
 ```css
 /* WRONG — hardcoded */
-.container { color: #5C5C5C; font-size: 14px; padding: 16px; }
+.container { color: #747474; font-size: 14px; padding: 16px; }
 
 /* WRONG — hook, but no fallback */
 .container { color: var(--slds-g-color-on-surface-1); }
@@ -41,7 +41,11 @@ than inventing one. Fallbacks in this document are the linter's own suggestions.
 
 `--slds-g-*` is the only authoring target. `--slds-c-*` component hooks are unsupported under SLDS 2
 and the linter does **not** catch them, so that one is on review. `--slds-s-*` and `--_slds-*` are
-Salesforce-internal. `--lwc-*` and `--sds-*` are deprecated and are error-severity lint rules. Custom
+Salesforce-internal. `--lwc-*` and `--sds-*` are both deprecated, but the linter does **not** grade
+them alike: `lwc-token-to-slds-hook` ships at **error** severity, while `enforce-sds-to-slds-hooks`
+and `no-unsupported-hooks-slds2` — the two that fire on `--sds-*` and on retired hooks — ship at
+**warning**. Under `npm run lint`'s `--max-warnings 0` either one fails the run, so the guidance is
+the same in practice; do not expect an `--sds-*` hook to announce itself as an error. Custom
 properties of our own must not use the `--slds` or `--sds` prefix — use a project prefix.
 
 ### Use semantic hooks only — a hook is necessary, not sufficient
@@ -67,10 +71,13 @@ SLDS 2.0 uses a layered color model. Every color choice must follow this stackin
 
 ### Pairing Rules (WCAG 2.1 Compliance)
 
+Every hex below is the fallback the linter itself suggests for that hook, taken from its own message
+rather than from a palette page — the same rule the fallback section above sets.
+
 - Text on a surface MUST use the matching `on-surface` color for contrast compliance
-- `on-surface-1` (#5C5C5C) — body text, placeholders, field labels, sub-headings, taglines
-- `on-surface-2` (#2E2E2E) — secondary headings, dark body copy, filled input fields
-- `on-surface-3` (#03234D) — page/component titles ONLY
+- `on-surface-1` (#747474) — body text, placeholders, field labels, sub-headings, taglines
+- `on-surface-2` (#2e2e2e) — secondary headings, dark body copy, filled input fields
+- `on-surface-3` (#181818) — page/component titles ONLY
 - On dark backgrounds, use `on-surface-inverse` variants
 - Accent colors (`--slds-g-color-accent-*`) can be used for text/icons on surfaces for interactive elements
 
@@ -162,8 +169,8 @@ SLDS 2 removes borders from cards and components. Do NOT add `border` to `lightn
 
 ### Border Colors
 
-- `--slds-g-color-border-1` — decorative borders, divider lines (lighter, #C9C9C9)
-- `--slds-g-color-border-2` — functional/interactive borders (darker, #5C5C5C)
+- `--slds-g-color-border-1` — decorative borders, divider lines (lighter, #e5e5e5)
+- `--slds-g-color-border-2` — functional/interactive borders (darker, #747474)
 - Use `border-2` for buttons, inputs, and interactive elements (WCAG contrast)
 - Use `border-1` for non-interactive dividers and separators
 

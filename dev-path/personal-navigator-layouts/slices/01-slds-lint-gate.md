@@ -154,6 +154,42 @@ silent, `npm run lint:slds-gate` both `ok:` lines, `npm run test:unit -- -- --pa
 "No tests found, exiting with code 0", `npm run prettier:verify` "All matched files use Prettier code
 style!".
 
+### The gate is probes on the shipping path, not fixtures beside it
+
+Fix pass, findings 1 to 4. `verify-slds-gate.sh` is rewritten around four assertions, all of which
+shell out to `npm run lint` or to the `lint-staged` eslint command read out of `package.json` —
+never to flags the script supplies itself. The judgements worth recording:
+
+- **The probes are written and deleted, not committed.** They live at
+  `force-app/main/default/lwc/sldsGateProbe/` for the run's duration, behind an `EXIT` trap that
+  removes them on the pass and the fail path alike and fails the run if the removal does not take.
+  A *committed* dirty fixture under `force-app/` cannot work: `eslint.config.js` would have to
+  ignore it, which is the exact hole finding 4 is about, and `sf project deploy` would try to ship
+  it. `force-app/main/default/lwc/` is an untracked empty directory, so git sees nothing either way —
+  verified `git status --short` empty after every failing run, not only the passing one.
+- **The assertions read rule names, not exit codes.** `no-hardcoded-values-slds2` for the CSS probe,
+  `enforce-bem-usage` for the HTML one, and the probe's own filename. A non-zero exit alone is
+  satisfied by an unrelated failure elsewhere in the repo, and — the case finding 4 raises — by
+  eslint reporting the file as ignored rather than linting it. The rule-name check is what keeps
+  `--no-warn-ignored` from converting "never linted" into a pass.
+- **The lint-staged command is parsed, not copied.** The first draft of this script hardcoded
+  `npx eslint --no-warn-ignored --max-warnings 0` and went green on a `package.json` that had lost
+  the flag — the same defect as finding 1, reproduced while fixing finding 1. It now reads the entry
+  out of `package.json` with `node -e` and fails if no eslint entry globbing lwc CSS is there at all.
+- **The committed fixture pair stays**, as assertion D, still with `--no-ignore` and its own flags.
+  Those two now guard the *rules* only; A1 to A3 are what guard the entry point's flags. Deleting
+  them would lose the repository's own record of the accepted and the rejected form.
+- **No HTML fixture was added under `test/`.** Finding 3 asked for an HTML fixture pair; the HTML
+  probe under `force-app/**/lwc/**` is that pair, and it is strictly stronger, because it also
+  proves the HTML rules reach the path that ships.
+
+### Two more stale hex values in the rules file, outside finding 6's scope
+
+The probe that settled finding 6's `on-surface-*` values also covered `--slds-g-color-border-1` and
+`-2`, which the Borders section documents as #C9C9C9 and #5C5C5C. The linter suggests #e5e5e5 and
+#747474. Corrected both — same defect, same file, same probe, and leaving two known-wrong values in
+place to stay inside a finding's wording would be the wrong trade.
+
 ### Commit audit
 
 - [ ] excess — `.vscode/settings.json`, committed by `git add -A` and outside this slice's `touches`.
@@ -166,7 +202,14 @@ style!".
 
 ## Critique findings
 
-- [ ] `scripts/verify-slds-gate.sh` does not assert the thing its own header comment claims. The
+- [x] fixed — the script now runs `npm run lint` for every probe assertion and reads the
+      `lint-staged` eslint command out of `package.json` instead of carrying a copy of it, so the
+      flag it guards is the flag it reads. Saw it go red first: deleting `--max-warnings 0` from
+      `package.json`'s `lint` script made assertion A1 fail with "`npm run lint` reported hard-coded
+      values at force-app/main/default/lwc/sldsGateProbe and still exited 0", exit 1. Deleting it
+      from the `lint-staged` entry instead made A3 fail the same way; the first draft of the script
+      hardcoded that command and went green on it, which is why it now parses `package.json`.
+      Original finding: `scripts/verify-slds-gate.sh` does not assert the thing its own header comment claims. The
       comment says it catches an edit that drops `--max-warnings 0`, but the script hardcodes that
       flag into its own `npx eslint --no-ignore --max-warnings 0` invocation and never runs
       `npm run lint`. Delete `--max-warnings 0` from `package.json`'s `lint` script and the gate
@@ -175,21 +218,45 @@ style!".
       `npx eslint --no-ignore --max-warnings 0 <DIRTY>` exits 1 — the flag is the only difference,
       and the script supplies its own copy of it. Have the gate exercise the real entry point that
       CI and the pre-commit hook use, so the flag it is guarding is the flag it reads.
-- [ ] The gate's fixtures live only outside `force-app/`, so it proves the SLDS rules fire on some
+- [x] fixed — the script now writes a throwaway probe bundle at
+      `force-app/main/default/lwc/sldsGateProbe/` and asserts against that, so every probe assertion
+      is on the path that ships. The probe is removed by an `EXIT` trap, on the pass and the fail
+      path alike; `git status --short` was empty after every failing run below. Saw it go red first:
+      narrowing the re-scope in `eslint.config.js` from `**/lwc/**/` to `test/**/lwc/**/` — which
+      keeps the committed fixtures matching and drops `force-app` — made assertion A2 fail with "the
+      SLDS CSS rules are no longer reaching force-app/**/lwc/**", exit 1, while the old script's two
+      `ok:` lines were both still green in that state.
+      Original finding: The gate's fixtures live only outside `force-app/`, so it proves the SLDS rules fire on some
       path containing an `lwc/` segment, not on the path that ships. Any future change that keeps
       `test/slds-lint-fixtures/lwc/**` matching while `force-app/**/lwc/**` stops — narrowing the
       re-scope to `test/**`, say — leaves both `ok:` lines green and the shipping metadata
       unguarded. The `**/lwc/**` scoping is what the comment calls the second failure mode it
       catches, and this is the half of it that gets through. A fixture (or a probe the script
       creates and deletes) under `force-app/**/lwc/**` would close it.
-- [ ] The gate has no HTML fixture, so the exact failure mode `eslint.config.js` warns about in its
+- [x] fixed — assertion B writes an HTML probe carrying
+      `slds-text-heading--large slds-p-around--medium` alongside the CSS one and requires
+      `npm run lint` to report `enforce-bem-usage` against it, and assertion C requires the
+      single-underscore SLDS 2 spelling to pass. Saw it go red first: collapsing both SLDS entries
+      onto one `files: ["**/lwc/**/*.{css,html}"]` — the exact edit `eslint.config.js`'s comment
+      warns about — made B fail with "the SLDS HTML entry has stopped applying to
+      force-app/**/lwc/**", exit 1, while assertions A1 to A3 stayed green because the CSS half is
+      unaffected. That is the invisible failure, now visible.
+      Original finding: The gate has no HTML fixture, so the exact failure mode `eslint.config.js` warns about in its
       own comment is unguarded. That comment says collapsing the two SLDS entries onto one
       `{css,html}` glob hands the CSS `language: "css/css"` to HTML files and silently stops the
       HTML rules firing. Nothing would go red if that happened: `verify-slds-gate.sh` only lints two
       `.css` files, and `npm run lint` is green on a repo holding no offending HTML either way. The
       HTML entry does fire today — verified, see the false positive below — which is precisely why
       losing it later would be invisible. Add an HTML fixture pair to the script.
-- [ ] `--no-warn-ignored` does mask a file dropping out of linting, which the deviation note says it
+- [x] fixed — took the third option the finding asks for. `--no-warn-ignored` stays, and the gate
+      now asserts that a known `force-app/**/lwc/**` path is still linted: assertions A2 and A3
+      require the *rule name* `no-hardcoded-values-slds2` to appear in the output, not merely a
+      non-zero exit, so "this file was never linted" can no longer read as a pass. Saw it go red
+      first: adding `"force-app/main/default/lwc/**/*.css"` to `eslint.config.js`'s `ignores` — a
+      later broad ignore, the exposure the finding describes — made A2 fail with "the SLDS CSS rules
+      are no longer reaching force-app/**/lwc/**", exit 1. The old script was green on that config,
+      because it linted only the two committed fixtures, which that ignore does not touch.
+      Original finding: `--no-warn-ignored` does mask a file dropping out of linting, which the deviation note says it
       does not. Verified:
       `npx eslint --no-warn-ignored --max-warnings 0 test/slds-lint-fixtures/lwc/hardCodedColour/hardCodedColour.css`
       prints nothing and exits 0, though that file holds four real violations; the same command
@@ -202,7 +269,12 @@ style!".
       `lint-staged`) has its own stated failure mode, so this wants a third option rather than a
       revert — for instance keeping the flag and having the gate assert that a known
       `force-app/**/lwc/**` path is still linted.
-- [ ] `.claude/rules/rstk-slds2-ux-standards.md` states that "`--lwc-*` and `--sds-*` are deprecated
+- [x] fixed — the sentence now says the linter does not grade them alike: `lwc-token-to-slds-hook`
+      ships at **error**, `enforce-sds-to-slds-hooks` and `no-unsupported-hooks-slds2` at
+      **warning**, and under `--max-warnings 0` either one fails the run, so the guidance is
+      unchanged in practice. Re-confirmed the three severities here by printing them from
+      `@salesforce-ux/eslint-plugin-slds`'s `flat/recommended`, rather than taking the critic's word.
+      Original finding: `.claude/rules/rstk-slds2-ux-standards.md` states that "`--lwc-*` and `--sds-*` are deprecated
       and are error-severity lint rules". Only `--lwc-*` is. Printing the shipped severities from
       `@salesforce-ux/eslint-plugin-slds` `flat/recommended` gives
       `lwc-token-to-slds-hook: "error"` but `enforce-sds-to-slds-hooks: "warn"` and
@@ -210,7 +282,18 @@ style!".
       `var(--sds-c-button-color-background, #ffffff)` produced two warnings and no error. The
       practical guidance still holds under `--max-warnings 0`, but the severity claim is wrong as
       written, in the same file whose job is to stop a rule misdescribing the lint it encodes.
-- [ ] `.claude/rules/rstk-slds2-ux-standards.md` now carries two different values for
+- [x] fixed — read the fallbacks off the linter rather than off a palette page: linted a probe of
+      bare `var(--slds-g-color-on-surface-{1,2,3})` and `var(--slds-g-color-border-{1,2})` and took
+      the value out of each `no-slds-var-without-fallback` message. `on-surface-1` is **#747474**
+      (table said #5C5C5C — corrected), `on-surface-2` is **#2e2e2e** (table was right, case only),
+      `on-surface-3` is **#181818** (table said #03234D — corrected). The same probe caught two more
+      in the Borders section, outside the finding's scope but the same defect:
+      `--slds-g-color-border-1` is **#e5e5e5**, not #C9C9C9, and `--slds-g-color-border-2` is
+      **#747474**, not #5C5C5C. Both corrected. The "WRONG — hardcoded" example now hardcodes
+      `#747474`, so the wrong form and the right form carry the same colour and no reader can copy a
+      stale value out of it. Added a line above the table saying every hex in it is the linter's own
+      suggestion, which is the rule the file already sets for fallbacks.
+      Original finding: `.claude/rules/rstk-slds2-ux-standards.md` now carries two different values for
       `--slds-g-color-on-surface-1`. The corrected example uses `#747474`, which is what the linter
       itself suggests — confirmed from the rule message: "add this fallback value:
       var(--slds-g-color-on-surface-1, #747474)". The "Pairing Rules (WCAG 2.1 Compliance)" section
