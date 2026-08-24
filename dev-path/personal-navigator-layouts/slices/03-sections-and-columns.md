@@ -738,5 +738,76 @@ still there tomorrow.
       gives 2, the null being skipped rather than counted; two rows both at 7 give 8. `highest`
       starts at 0 and only non-null values raise it, so no ordering of nulls or duplicates can hand
       back a value already in use. Probe removed.
+- [x] false positive — that this pass's three fixes are asserted by tests that could not fail. Each of
+      the five lines they added or changed was mutated individually against commit `9cd7624` and each
+      bites, named by the runner. `const readable = layouts.filter(...)` → `layouts`: 2 red, including
+      `adopts the readable layout beside it rather than the unreadable active one`. Deleting the whole
+      `const unreadable = layouts.find(...)` / `layoutLoadErrorMessage` block: 1 red,
+      `says so, names what an administrator needs, and saves nothing`. Deleting
+      `if (this.storedLayout !== undefined) { return; }`: 1 red, `never assigns over a layout the user
+      is already looking at and has changed`. Replacing `unreadableLayoutMessage(...)` with
+      `LAYOUT_LOAD_ERROR_MESSAGE`: 1 red. Passing `undefined` for the reason while keeping the new
+      wording: 1 red — so the `unreadableReason` half is held separately from the wording half, not
+      incidentally by it.
+- [x] false positive — that the thenable in `capturedLayoutResolution` makes
+      `never assigns over a layout the user is already looking at and has changed` pass against a
+      fiction. It does not fabricate component state: it hands back the component's own registered
+      `onFulfilled` and calls it twice with the real `getLayouts` row shape, so every line under test
+      is production `adoptActiveLayout` running on production input. What it models is a *defensive*
+      branch — traced the reachability, and the guard cannot fire in production, because
+      `adoptActiveLayout` runs exactly once and `storedLayout` is only otherwise set from handlers the
+      template gates behind `hasLoadedLayout`, which that same run sets. The source says as much
+      ("Defence in depth against the window this component no longer opens"), and
+      `.claude/rules/rstk-preserve-defensive-checks.md` requires such a guard to be kept — a kept guard
+      with no test is one a later refactor deletes in silence. A thenable is the only way to call a
+      `.then` callback twice, so this is the honest way to hold it, not a contrived one. The stub
+      `then` returns `{catch(){}}`, so an unexpected throw in `adoptActiveLayout` would surface rather
+      than be swallowed.
+- [x] false positive — that the two layout-load messages are not distinguishable, not announced, or
+      leak something. They cannot co-occur: both are the single `layoutLoadErrorMessage` field, so
+      exactly one text is ever on screen, and both render through the same `[role="alert"]` /
+      `rstk-nav-error__text` region, so both are announced the same way. They differ in first clause
+      and in remedy ("Reload the page before changing anything" vs "Reloading will not help — ask your
+      administrator"), which is what a screen-reader user hears. `unreadableReason` is `e.getMessage()`
+      from `NavigatorLayoutController.raise`, which calls `setMessage`, so it is one of that class's
+      own three authored strings (schema version, not-valid-JSON, not-a-JSON-object) about the running
+      user's *own* row — no other user's data and no stack trace; `NavigatorLayoutControllerTest`
+      asserts the version case. It is interpolated into a `<p>` via `{layoutLoadErrorMessage}`, so LWC
+      escapes it; no markup route exists. Rendered the null/empty case: `unreadableLayoutMessage`
+      guards on `reason ? … : ""`, so the sentence ends at "repair that layout." with no dangling
+      "Details for your administrator:".
+- [x] false positive — that the unreadable-row path stopped suppressing saves, or leaves the user
+      without their tabs while it does. Drove the most likely real shape — a `getLayouts` returning a
+      **sole** unreadable active row, which the shipped tests do not cover directly — through the real
+      component: the seeded `All Items` section renders with its tabs, the alert carries the
+      administrator wording and the reason, the *New section* button is absent, and after a column
+      change plus a full debounce `createLayout` and `updateLayout` are both at 0 calls. Also drove the
+      upgrade-window shape (a server payload at a `schemaVersion` newer than the client bundle reads,
+      which throws inside the `.then` and lands in the `.catch`): the reload wording appears, which is
+      the *correct* advice there, because a reload fetches the new bundle. Probe deleted; suite back to
+      102.
+- [x] false positive — that this pass traded away coverage the earlier two critics established.
+      Re-ran all seven of their mutations verbatim against `9cd7624` and the red counts match their
+      recorded table exactly: `save()` serialising `{sections: this.sections}` 1 red; `persist` always
+      creating 3 red; always updating 15 red; leading-edge debounce 5 red; serialiser spreading the
+      item 1 red; `resolveLayout` pruning in place 4 red; `setSectionColumns` mutating its input 2 red.
+      Also re-ran the component-gate set: `isLoading` dropping `hasLoadedLayout` 1 red, `canEdit`
+      dropping the error term 1 red, `scheduleSave` guard removed 2 red, `.catch` setting no message
+      2 red, *New section* ungated to `hasItems` 1 red. Seventeen mutations in all, one uncaught and it
+      is not a defect: moving `serializeLayout(this.layout)` from `save()` into the chained callback
+      changes only *which* revision an already-queued save writes, and the later revision is the newer
+      one, so there is no loss to assert. Every mutated file was restored and re-verified; nothing was
+      deployed, and `sf project deploy start --dry-run` reports "No changes to deploy".
+- [x] false positive — that a test among the 102 cannot fail. Read all five suites adversarially,
+      following the four earlier rounds' hit rate. The two weakest-looking spots are both sound:
+      `leaves the layout alone when an operation names a section that is not there` compares
+      `toEqual(base)`, which an in-place mutation would also satisfy — but purity there is separately
+      pinned by the three explicit `frozenCopy()` deep-compares plus the two finding-7 ones, and the
+      `setSectionColumns` mutation reds those; and `says so, names what an administrator needs, and
+      saves nothing` asserts section *names* survive the suppressed change rather than the changed
+      column count, which is weaker wording than it could be but is not an assertion that cannot fail —
+      all five unreadable-path mutations red it. No test asserts only on a call count where the count
+      is not itself the claim, and no `expect` was found whose expected value is derived from the code
+      under test.
 
-fix_cycles: 1
+fix_cycles: 2
