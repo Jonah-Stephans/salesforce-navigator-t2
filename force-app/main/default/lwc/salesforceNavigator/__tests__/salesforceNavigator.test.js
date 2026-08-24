@@ -2,7 +2,7 @@ import { createElement } from "lwc";
 import SalesforceNavigator from "c/salesforceNavigator";
 import { getNavItems } from "lightning/uiAppsApi";
 import { getNavigateCalledWith } from "lightning/navigation";
-import { MAX_PAGE_SIZE } from "c/navigatorTabSource";
+import { MAX_PAGE_SIZE, NAV_ITEMS_CONFIG } from "c/navigatorTabSource";
 
 // Five distinct pageReference types were verified against a live org (174
 // nav items, API v66.0), two of which — standard__cmsPage and
@@ -127,8 +127,17 @@ describe("c-salesforce-navigator", () => {
 
     // The component must actually have asked the wire adapter for the next
     // page — not merely rendered whatever the test handed it, which is all
-    // the assertion below this one can tell us on its own.
-    expect(getNavItems.getLastConfig().page).toBe(1);
+    // the assertion below this one can tell us on its own. Asserted against
+    // the whole config object, not just `.page`, so that `formFactor`,
+    // `navItemType`, `scope` and `pageSize` diverging from NAV_ITEMS_CONFIG
+    // (the single source of truth the "one module" criterion relies on) is
+    // caught here too — in particular `scope: "visible"`, which is the
+    // entire mechanism behind the claim that the component cannot render a
+    // tab the running user cannot reach.
+    expect(getNavItems.getLastConfig()).toEqual({
+      ...NAV_ITEMS_CONFIG,
+      page: 1
+    });
 
     getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
     await flush();

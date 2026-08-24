@@ -58,4 +58,33 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
     event.preventDefault();
     this[NavigationMixin.Navigate](this.pageReference);
   }
+
+  // An <a> without an `href` is not focusable and exposes no implicit link
+  // role, so once `GenerateUrl` has permanently rejected (see the `.catch`
+  // above) the item would otherwise be fully invisible to keyboard and
+  // assistive-technology users while still working for a mouse user via
+  // `handleClick`. Engineer's decision, taken in this fix-pass session:
+  // keep the item keyboard-reachable by supplying `tabindex` and a link
+  // role explicitly, but only in this no-href case — a working anchor
+  // already has both natively, and adding them there would be redundant
+  // and could override native semantics.
+  get fallbackTabIndex() {
+    return this.url === undefined ? "0" : undefined;
+  }
+
+  get fallbackRole() {
+    return this.url === undefined ? "link" : undefined;
+  }
+
+  handleKeydown(event) {
+    // A native <a href> fires `click` on Enter for free, so this handler
+    // only has work to do once `url` (and therefore `href`) has been
+    // removed by the permanent-rejection `.catch` above. It reuses
+    // `handleClick` verbatim rather than adding a second navigation path,
+    // so `this.pageReference` still reaches `Navigate` unmodified.
+    if (this.url !== undefined || event.key !== "Enter") {
+      return;
+    }
+    this.handleClick(event);
+  }
 }

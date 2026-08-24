@@ -4,7 +4,10 @@
     class="rstk-nav-item"
     data-tab-id={tabId}
     aria-label={label}
+    tabindex={fallbackTabIndex}
+    role={fallbackRole}
     onclick={handleClick}
+    onkeydown={handleKeydown}
   >
     <span class="rstk-nav-item__label">{label}</span>
   </a>

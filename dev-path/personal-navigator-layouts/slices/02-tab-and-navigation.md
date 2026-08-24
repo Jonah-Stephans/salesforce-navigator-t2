@@ -482,7 +482,7 @@ guard deleted (3 failed); `normalizeNavItems` reconstructing `pageReference` fro
 (3 failed); `NAV_ITEMS_CONFIG.pageSize` changed to `25` (1 failed). Every file restored afterwards;
 `git status` clean apart from this slice file.
 
-- [ ] An item whose `GenerateUrl` rejected is now reachable by mouse but not by keyboard, and
+- [x] fixed — An item whose `GenerateUrl` rejected is now reachable by mouse but not by keyboard, and
       nothing tells the user it failed. This re-opens the second finding of the `da92b06` pass
       (the one closed by setting `this.url = undefined` in `navigatorItem.js`'s `.catch`). The
       wrong-destination problem is genuinely gone, but the state that replaced it was not
@@ -512,8 +512,37 @@ guard deleted (3 failed); `normalizeNavItems` reconstructing `pageReference` fro
       the item from the list entirely so nothing misleading is rendered — and assert the chosen
       behaviour, including keyboard reachability, in the rejection test rather than only the
       absence of an `href`.
+      **Engineer's decision, taken in this fix-pass session**: keep the item keyboard-reachable
+      rather than adding `aria-disabled` or falling back to a retry — add `tabindex` and a link
+      role so Tab reaches it and Enter activates it, navigating through the click handler as
+      normal. This loses only middle-click and open-in-new-tab for that one item, which is honest
+      given there is genuinely no URL to open in a new tab; there is no wrong destination and no
+      silent disappearance.
+      **Fix applied**: added `fallbackTabIndex` and `fallbackRole` getters to `navigatorItem.js`,
+      each returning `"0"` / `"link"` only when `this.url === undefined` (the permanent-rejection
+      state) and `undefined` otherwise, so a working anchor's native tab order and implicit link
+      role are never overridden with a redundant attribute — LWC removes an attribute entirely
+      when its bound value is `undefined`. Bound both to the template via `tabindex={fallbackTabIndex}`
+      and `role={fallbackRole}` on the anchor in `navigatorItem.html`. Added a `handleKeydown`
+      method that no-ops unless `this.url === undefined` and `event.key === "Enter"` (a native
+      `<a href>` already fires `click` on Enter for free, so this only matters in the fallback
+      case), and otherwise delegates to the existing `handleClick(event)` verbatim — no second
+      navigation path, `this.pageReference` still reaches `Navigate` unmodified. Bound
+      `onkeydown={handleKeydown}` on the same anchor unconditionally. Did not add `aria-disabled` —
+      the item is reachable by a different route, not disabled. Left the pending-window `"#"`
+      default, the modifier-key guard, and the rejection `.catch` untouched.
+      Watched two new tests go red first against the unfixed component:
+      "stays keyboard reachable, with an explicit link role, when NavigationMixin.GenerateUrl
+      rejects" — `npx sfdx-lwc-jest -- force-app/main/default/lwc/navigatorItem -t "stays keyboard
+      reachable"` printed `Expected: "0", Received: null` on `anchor.getAttribute("tabindex")`;
+      "activates through the same handleClick logic on Enter when NavigationMixin.GenerateUrl
+      rejects" — the same runner with `-t "activates through the same handleClick logic on Enter"`
+      printed `TypeError: Cannot read properties of undefined (reading 'pageReference')` on
+      `getNavigateCalledWith().pageReference`, i.e. `Navigate` was never called — a real assertion
+      failure, not a setup error. Applied the fix above; both pass, full `navigatorItem` suite
+      passes (9/9).
 
-- [ ] Nothing asserts that the component actually sends `NAV_ITEMS_CONFIG`'s values to
+- [x] fixed — Nothing asserts that the component actually sends `NAV_ITEMS_CONFIG`'s values to
       `getNavItems`, so the single-source-of-truth the `## Deviations` entry above created is held
       by convention alone. This re-opens the premise on which the first Build-worker note (line 75)
       was closed — "the constant this test checks is now the same object the component actually
@@ -532,6 +561,19 @@ guard deleted (3 failed); `normalizeNavItems` reconstructing `pageReference` fro
       `getNavItems.getLastConfig()` for `.page`, so assert the whole config object against
       `NAV_ITEMS_CONFIG` (plus the expected `page`) after the first emission, and watch each of the
       three mutations above go red before calling it closed.
+      **Fix applied**: imported `NAV_ITEMS_CONFIG` into `salesforceNavigator.test.js` (added to the
+      existing `c/navigatorTabSource` import alongside `MAX_PAGE_SIZE`) and replaced the single
+      `expect(getNavItems.getLastConfig().page).toBe(1)` assertion after the first emission in
+      "requests more than one page..." with `expect(getNavItems.getLastConfig()).toEqual({
+      ...NAV_ITEMS_CONFIG, page: 1 })`. Watched it go red first against each of the three exact
+      mutations named above, one at a time, restoring `salesforceNavigator.js` between each:
+      `scope: "all"` printed a diff showing `- "scope": "visible"` / `+ "scope": "all"`;
+      `pageSize: 25` printed `- "pageSize": 100` / `+ "pageSize": 25"`; `formFactor: "Small"`
+      printed `- "formFactor": "Large"` / `+ "formFactor": "Small"` — all three against the targeted
+      test (`-t "requests more than one page"`). Restored `salesforceNavigator.js` to source after
+      each mutation; the full `salesforceNavigator` suite (6/6) and full repo suite are green with
+      the real config in place. The second `getLastConfig().page` assertion later in the same test
+      (checking pagination stops advancing) was left untouched.
 
 - [x] false positive — that changing the jest mock's resolved URL from `"#"` to
       `"/lightning/o/Account/home"` broke another test, a snapshot, or another consumer. `grep` for

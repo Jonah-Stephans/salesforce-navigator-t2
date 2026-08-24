@@ -134,4 +134,47 @@ describe("c-navigator-item", () => {
     expect(anchor.hasAttribute("href")).toBe(false);
     expect(anchor.getAttribute("href")).toBeNull();
   });
+
+  it("stays keyboard reachable, with an explicit link role, when NavigationMixin.GenerateUrl rejects", async () => {
+    // An <a> without href is not focusable and carries no implicit link
+    // role, so a keyboard or assistive-technology user cannot reach this
+    // item at all once GenerateUrl has permanently rejected. Engineer's
+    // decision (this session): supply tabindex and role explicitly only in
+    // this no-href case, so Tab still reaches the item.
+    GenerateUrl.mockRejectedValueOnce(new Error("GenerateUrl failed"));
+
+    const element = createNavigatorItem();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const anchor = element.shadowRoot.querySelector("a");
+    expect(anchor.getAttribute("tabindex")).toBe("0");
+    expect(anchor.getAttribute("role")).toBe("link");
+  });
+
+  it("activates through the same handleClick logic on Enter when NavigationMixin.GenerateUrl rejects", async () => {
+    // A native <a href> fires `click` on Enter for free; one without href
+    // does not, so the fallback needs its own keydown handling. It must
+    // still route through `handleClick` — the same stored `pageReference`
+    // passed to `Navigate` verbatim, not a second navigation path.
+    GenerateUrl.mockRejectedValueOnce(new Error("GenerateUrl failed"));
+
+    const element = createNavigatorItem();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const anchor = element.shadowRoot.querySelector("a");
+    const keydownEvent = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true
+    });
+    anchor.dispatchEvent(keydownEvent);
+
+    expect(getNavigateCalledWith().pageReference).toEqual(
+      STORED_PAGE_REFERENCE
+    );
+  });
 });
