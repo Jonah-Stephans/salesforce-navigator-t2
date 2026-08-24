@@ -485,7 +485,16 @@ correct forever would still pass.** That is a code-review matter, not a testable
       deprecated ARIA attributes, and the single shared placement function all fail a test when
       broken).
 
-- [ ] **`releaseGrabIfItemGone` is pinned only by its index half, and the identity half — the
+- [x] fixed — added `releases a keyboard grab whose item vanishes from an index that stays in range`
+      to `salesforceNavigator.test.js`, driving exactly the critic's discriminating case: grab the
+      **first** of three items from the keyboard, then re-emit `getNavItems` without that tab, so
+      index 0 stays a real position. It asserts no surviving item carries `grabbed`, that the region
+      no longer says "grabbed", and that it says "no longer available". Re-applying the critic's
+      mutation (`stillListed &&` dropped from `releaseGrabIfItemGone`) fails it with
+      `expect(received).toEqual(expected) // deep equality — Array [ - false, + true, false, ]` at
+      `expect(queryItems(element).map((item) => item.grabbed)).toEqual([false, false])` — the grab
+      silently transferred to the neighbour, exactly as the docblock warns. Restored, green.
+      **`releaseGrabIfItemGone` is pinned only by its index half, and the identity half — the
       thing its own docblock says is the point — is unpinned.** Replacing
       `navigatorSection.releaseGrabIfItemGone`'s `stillListed && this.grabbedItemIndex <
       this.items.length` with the bare `this.grabbedItemIndex < this.items.length` leaves the suite
@@ -499,7 +508,15 @@ correct forever would still pass.** That is a code-review matter, not a testable
       Position 1 of 3."` for an item that is gone) — exactly the failure the docblock names. Fix
       direction: add a test that loses access to an item held from an index that stays in range,
       asserting no surviving item carries `grabbed` and the region names the vanished item.
-- [ ] **Nothing pins that the vanish announcement names what vanished.** Setting
+- [x] fixed — the vanish announcement now has to name what vanished. `expect(region.textContent)
+      .toContain("Action Plans")` was added to `releases a keyboard grab when the grabbed item stops
+      rendering` — the test the critic named — and the same assertion on `"Accounts"` to the new
+      index-in-range test above, so both halves of the hazard hold the label down. Re-applying the
+      critic's mutation (`this.grabbedItemLabel = this.labelAt(index)` set to `""` in
+      `handleItemGrab`) now fails **2** tests, first with `Expected substring: "Action Plans" —
+      Received string: "Move cancelled.  is no longer available."` — the double space and all.
+      Restored, green.
+      **Nothing pins that the vanish announcement names what vanished.** Setting
       `navigatorSection.handleItemGrab`'s `this.grabbedItemLabel = this.labelAt(index)` to `""`
       leaves the suite green: the announcement degrades to `"Move cancelled.  is no longer
       available."` and the only assertion on it is `toMatch(/no longer available/i)`. The comment on
@@ -507,7 +524,16 @@ correct forever would still pass.** That is a code-review matter, not a testable
       tell a screen reader user without naming what it was about`, so the half that carries the
       whole justification is the half no test reaches. Fix direction: assert the label in that
       announcement, in the same test at `salesforceNavigator.test.js:1605`.
-- [ ] **The one-shot clearing of `cardFocusIndex` is unpinned, and the hazard it guards is real.**
+- [x] fixed — added `does not take focus back on a later render once the cancel has been served`,
+      which drives the whole hazard rather than the field: Space, ArrowDown, Escape on card 0 (focus
+      correctly restored to the origin card), then `blur()` so the user has moved on, then an
+      ordinary `getNavItems` re-emission to force one more grab-free render, asserting focus was not
+      taken back. Deleting `this.cardFocusIndex = undefined;` from
+      `salesforceNavigator.renderedCallback` fails it with `expect(received).toBeNull() — Received:
+      <c-navigator-section lwc-12646b8l0uc="" lwc-5uss3q45vqc-host="" />` at
+      `expect(element.shadowRoot.activeElement).toBeNull()` — the stale hand-off yanking focus back
+      to card 0 from wherever the user had put it. Restored, green.
+      **The one-shot clearing of `cardFocusIndex` is unpinned, and the hazard it guards is real.**
       Deleting `this.cardFocusIndex = undefined;` from `salesforceNavigator.renderedCallback` leaves
       the suite at 211/211 green. The field's own comment says it is consumed `whether or not it was
       used, so it cannot outlive the render it was set for and steal focus from something else
@@ -516,7 +542,17 @@ correct forever would still pass.** That is a code-review matter, not a testable
       the hand-off and yanks focus back to that card from wherever the user has since put it. Fix
       direction: a test that cancels a section move, moves focus elsewhere, forces one more render,
       and asserts focus was not taken back.
-- [ ] **The item-drop-forwarded-as-a-section-drop path is entirely unpinned, and it is the mechanism
+- [x] fixed — added `reorders the sections when a dragged card is dropped on another card's item`,
+      the positive case: a card `dragstart` on section 2 followed by a `drop` on the *item* inside
+      section 0, asserting the sections reorder to `First, Second, Third` -> `Third, First, Second`
+      on screen and in what is written. It is discriminating because `navigatorItem.handleDrop`
+      calls `stopPropagation()`, so the native drop never reaches `handleCardDrop` — the forwarded
+      `sectiondrop` is the only route. Deleting the `this.dispatch("sectiondrop", ...)` from
+      `navigatorSection.handleItemDrop`'s `from === undefined` branch fails it with
+      `expect(received).toEqual(expected) // deep equality — Array [ - "Third", "First", "Second",
+      + "Third", ]` at `expect(sectionNames(element)).toEqual(["Third", "First", "Second"])` — the
+      drop landing on nothing. Restored, green.
+      **The item-drop-forwarded-as-a-section-drop path is entirely unpinned, and it is the mechanism
       that makes a whole card a drop target.** Deleting the `this.dispatch("sectiondrop", ...)` from
       `navigatorSection.handleItemDrop`'s `from === undefined` branch leaves the suite green.
       `## Deviations` calls this out as a build decision — *"An item covers most of a card's
@@ -528,7 +564,17 @@ correct forever would still pass.** That is a code-review matter, not a testable
       itself, which goes through `handleCardDrop` and never touches this branch. Fix direction: a
       test that fires a card `dragstart` and then an item `drop` inside a different card, asserting
       the sections reorder.
-- [ ] **Nothing pins that the announcement distinguisher is silent and invisible.** Changing
+- [x] fixed — both re-announcement tests now require the distinguisher to be inaudible and
+      invisible, not merely different. A `spoken(text)` helper in each test file strips the
+      zero-width range (`\u200B-\u200D`, `\u2060`, `\uFEFF`), and each test asserts
+      `expect(spoken(region.textContent)).toBe(spoken(first))` alongside the existing
+      `not.toBe(first)` — so the two announcements must be *the same sentence* once the nonce is
+      taken out. Re-applying the critic's mutation (`ANNOUNCEMENT_NONCE` changed from U+200B to a
+      visible, spoken `" X"` in both files) fails **2** tests: `Expected: "First moved. Position 1
+      of 3." Received: "First moved. Position 1 of 3. X"` on the section axis and `Expected:
+      "Accounts moved. Position 1 of 3." Received: "Accounts moved. Position 1 of 3. X"` on the
+      item axis. Restored, green. The nonce mechanism itself is untouched.
+      **Nothing pins that the announcement distinguisher is silent and invisible.** Changing
       `ANNOUNCEMENT_NONCE` from the U+200B ZERO WIDTH SPACE to a visible, spoken `" X"` leaves the suite green: both
       re-announcement tests assert only `not.toBe(first)`, which any distinguisher satisfies. The
       entire justification for the design is that it *"adds nothing a screen reader voices and

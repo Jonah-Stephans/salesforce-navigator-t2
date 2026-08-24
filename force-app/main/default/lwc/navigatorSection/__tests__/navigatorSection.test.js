@@ -98,6 +98,17 @@ function announcement(element) {
   return region ? region.textContent.trim() : "";
 }
 
+/**
+ * What a screen reader would voice and a sighted user could see, which is the
+ * announcement with every zero-width character taken out of it. The
+ * distinguisher that makes a repeated announcement a *new* one is only
+ * allowed to live in this gap: anything else would be read aloud on every
+ * arrow press, or would show up on screen.
+ */
+function spoken(text) {
+  return text.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "");
+}
+
 function menuOf(element) {
   return element.shadowRoot.querySelector("lightning-button-menu");
 }
@@ -463,6 +474,12 @@ describe("c-navigator-section", () => {
 
       expect(region.textContent).toMatch(/position 1 of 3/i);
       expect(region.textContent).not.toBe(first);
+      // And the distinguisher is silent and invisible. The two announcements
+      // are the *same sentence* once the zero-width characters are taken out:
+      // anything else — a counter, a space, a bullet — would be read aloud on
+      // every arrow press or would appear on screen, which is the entire
+      // justification for choosing U+200B in the first place.
+      expect(spoken(region.textContent)).toBe(spoken(first));
     });
 
     it("refuses a second grab while one is in flight, so the first Escape origin survives", async () => {

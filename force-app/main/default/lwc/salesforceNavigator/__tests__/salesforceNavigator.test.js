@@ -123,6 +123,16 @@ function sectionNames(element) {
 }
 
 /** The layout the component last sent to Apex, parsed back out of the call. */
+/**
+ * What a screen reader would voice and a sighted user could see, which is the
+ * announcement with every zero-width character taken out of it. The
+ * distinguisher that makes a repeated announcement a *new* one is only allowed
+ * to live in this gap.
+ */
+function spoken(text) {
+  return text.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "");
+}
+
 function lastSavedLayout(apexMock) {
   const calls = apexMock.mock.calls;
   return JSON.parse(calls[calls.length - 1][0].layoutJson);
@@ -1341,6 +1351,32 @@ describe("c-salesforce-navigator", () => {
         expect(savedSectionNames()).toEqual(["First", "Second", "Third"]);
       });
 
+      it("reorders the sections when a dragged card is dropped on another card's item", async () => {
+        // The positive half of the forwarding path, and the mechanism that
+        // makes a whole card a drop target rather than only its margins: an
+        // item covers most of a card's surface, so a section dragged onto
+        // another card lands on an *item* far more often than on the article.
+        // The item stops the native drop (`handleDrop` calls
+        // `stopPropagation`), so `handleCardDrop` never sees it — the only
+        // route from here to a section reorder is `handleItemDrop`'s
+        // `from === undefined` branch forwarding it upward as a `sectiondrop`.
+        // The two section-drag tests above both drop on the article itself and
+        // never touch this branch.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 2).dispatchEvent(
+          new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+        );
+        queryItems(element)[0]
+          .shadowRoot.querySelector("a")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["Third", "First", "Second"]);
+        await settleAutosave();
+        expect(savedSectionNames()).toEqual(["Third", "First", "Second"]);
+      });
+
       it("moves no card the user never picked up after an abandoned section drag", async () => {
         // `dragend` fires whether or not the drop landed anywhere. If the
         // parent did not clear its drag state there, the stale
@@ -1415,6 +1451,12 @@ describe("c-salesforce-navigator", () => {
 
         expect(region.textContent).toMatch(/position 1 of 3/i);
         expect(region.textContent).not.toBe(first);
+        // And, as on the item axis, the distinguisher is silent and invisible:
+        // the two are the same sentence once the zero-width characters are
+        // stripped. The nonce is injected into user-facing announcement text
+        // on every arrow press, so a distinguisher that is actually voiced
+        // would be heard on every one of them.
+        expect(spoken(region.textContent)).toBe(spoken(first));
       });
 
       it("holds focus on the grabbed card across a section move", async () => {
@@ -1464,6 +1506,44 @@ describe("c-salesforce-navigator", () => {
         const restored = querySections(element)[0];
         expect(element.shadowRoot.activeElement).toBe(restored);
         expect(restored.shadowRoot.activeElement).toBe(cardAt(element, 0));
+      });
+
+      it("does not take focus back on a later render once the cancel has been served", async () => {
+        // `cardFocusIndex` is a *one-shot* hand-off: it exists for exactly the
+        // render the cancel's own reorder schedules, and is consumed there
+        // whether or not it was used. Without the clear it never expires, and
+        // every later grab-free render — a getNavItems re-emission, a column
+        // change, a save-error message — re-runs the hand-off and yanks focus
+        // back to that card from wherever the user has since put it.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 1).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+        );
+        await flush();
+        expect(element.shadowRoot.activeElement).toBe(
+          querySections(element)[0]
+        );
+
+        // The user moves on and puts focus somewhere else entirely.
+        cardAt(element, 0).blur();
+        expect(element.shadowRoot.activeElement).toBeNull();
+
+        // Something unrelated re-renders the Navigator. An LDS cache refresh
+        // redelivering the final page is an ordinary event for a UI API
+        // adapter, not a contrived one.
+        getNavItems.emit({ navItems: THREE, nextPageUrl: null });
+        await flush();
+
+        expect(element.shadowRoot.activeElement).toBeNull();
       });
 
       it("keeps a section drop, so a second Space is not a cancel", async () => {
@@ -1603,6 +1683,11 @@ describe("c-salesforce-navigator", () => {
       ]);
       expect(region.textContent).not.toMatch(/grabbed/i);
       expect(region.textContent).toMatch(/no longer available/i);
+      // And it names what vanished. "The move ended" is not something to tell
+      // a screen reader user without saying what it was about — which is the
+      // whole reason `grabbedItemLabel` is kept alongside the id, since by the
+      // time this sentence is needed the item itself is gone from the list.
+      expect(region.textContent).toContain("Action Plans");
 
       // And the section is not stuck: a fresh grab is accepted, which it
       // would not be while it still believed it was holding something.
@@ -1621,6 +1706,55 @@ describe("c-salesforce-navigator", () => {
         true,
         false
       ]);
+    });
+
+    it("releases a keyboard grab whose item vanishes from an index that stays in range", async () => {
+      // The discriminating case for `releaseGrabIfItemGone`, and the one its
+      // docblock is about: the *identity* test, not the index one. The test
+      // above holds the last of three, so losing it also pushes the index past
+      // the end of the list and a bare `grabbedItemIndex < items.length` catches
+      // it too. Here the held item is the **first** of three, so after it goes
+      // index 0 is still a perfectly real position — and an index-only check
+      // silently transfers the grab to the neighbour and leaves the live region
+      // reading a grab on an item that is gone.
+      getLayouts.mockResolvedValue([STORED_THREE]);
+      const element = createNavigator();
+      getNavItems.emit({
+        navItems: [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM]
+      });
+      await flush();
+
+      const section = querySections(element)[0];
+      queryItems(element)[0]
+        .shadowRoot.querySelector("a")
+        .dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: " ",
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      await flush();
+
+      const region = section.shadowRoot.querySelector("[aria-live]");
+      expect(region.textContent).toMatch(/grabbed/i);
+
+      // Access to the held tab — the first one — is lost while it is held.
+      getNavItems.emit({ navItems: [CONTACT_ITEM, ACTION_HUB_ITEM] });
+      await flush();
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Contacts",
+        "Action Plans"
+      ]);
+      // No surviving item inherits the grab.
+      expect(queryItems(element).map((item) => item.grabbed)).toEqual([
+        false,
+        false
+      ]);
+      expect(region.textContent).not.toMatch(/grabbed/i);
+      expect(region.textContent).toMatch(/no longer available/i);
+      expect(region.textContent).toContain("Accounts");
     });
 
     it("leaves the stored layout carrying the lost item, even across a save", async () => {
