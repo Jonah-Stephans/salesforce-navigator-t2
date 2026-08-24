@@ -1,6 +1,6 @@
 ---
 done: true
-fix_cycles: 1
+fix_cycles: 2
 depends_on:
 touches:
   - eslint.config.js
@@ -491,3 +491,66 @@ must not create.
       is on `package.json`'s `lint` script, so "either one fails the run" holds, and the closing
       "do not expect an `--sds-*` hook to announce itself as an error" is the useful half of the
       correction.
+- [x] false positive — the new A3 glob assertion does fail on the hole it was built for, and the
+      six defects the brief lists all still go red. Re-injected each into the working tree, ran
+      `npm run lint:slds-gate`, and restored with `git checkout --` after every one: (a) the
+      `lint-staged` key narrowed to `"test/**/{aura,lwc}/**/*.{js,css,html}"` with the command
+      untouched — exit 1, "the lint-staged eslint glob no longer selects
+      force-app/main/default/lwc/sldsGateProbe/sldsGateProbe.css", echoing the offending glob, with
+      A1's `ok:` line above it; (b) `"lint": "eslint ."` — exit 1 on A1; (c) `--max-warnings 0`
+      dropped from the `lint-staged` command — exit 1 on A3, with A1 still green; (d) the re-scope
+      narrowed to `test/**/lwc/**/` in `eslint.config.js` — exit 1 on A2; (e) both SLDS entries
+      collapsed onto `files: ["**/lwc/**/*.{css,html}"]` — exit 1 on B, with A1 and A3 green because
+      the CSS half is unaffected; (f) `ignores` grown to `"force-app/main/default/lwc/**/*.css"` —
+      exit 1 on A2. No assertion was weakened to fit the new one. After every failing run
+      `git status --short` listed only the injected file and
+      `ls -A force-app/main/default/lwc/` was empty. Restored, the gate prints all six `ok:` lines
+      and exits 0.
+- [x] false positive — `exit "$status"` in the `EXIT` trap is correct on every path, and never turns
+      a bad run green. Measured, not reasoned. Clean run: exit 0. Assertion failure (`fail` calls
+      `exit 1`): the trap sees `$?` = 1 and re-raises 1. Trap's own dirty branch: replicated
+      `cleanup()` with the removal stubbed by `mkdir -p "$PROBE_DIR"` and ran it both after a
+      succeeding body and after an `exit 1` body — **1** in both cases, so the dirty-tree branch's
+      `exit 1` beats a zero `$status` and does not mask a failing body either. Signal: `SIGTERM`
+      mid-run gives **143** on the real script, and the replica shows why the trap cannot swallow it
+      — cleanup runs, prints `status=0`, calls `exit 0`, and bash still exits 143, because it
+      re-raises the fatal signal after the trap. A crash inside a command substitution is caught by
+      the `$?` test on the following line, not by `set -e`, so the absent `-e` costs nothing.
+- [x] false positive — the `SIGINT` 0 is not an interrupted run reporting success; the run is not
+      interrupted at all. Checked the mechanism rather than the exit code: a minimal script with the
+      same `trap cleanup EXIT` shape, a foreground child, and an `echo` *after* the child, signalled
+      with `kill -INT` mid-child, printed the line after the child and exited 0 — the body ran to
+      completion. That is bash's documented handling of `SIGINT` delivered to a non-interactive shell
+      waiting on a foreground command: the signal is deferred, and because the child did not itself
+      die of it, it is discarded. Same on the real gate script, signalled at 0.7 s into a 4.6 s run:
+      all six `ok:` lines printed, so the 0 was earned, `git status --short` empty and
+      `force-app/main/default/lwc/` empty. A truncated run cannot print those lines, because each is
+      printed only after its assertion passes. This is not a regression and not a false pass.
+- [x] false positive — the `node -e` glob parse fails loudly on every shape change tried, and never
+      silently green. The whole `"lint-staged"` block renamed, as a move to `.lintstagedrc` would
+      leave it: exit 1, "FAIL: package.json has no lint-staged eslint entry globbing lwc CSS. The
+      pre-commit half of the gate is gone." A second eslint command added ahead of the real one
+      (`["eslint --fix", "eslint --no-warn-ignored --max-warnings 0"]`): exit 1 on A3, since `.find`
+      takes the first — a conservative false red, never a green. `micromatch` removed from
+      `node_modules`: `require` throws, node exits 1, A3's `if !` branch fires and the run exits 1,
+      so the only cost is a diagnosis that names the glob rather than the missing module.
+- [x] false positive — A3's use of `micromatch` is sound, though the note's matcher name is loose.
+      `lint-staged@16.4.0` depends on `picomatch@^4.0.3`, not `micromatch`, so `## Deviations`'
+      "lint-staged matches with micromatch" is not literally true; the resolved matcher is
+      `node_modules/lint-staged/node_modules/picomatch@4.0.5`. It makes no difference to the
+      assertion: ran the probe path
+      `force-app/main/default/lwc/sldsGateProbe/sldsGateProbe.css` through both `micromatch` and
+      lint-staged's own `picomatch` with `{dot:true}` against four globs — the shipped
+      `**/{aura,lwc}/**/*.{js,css,html}`, the narrowed `test/**/…`, `force-app/**/*.{js,css,html}`
+      and `**/lwc/**` — and they agree on all four, including the narrowing A3 is built to catch.
+      `micromatch` is not declared in `package.json`; it resolves by hoisting from
+      `@salesforce/sfdx-lwc-jest` -> `jest` -> `fast-glob`. That is pinned at `node_modules/micromatch`
+      in `package-lock.json`, which `npm ci` reproduces exactly, so CI is deterministic, and if it
+      ever did vanish the gate goes red rather than green — see the box above.
+- [x] false positive — the diff violates none of this repo's `.claude/rules/`. The commit subject
+      `ci(config): assert the lint-staged glob and fail the gate on a dirty tree` matches
+      `rstk-conventional-commits.md`: allowed type, allowed scope, lowercase, no trailing period, no
+      issue key. `rstk-complexity-guard.md` is satisfied at 42 changed lines in one script.
+      `rstk-dry-enforcement.md` is about Apex async entry points and finds nothing here anyway — the
+      per-assertion `case` blocks share no 10-line body, only a shape.
+      `rstk-preserve-documentation.md` is satisfied: the header comment grew an item, none was cut.
