@@ -51,8 +51,35 @@ jobs:
       # @salesforce/sfdx-lwc-jest in devDependencies rather than by this line
       # alone. --passWithNoTests keeps it honest before the first LWC exists,
       # instead of green because the runner found nothing and shrugged.
+      # The doubled `--` is not a typo. npm strips the first one, and
+      # sfdx-lwc-jest needs its own `--` before it will forward a flag to jest;
+      # with a single `--` the flag is swallowed and the job is red on an empty
+      # repo, which is the opposite of what --passWithNoTests is here for.
       - name: npm run test:unit
-        run: npm run test:unit -- --passWithNoTests
+        run: npm run test:unit -- -- --passWithNoTests
+
+  slds-styling:
+    name: no hard-coded colour, spacing or typography
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      # Outcome 9's gate. `npm run lint` carries --max-warnings 0, and that
+      # flag is the whole job: @salesforce-ux/eslint-plugin-slds reports a
+      # hard-coded colour at severity *warning*, and warnings exit 0, so the
+      # obvious lint job goes green on a stylesheet made entirely of hex codes.
+      - name: npm run lint
+        run: npm run lint
+      # And this asserts the flag is still doing that work, against a fixture
+      # pair the ordinary run ignores. Without it, a later edit that drops
+      # --max-warnings 0 leaves every check green and the Outcome unguarded.
+      - name: npm run lint:slds-gate
+        run: npm run lint:slds-gate
 
   changed-lines:
     name: added lines carry no debug statements

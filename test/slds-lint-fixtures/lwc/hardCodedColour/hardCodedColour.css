@@ -1,0 +1,12 @@
+/* Fixture: the stylesheet the gate must reject.
+   Nothing renders this. It exists so `npm run lint:slds-gate` can prove the
+   SLDS gate still goes red, rather than asserting it once at Build and
+   trusting it forever. Every declaration below is a hard-coded value the
+   linter reports at severity *warning* — which is exactly the case a naive
+   lint job passes, because warnings exit 0. */
+.hard-coded {
+  color: #ffffff;
+  background-color: #1b96ff;
+  padding: 16px;
+  font-size: 14px;
+}
