@@ -304,3 +304,137 @@ still there tomorrow.
       resolves those imports, and it accepted them.
 
 ## Critique findings
+
+- [ ] **A change made before `getLayouts` resolves is silently discarded.**
+      `connectedCallback` fires `getLayouts()` without awaiting it, and the `New section` button and
+      every section menu are already live while it is in flight. `adoptActiveLayout` then assigns
+      `this.storedLayout` **unconditionally**, overwriting whatever the user changed in the meantime.
+      Reproduced with a `getLayouts` mock held open: the user clicks *New section*, the headers read
+      `["All Items", "New section"]`; the fetch lands and they read `["Daily work"]`; the autosave
+      then fires and writes the **pre-change** stored layout back. The change the user made and saw
+      is gone with no message. `adoptActiveLayout` needs to refuse to clobber state the user has
+      already touched (a "user has changed something" flag set in `applyLayout`, or resolve the
+      fetch before the layout is interactive). No test covers the in-flight window at all — every
+      existing test lets `getLayouts` settle inside `flush()` before it interacts.
+- [ ] **A failed `getLayouts` tells the user nothing and lets their next change displace their real
+      layout.** Reproduced with `getLayouts.mockRejectedValue(...)`: no `[role="alert"]` is rendered
+      (`errorMessage` is never set on that path — only the wire's failure sets it), so the user sees
+      a seeded Navigator that looks like a first open. Their next change then calls
+      `createLayout({... makeActive: true})`, and `NavigatorLayoutController.createLayout` clears
+      `Is_Active__c` on every other layout the owner has. Their real layout is therefore
+      **deactivated**, and with no layout switcher in this slice it is unreachable — `adoptActiveLayout`
+      will prefer the new active row on every future load. The comment on that `.catch` says "What
+      must not happen is a save overwriting a stored layout we failed to read, and it cannot"; that
+      is true of overwrite and false of displacement, which costs the user the same thing. Either
+      surface the failure and suppress autosave until a read succeeds, or do not pass
+      `makeActive: true` on a create made without a successful read.
+- [ ] **`New section` is live before the tab list is complete, so a click mid-pagination freezes a
+      partial seed into the store.** The button sits in `slot="actions"` and is rendered
+      unconditionally — outside the `lwc:if={isLoading}` / `lwc:elseif={hasItems}` chain that gates
+      the sections. `this.layout` on a first change is `buildSeededLayout(this.items)`, and
+      `this.items` holds only the pages received so far. Reproduced: with 100 tabs on page 1 and 2
+      more on page 2, clicking *New section* after page 1 stores an `All Items` section of **100 of
+      the 102** reachable tabs; the remaining two are then in no section, there is no item picker in
+      this slice, and they never render again. This contradicts the first acceptance criterion
+      ("sees every tab they can reach in one section") for any org past one page. Gate the button on
+      `hasItems`, or seed only once the tab list is complete.
+- [ ] **One unreadable row makes every layout that user owns unreadable.** `getLayouts` maps `toDto`
+      over the whole result and `normalise` throws on the first row it cannot read, so a single row
+      at an unknown `Schema_Version__c`, or with a `Layout_JSON__c` an admin edited by hand (the
+      permission set grants `allowEdit` on the object), takes down the read for all of that user's
+      layouts — and, by the finding above, then becomes a rival active layout. Two gaps in the
+      suite: `anUnreadableFutureSchemaVersionIsRefusedRatherThanGuessedAt` seeds exactly one row and
+      so never shows that the user's *other, readable* layouts are lost with it, and there is no
+      Apex test at all for a stored payload that is not valid JSON on the **read** path
+      (`aPayloadThatIsNotJsonIsRefusedRatherThanStored` covers only the write path). Consider
+      skipping and reporting the unreadable row rather than failing the whole call.
+- [ ] **The two halves of the payload contract disagree on a missing `columns`.**
+      `NavigatorLayoutController.columnsOf` falls back to `MIN_COLUMNS` (1); `navigatorLayoutModel`'s
+      `clampColumns` falls back to `DEFAULT_COLUMNS` (3). A section object carrying no `columns` key
+      is therefore stored as a 1-column section by Apex and read as a 3-column section by the
+      client. It is latent today only because every read is normalised by Apex before the client
+      sees it — but both files document themselves as two halves of one contract that match "by
+      construction", and on this key they do not. Pick one fallback and state it in both.
+- [ ] **The last acceptance criterion says "All 18 methods run under `System.runAs`" and "18/18
+      pass"; `NavigatorLayoutControllerTest` has 17 test methods.** The count of 18 is the number of
+      `@IsTest` annotations in the file, which includes the class-level one. The claim itself holds
+      — all 17 do run under `System.runAs` a Standard User, and `activationStaysOneUpdateAcrossTwoHundredLayouts`
+      is a genuine 200-record bulk test — only the number is wrong.
+- [ ] **`setSectionColumns` is the one section operation with no purity assertion of its own.**
+      `addSection`, `renameSection` and `deleteSection` each assert `expect(base).toEqual(before)`
+      against a copy taken beforehand; the two `setSectionColumns` tests do not. Mutating it to
+      write `section.columns` in place turns exactly one test red, and that test
+      (`clamps a column count outside one to six rather than storing it`) only catches it by
+      accident, because it happens to reuse `base` across three calls. Add the same explicit
+      before/after deep-compare the other three have.
+- [ ] **The explicit `OwnerId = :UserInfo.getUserId()` predicate is not held down by any test.**
+      Both the class header and the sixth acceptance criterion rest on the predicate and
+      `WITH USER_MODE` being present *together* as defence in depth, but with the object at OWD
+      Private, `WITH USER_MODE` alone already hides a peer's rows — so deleting the predicate leaves
+      `peerCannotReadAnotherUsersLayouts` and the whole suite green. The code is correct and the
+      security rule is satisfied; the claim that the pair cannot be quietly reduced to one is not.
+- [ ] **`Sort_Order__c = existing.size() + 1` collides after a delete.** A user with layouts at sort
+      order 1 and 2 who deletes the first (the permission set grants `allowDelete`) gets 2 again on
+      the next create, and `ownLayouts`' `ORDER BY Sort_Order__c NULLS LAST, CreatedDate` then
+      orders the pair arbitrarily-but-stably rather than as the user left them. Latent in this
+      slice, which ships no delete path — flagging it before the switcher slice builds on it. Use
+      `MAX(Sort_Order__c) + 1` rather than a count.
+- [x] false positive — that the lost-access intersection leaks into stored state. Mutated `save()`
+      to serialise `{ sections: this.sections }` (the resolved layout) instead of `this.layout` (the
+      stored one). `losing and regaining access to a tab › leaves the stored layout carrying the
+      lost item, even across a save` went red on precisely the missing `{ id: "Contact" }`. The test
+      bites, and it is the only one that does — the margin is one test, as the build pass says.
+- [x] false positive — that a path can call `updateLayout` with a null id, or create a second record
+      for a user who already has one. Mutated `persist`'s branch both ways: forcing `createLayout`
+      turned 3 red, forcing `updateLayout` turned 14 red. `saveChain` genuinely serialises the
+      create so the returned id is recorded before the next save chooses, and Apex's
+      `updateRefusesANullLayoutId` covers the server half.
+- [x] false positive — that the debounce is leading-edge, or drops the last change. Mutated
+      `scheduleSave` to fire `this.save()` on the first call as well as on the timer: 5 tests red.
+      The burst test asserts one call *and* that its payload carries the fifth change, so a
+      call-count-only pass is not available. A save in flight when the next debounce fires is
+      chained, not raced, and `disconnectedCallback` clears the timer and runs the pending save.
+- [x] false positive — that the serialiser could let a label through. Mutated `serializeLayout` to
+      spread the item (`{ ...item }`) instead of emitting an explicit key set: 2 tests red, because
+      `drops a label, an icon and a pageReference that reached it by accident` asserts the whole
+      section object equals an exact three-key shape rather than checking named keys.
+- [x] false positive — that `resolveLayout` mutates its input. Added an in-place prune of
+      `section.items` alongside the existing filter: 5 tests red, including the deep-compare against
+      a copy taken beforehand. `navigatorLayoutModel` also imports nothing from `lwc` — confirmed by
+      grep, not by reading the file header.
+- [x] false positive — that the column range is not genuinely clamped. `clampColumns` is the single
+      choke point and both `resolveLayout` and `setSectionColumns` go through it; `gridClass`'s
+      no-section fallback is `cols-1`, which the stylesheet defines. All six `cols-N` classes exist
+      as `repeat(N, minmax(0, 1fr))` and the shipped stylesheet is read and pinned by a test.
+- [x] false positive — SLDS 2 violations. Grepped the changed CSS for `--slds-c-*`, `--sds-*`,
+      `--lwc-*`, bare `var(--slds-g-…)` with no fallback, `prefers-color-scheme`, and the 38 colour
+      hooks with no `light-dark()` (`palette-*`, `*-base-50/100`, `accent-container-1`, `disabled`,
+      `accent-light-*`/`accent-dark-*`): none present. Every hook used is semantic
+      (`surface-container-1`, `on-surface-1/3`, `error-container-1`, `on-error-1`, the spacing,
+      radius, shadow and font scales) and carries a fallback. No inline `style` and no
+      `lightning-layout` anywhere in the two templates. Own class names are `rstk-nav-` prefixed and
+      no custom properties are authored at all.
+- [x] false positive — that a slice-02 assertion was weakened. Diffed the six pre-existing
+      `salesforceNavigator` tests across `HEAD~1..HEAD`: exactly one line was removed, and it is the
+      `element.shadowRoot.querySelectorAll("c-navigator-item")` traversal replaced by
+      `queryItems(element)`. Every `expect` and every expected value is byte-identical.
+- [x] false positive — Apex testing-rule violations. No `System.assert*` anywhere in
+      `force-app/main/default/classes`; every `Assert.*` call carries a descriptive message as its
+      last parameter; `activationStaysOneUpdateAcrossTwoHundredLayouts` is a real 200-record bulk
+      test that seeds all 200 active so the clearing does work; all test methods run under
+      `System.runAs` a user on the genuine `Standard User` profile. The write tests re-query via
+      `storedLayouts()` and assert what the database holds, not what was sent.
+- [x] false positive — governor and DRY violations in the controller. No SOQL or DML inside any
+      loop: `ownLayouts()` is the class's single query and both write paths share it, `deactivations`
+      builds a list for one bulk `Database.update`, and `normalise` is the single walk both
+      `fromStored` and `fromClient` go through. No block of 10+ lines appears in more than one
+      method in either the controller or its test class.
+- [x] false positive — that `Is_Active__c` exclusivity can break. No route through the controller
+      leaves two rows active: `deactivations` clears every other active row of the owner in the same
+      `Database.update` as the target, and a `makeActive: false` call adds no active row. Confirmed
+      under bulk by the 200-layout test, which asserts exactly one survivor, that it is the right
+      one, and that the cost stayed at `dmlUsed <= 2` / `queriesUsed <= 3`. `activatingOneUsersLayoutDoesNotDisturbAnother`
+      covers the cross-user half. Zero-active is reachable only via `makeActive: false`, which the
+      LWC never sends, and `adoptActiveLayout` falls back to `layouts[0]` regardless.
+
+fix_cycles: 0
