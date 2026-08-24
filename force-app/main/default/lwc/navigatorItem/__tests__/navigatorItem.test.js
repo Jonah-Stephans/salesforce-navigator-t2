@@ -5,6 +5,8 @@ import {
   getGenerateUrlCalledWith,
   GenerateUrl
 } from "lightning/navigation";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 // A pageReference shape verified against a live org: a real nav item, passed
 // through unmodified. Using a kind that is not on the documented
@@ -451,6 +453,51 @@ describe("c-navigator-item", () => {
       anchorOf(element).dispatchEvent(keydown("Enter"));
 
       expect(getNavigateCalledWith()).toBeUndefined();
+    });
+
+    it("looks grabbed while it is grabbed, and only then", async () => {
+      // A sighted keyboard user has no other signal that they are holding
+      // something: the instruction text is assistive-only and the
+      // announcement is spoken. Without this class the grab is invisible.
+      const element = await settled(createNavigatorItem());
+
+      expect(anchorOf(element).classList.contains("rstk-nav-item")).toBe(true);
+      expect(
+        anchorOf(element).classList.contains("rstk-nav-item_grabbed")
+      ).toBe(false);
+
+      element.grabbed = true;
+      await Promise.resolve();
+
+      expect(anchorOf(element).classList.contains("rstk-nav-item")).toBe(true);
+      expect(
+        anchorOf(element).classList.contains("rstk-nav-item_grabbed")
+      ).toBe(true);
+
+      element.grabbed = false;
+      await Promise.resolve();
+
+      expect(
+        anchorOf(element).classList.contains("rstk-nav-item_grabbed")
+      ).toBe(false);
+    });
+
+    it("gives the grabbed class a real appearance that works in both colour modes", () => {
+      // jsdom applies no stylesheet, so the assertion above proves the class
+      // is computed and not that it means anything. This reads the CSS that
+      // ships and pins that the grabbed state is a visible change taken from
+      // SLDS 2 semantic hooks — which resolve per colour mode — rather than
+      // a hand-rolled colour that would fail contrast in one of them.
+      const css = readFileSync(
+        join(__dirname, "..", "navigatorItem.css"),
+        "utf8"
+      );
+      const rule = css.match(/\.rstk-nav-item_grabbed\s*\{[^}]*\}/);
+
+      expect(rule).not.toBeNull();
+      expect(rule[0]).toContain("--slds-g-shadow-outline-focus-1");
+      expect(rule[0]).toContain("--slds-g-color-surface-container-2");
+      expect(rule[0]).not.toMatch(/prefers-color-scheme|--slds-c-|--lwc-/);
     });
 
     it("attaches the instruction text only while grabbed, never permanently", async () => {

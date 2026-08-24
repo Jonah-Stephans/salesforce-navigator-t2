@@ -5,6 +5,23 @@ const RENAME = "rename";
 const DELETE = "delete";
 const COLUMNS_PREFIX = "columns-";
 
+/**
+ * The distinguisher that makes a repeated announcement a *new* announcement.
+ *
+ * A live region is read when its content changes, and LWC writes nothing to
+ * the DOM when a bound string is unchanged — so two identical sentences in a
+ * row are one write and one announcement, and the second press is silent.
+ * That is precisely the case the "announced even when nothing moved" rule
+ * below exists to serve: a user pressing ArrowLeft twice at position 1, or
+ * walking an item to position 3, back, and to 3 again, is the ordinary case.
+ *
+ * U+200B ZERO WIDTH SPACE, toggled on and off, makes consecutive writes
+ * textually distinct while adding nothing a screen reader voices and nothing
+ * a sighted user can see. `salesforceNavigator` carries the same toggle for
+ * the section axis, where the same hazard applies to its own live region.
+ */
+const ANNOUNCEMENT_NONCE = "\u200B";
+
 /** See the note on ARROW_DELTAS in navigatorItem — a section is a grid. */
 const CARD_ARROW_DELTAS = {
   ArrowUp: -1,
@@ -59,7 +76,22 @@ export default class NavigatorSection extends LightningElement {
   grabbedItemIndex;
   grabbedItemOrigin;
 
+  // Which item is being held, and what it is called. The index alone cannot
+  // answer "is the thing I am holding still here?" — an item can stop
+  // rendering mid-drag, because the render-time access intersection drops any
+  // tab the running user has lost access to, and the index would then point
+  // at a neighbour or past the end of the list with nothing to say so. The
+  // label is kept because by the time it is needed the item is gone, and
+  // "the move ended" is not something to tell a screen reader user without
+  // naming what it was about.
+  grabbedItemId;
+  grabbedItemLabel = "";
+
   announcement = "";
+
+  // Flipped on every announcement so that two identical sentences in a row
+  // are still two distinct strings — see ANNOUNCEMENT_NONCE above.
+  announcementNonce = "";
 
   get name() {
     return this.section ? this.section.name : "";
@@ -188,6 +220,10 @@ export default class NavigatorSection extends LightningElement {
   }
 
   renderedCallback() {
+    // Before the focus restoration, not after: there is no point putting
+    // focus back on an item that is no longer there, and the grab has to be
+    // gone before anything else reads it.
+    this.releaseGrabIfItemGone();
     this.keepFocusOnGrabbedItem();
 
     // Focus follows the rename, or the gesture is mouse-only: the menu item
@@ -277,8 +313,27 @@ export default class NavigatorSection extends LightningElement {
 
   handleItemGrab(event) {
     const index = event.detail.index;
+
+    // A second grab while one is already in flight is refused rather than
+    // silently taken. Taking it would overwrite `grabbedItemOrigin`, and the
+    // user would then be holding one item with another item's Escape
+    // destination — a cancel that puts the wrong thing in the wrong place is
+    // worse than a cancel that does nothing. It is reachable with a mouse,
+    // not only in theory: `navigatorItem.handleClick` blocks navigation
+    // mid-grab but not focus, so a click on a second item can still put focus
+    // there and Space would arrive here.
+    if (
+      this.grabbedItemIndex !== undefined &&
+      this.grabbedItemIndex !== index
+    ) {
+      return;
+    }
+
+    const item = this.items[index];
     this.grabbedItemIndex = index;
     this.grabbedItemOrigin = index;
+    this.grabbedItemId = item ? item.id : undefined;
+    this.grabbedItemLabel = this.labelAt(index);
     this.announce(`${this.labelAt(index)} grabbed. ${this.positionOf(index)}.`);
   }
 
@@ -290,7 +345,11 @@ export default class NavigatorSection extends LightningElement {
     this.grabbedItemIndex = landed;
     // Announced even when nothing moved. An arrow press at either end that
     // said nothing would leave a screen reader user unable to tell a key that
-    // did not register from one that had nowhere to go.
+    // did not register from one that had nowhere to go. Calling `announce`
+    // is not on its own enough to deliver that: two presses at the same end
+    // produce the same sentence, and an unchanged string is no DOM write and
+    // therefore no announcement, so `announce` distinguishes them — see
+    // ANNOUNCEMENT_NONCE.
     this.announce(`${this.labelAt(from)} moved. ${this.positionOf(landed)}.`);
 
     if (landed !== from) {
@@ -326,6 +385,41 @@ export default class NavigatorSection extends LightningElement {
   releaseGrab() {
     this.grabbedItemIndex = undefined;
     this.grabbedItemOrigin = undefined;
+    this.grabbedItemId = undefined;
+    this.grabbedItemLabel = "";
+  }
+
+  /**
+   * Ends a keyboard drag whose item has stopped rendering.
+   *
+   * An item can vanish mid-grab, and by a path this spec already models: the
+   * render-time access intersection drops any stored id the running user can
+   * no longer reach, so losing access to a tab while holding it removes it
+   * from the list underneath the drag. Without this the section believes a
+   * drag is in flight forever — nothing carries `grabbed`, the instruction
+   * node is gone, focus is nowhere, `keepFocusOnGrabbedItem` runs on every
+   * later render finding nothing, and the live region is left reading a grab
+   * that ended. Every subsequent gesture is then measured against an origin
+   * that no longer means anything.
+   *
+   * The test is the item's *identity*, not its index: an index is still a
+   * number after the list under it has changed, and one that happens to
+   * remain in range would silently transfer the grab to a neighbour.
+   */
+  releaseGrabIfItemGone() {
+    if (this.grabbedItemIndex === undefined) {
+      return;
+    }
+    const stillListed = this.items.some(
+      (item) => item.id === this.grabbedItemId
+    );
+    if (stillListed && this.grabbedItemIndex < this.items.length) {
+      return;
+    }
+    this.announce(
+      `Move cancelled. ${this.grabbedItemLabel} is no longer available.`
+    );
+    this.releaseGrab();
   }
 
   /**
@@ -349,7 +443,8 @@ export default class NavigatorSection extends LightningElement {
   }
 
   announce(message) {
-    this.announcement = message;
+    this.announcementNonce = this.announcementNonce ? "" : ANNOUNCEMENT_NONCE;
+    this.announcement = message + this.announcementNonce;
   }
 
   /** The one route out of this component for a change of item order. */

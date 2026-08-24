@@ -397,6 +397,9 @@ describe("c-navigator-section", () => {
 
       const region = element.shadowRoot.querySelector("[aria-live]");
       expect(region.getAttribute("aria-live")).toBe("assertive");
+      // Atomic, or a screen reader may read only the part of the sentence
+      // that changed — "Position 2 of 3" with no idea what moved.
+      expect(region.getAttribute("aria-atomic")).toBe("true");
       expect(announcement(element)).toContain("Contacts");
       expect(announcement(element)).toContain("grabbed");
       expect(announcement(element)).toMatch(/position 2 of 3/i);
@@ -434,6 +437,65 @@ describe("c-navigator-section", () => {
       // leave a screen reader user unsure whether the key registered.
       expect(announcement(element)).toMatch(/position 1 of 3/i);
       expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("re-announces a repeated arrow press rather than writing nothing the second time", async () => {
+      // A screen reader reads a live region when its content changes, and LWC
+      // writes nothing to the DOM for an unchanged string. Two identical
+      // presses at the same end of the list produce the same sentence, so
+      // without something to distinguish them the second press is silent —
+      // which is exactly the case "announced even when nothing moved" exists
+      // to serve. An item walked to position 3, back, and to 3 again is the
+      // ordinary case, not an exotic one.
+      const element = createThree();
+
+      fire(itemsOf(element)[0], "itemgrab", { index: 0 });
+      await Promise.resolve();
+      fire(itemsOf(element)[0], "itemkeymove", { index: 0, delta: -1 });
+      await Promise.resolve();
+
+      const region = element.shadowRoot.querySelector("[aria-live]");
+      const first = region.textContent;
+      expect(first).toMatch(/position 1 of 3/i);
+
+      fire(itemsOf(element)[0], "itemkeymove", { index: 0, delta: -1 });
+      await Promise.resolve();
+
+      expect(region.textContent).toMatch(/position 1 of 3/i);
+      expect(region.textContent).not.toBe(first);
+    });
+
+    it("refuses a second grab while one is in flight, so the first Escape origin survives", async () => {
+      // Reachable with a mouse: `navigatorItem.handleClick` blocks navigation
+      // mid-grab but not focus, so a click on another item can put focus
+      // there and Space arrives here. Taking the second grab would overwrite
+      // the first item's origin, and its cancel would then move the wrong
+      // thing to the wrong place.
+      const element = createThree();
+      const handler = jest.fn();
+      element.addEventListener("itemmove", handler);
+
+      fire(itemsOf(element)[0], "itemgrab", { index: 0 });
+      fire(itemsOf(element)[0], "itemkeymove", { index: 0, delta: 1 });
+      await Promise.resolve();
+
+      fire(itemsOf(element)[2], "itemgrab", { index: 2 });
+      await Promise.resolve();
+
+      expect(itemsOf(element).map((item) => item.grabbed)).toEqual([
+        false,
+        true,
+        false
+      ]);
+
+      fire(itemsOf(element)[1], "itemkeycancel", { index: 1 });
+
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler.mock.calls[1][0].detail).toEqual({
+        sectionIndex: 0,
+        from: 1,
+        to: 0
+      });
     });
 
     it("announces the drop, at the position the item ended at", async () => {
@@ -591,6 +653,43 @@ describe("c-navigator-section", () => {
       );
 
       expect(grab).not.toHaveBeenCalled();
+    });
+
+    it("looks grabbed while the card is grabbed, and only then", async () => {
+      const element = createSection();
+
+      expect(cardOf(element).classList.contains("rstk-nav-section")).toBe(true);
+      expect(
+        cardOf(element).classList.contains("rstk-nav-section_grabbed")
+      ).toBe(false);
+
+      element.grabbed = true;
+      await Promise.resolve();
+
+      expect(cardOf(element).classList.contains("rstk-nav-section")).toBe(true);
+      expect(
+        cardOf(element).classList.contains("rstk-nav-section_grabbed")
+      ).toBe(true);
+
+      element.grabbed = false;
+      await Promise.resolve();
+
+      expect(
+        cardOf(element).classList.contains("rstk-nav-section_grabbed")
+      ).toBe(false);
+    });
+
+    it("gives the grabbed card a real appearance that works in both colour modes", () => {
+      const css = readFileSync(
+        join(__dirname, "..", "navigatorSection.css"),
+        "utf8"
+      );
+      const rule = css.match(/\.rstk-nav-section_grabbed\s*\{[^}]*\}/);
+
+      expect(rule).not.toBeNull();
+      expect(rule[0]).toContain("--slds-g-shadow-outline-focus-1");
+      expect(rule[0]).toContain("--slds-g-color-surface-container-2");
+      expect(rule[0]).not.toMatch(/prefers-color-scheme|--slds-c-|--lwc-/);
     });
 
     it("attaches its own drag instruction text only while the card is grabbed", async () => {

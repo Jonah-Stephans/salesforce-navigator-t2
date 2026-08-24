@@ -529,6 +529,30 @@ describe("moveItemWithinSection", () => {
     expect(base).toEqual(before);
   });
 
+  it("hands back copies, not the caller's own section and item objects", () => {
+    // The deep-compare above is structural and cannot tell a copy from a
+    // shared reference: a version that returned the caller's own objects
+    // passes it untouched. The module's docblock promises the opposite — the
+    // result can go straight into reactive state "without wondering whether
+    // the previous value still exists" — and `reorder`'s own purity test does
+    // not cover this, because `reorder` is handed an already-copied array.
+    const next = moveItemWithinSection(base, 0, 0, 2);
+
+    next.sections.forEach((section, at) => {
+      expect(section).not.toBe(base.sections[at]);
+      expect(section.items).not.toBe(base.sections[at].items);
+    });
+
+    const moved = next.sections[0].items[2];
+    expect(moved).toEqual(base.sections[0].items[0]);
+    expect(moved).not.toBe(base.sections[0].items[0]);
+
+    // The consequence, stated as behaviour rather than as identity: writing
+    // to the result must not reach back into the layout it came from.
+    moved.rename = "Clients";
+    expect(base.sections[0].items[0].rename).toBeUndefined();
+  });
+
   it("carries a renamed item's rename with it", () => {
     const renamed = {
       sections: [
@@ -622,6 +646,27 @@ describe("moveSection", () => {
       }
     }
   );
+
+  it("hands back copies, not the caller's own section and item objects", () => {
+    // The same blind spot as on the item axis: `toEqual` is structural, so a
+    // `moveSection` that dropped `copySection` and handed the caller's own
+    // sections straight back would pass every other test here.
+    const next = moveSection(base, 2, 0);
+
+    next.sections.forEach((section) => {
+      base.sections.forEach((original) => {
+        expect(section).not.toBe(original);
+        expect(section.items).not.toBe(original.items);
+      });
+    });
+
+    const carried = next.sections[1].items[0];
+    expect(carried).toEqual(base.sections[0].items[0]);
+    expect(carried).not.toBe(base.sections[0].items[0]);
+
+    carried.rename = "Clients";
+    expect(base.sections[0].items[0].rename).toBeUndefined();
+  });
 
   it("survives a round trip through the payload, so the order is what reloads", () => {
     const moved = moveSection(base, 0, 2);

@@ -1085,6 +1085,38 @@ describe("c-salesforce-navigator", () => {
       ]);
     });
 
+    it("still shows a keyboard-moved item in its new position after a reload", async () => {
+      // The remount above drives the mouse path. Every other keyboard
+      // assertion in this file stops at `savedItemIds`, which reads the
+      // payload that was *sent* to Apex — and a test that asserts what was
+      // sent is not a test of what was stored. This one takes what was
+      // actually written, mounts a second Navigator on it, and asserts what
+      // that renders.
+      const element = await navigatorWithThree();
+      await walkItem(element, 2, -2);
+      await settleAutosave();
+      const written = createLayout.mock.calls[0][0].layoutJson;
+      document.body.removeChild(element);
+      jest.clearAllMocks();
+
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "My Navigator",
+          isActive: true,
+          schemaVersion: SCHEMA_VERSION,
+          layoutJson: written
+        }
+      ]);
+      const reloaded = await navigatorWithThree();
+
+      expect(queryItems(reloaded).map((item) => item.label)).toEqual([
+        "Contacts",
+        "Accounts",
+        "Action Plans"
+      ]);
+    });
+
     it("puts the item back where it started when the drag is cancelled with Escape", async () => {
       const element = await navigatorWithThree();
 
@@ -1239,6 +1271,40 @@ describe("c-salesforce-navigator", () => {
         expect(sectionNames(reloaded)).toEqual(["Third", "First", "Second"]);
       });
 
+      it("still shows keyboard-reordered sections after a reload", async () => {
+        // The section axis's own keyboard remount, for the same reason as the
+        // item axis's: `savedSectionNames` reads what was sent, not what was
+        // stored and read back.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 1).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        await settleAutosave();
+
+        const written = updateLayout.mock.calls[0][0].layoutJson;
+        document.body.removeChild(element);
+        jest.clearAllMocks();
+
+        getLayouts.mockResolvedValue([
+          { ...TWO_SECTIONS, layoutJson: written }
+        ]);
+        const reloaded = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        expect(sectionNames(reloaded)).toEqual(["Second", "First", "Third"]);
+      });
+
       it("reorders the sections from the keyboard, and cancels on Escape", async () => {
         const element = await navigatorWithSections();
 
@@ -1249,6 +1315,7 @@ describe("c-salesforce-navigator", () => {
 
         const announcer = element.shadowRoot.querySelector("[aria-live]");
         expect(announcer.getAttribute("aria-live")).toBe("assertive");
+        expect(announcer.getAttribute("aria-atomic")).toBe("true");
         expect(announcer.textContent).toContain("First");
         expect(announcer.textContent).toMatch(/position 1 of 3/i);
 
@@ -1272,6 +1339,131 @@ describe("c-salesforce-navigator", () => {
         ).toMatch(/cancelled/i);
         await settleAutosave();
         expect(savedSectionNames()).toEqual(["First", "Second", "Third"]);
+      });
+
+      it("moves no card the user never picked up after an abandoned section drag", async () => {
+        // `dragend` fires whether or not the drop landed anywhere. If the
+        // parent did not clear its drag state there, the stale
+        // `dragKind === "section"` would still be sitting in place — and an
+        // item drop with no source of its own is forwarded upward as a
+        // section drop, which is the mechanism that makes a whole card a drop
+        // target. The two together would move a card nobody picked up.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 2).dispatchEvent(
+          new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+        );
+        cardAt(element, 2).dispatchEvent(
+          new CustomEvent("dragend", { bubbles: true, cancelable: true })
+        );
+        await flush();
+
+        queryItems(element)[0]
+          .shadowRoot.querySelector("a")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        await settleAutosave();
+        expect(updateLayout).not.toHaveBeenCalled();
+      });
+
+      it("writes nothing when a section card is dropped back on itself", async () => {
+        // The order is the same either way, so the order alone proves
+        // nothing: what the short-circuit prevents is a write — a save of a
+        // layout identical to the stored one, on a gesture that changed
+        // nothing.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 1).dispatchEvent(
+          new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+        );
+        cardAt(element, 1).dispatchEvent(
+          new CustomEvent("drop", { bubbles: true, cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        await settleAutosave();
+        expect(updateLayout).not.toHaveBeenCalled();
+      });
+
+      it("re-announces a repeated arrow press on a card rather than writing nothing", async () => {
+        // The section axis has the same live-region hazard as the item axis:
+        // two identical presses at the top of the list produce the same
+        // sentence, and an unchanged string is no DOM write and therefore no
+        // announcement.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowUp", cancelable: true })
+        );
+        await flush();
+
+        const region = element.shadowRoot.querySelector("[aria-live]");
+        const first = region.textContent;
+        expect(first).toMatch(/position 1 of 3/i);
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowUp", cancelable: true })
+        );
+        await flush();
+
+        expect(region.textContent).toMatch(/position 1 of 3/i);
+        expect(region.textContent).not.toBe(first);
+      });
+
+      it("holds focus on the grabbed card across a section move", async () => {
+        // A section reorder changes every section's key, so LWC destroys and
+        // rebuilds the card the user is holding. Without focus being put back
+        // the drag becomes unfinishable — the user can neither move again,
+        // drop, nor cancel.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["Second", "First", "Third"]);
+        const moved = querySections(element)[1];
+        expect(element.shadowRoot.activeElement).toBe(moved);
+        expect(moved.shadowRoot.activeElement).toBe(cardAt(element, 1));
+      });
+
+      it("leaves focus on the origin card when a section move is cancelled", async () => {
+        // The cancel performs a real reorder back to the origin, which
+        // destroys the card the user was holding just as an arrow press does.
+        // Releasing the grab before that render lands would leave focus
+        // nowhere at all, stranding a keyboard user on document.body.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 1).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        expect(document.activeElement).not.toBe(document.body);
+        const restored = querySections(element)[0];
+        expect(element.shadowRoot.activeElement).toBe(restored);
+        expect(restored.shadowRoot.activeElement).toBe(cardAt(element, 0));
       });
 
       it("keeps a section drop, so a second Space is not a cancel", async () => {
@@ -1370,6 +1562,64 @@ describe("c-salesforce-navigator", () => {
       expect(queryItems(element).map((item) => item.label)).toEqual([
         "Accounts",
         "Action Plans"
+      ]);
+    });
+
+    it("releases a keyboard grab when the grabbed item stops rendering", async () => {
+      // The access-loss path and the drag path meet here. An item held from
+      // the keyboard can vanish underneath the drag, and if the grab is not
+      // released with it the section believes a drag is in flight forever:
+      // nothing carries `grabbed`, focus is nowhere, and the live region is
+      // left reading a grab that ended.
+      getLayouts.mockResolvedValue([STORED_THREE]);
+      const element = createNavigator();
+      getNavItems.emit({
+        navItems: [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM]
+      });
+      await flush();
+
+      const section = querySections(element)[0];
+      queryItems(element)[2]
+        .shadowRoot.querySelector("a")
+        .dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: " ",
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      await flush();
+
+      const region = section.shadowRoot.querySelector("[aria-live]");
+      expect(region.textContent).toMatch(/grabbed/i);
+
+      // Access to the held tab is lost while it is being held.
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Contacts"
+      ]);
+      expect(region.textContent).not.toMatch(/grabbed/i);
+      expect(region.textContent).toMatch(/no longer available/i);
+
+      // And the section is not stuck: a fresh grab is accepted, which it
+      // would not be while it still believed it was holding something.
+      queryItems(element)[0]
+        .shadowRoot.querySelector("a")
+        .dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: " ",
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      await flush();
+
+      expect(queryItems(element).map((item) => item.grabbed)).toEqual([
+        true,
+        false
       ]);
     });
 

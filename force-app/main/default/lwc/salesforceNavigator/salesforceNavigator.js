@@ -92,6 +92,17 @@ const NEW_SECTION_NAME = "New section";
 const AUTOSAVE_DELAY_MS = 1000;
 
 /**
+ * The same distinguisher `navigatorSection` carries for the item axis, for
+ * the same reason on this one: a live region is read when its content
+ * changes, LWC writes nothing for an unchanged bound string, and two
+ * identical sentences in a row would therefore be one announcement. U+200B
+ * ZERO WIDTH SPACE, toggled on and off, makes consecutive writes textually
+ * distinct while adding nothing a screen reader voices. See the fuller note
+ * on ANNOUNCEMENT_NONCE in navigatorSection.js.
+ */
+const ANNOUNCEMENT_NONCE = "\u200B";
+
+/**
  * The Navigator tab's top-level component. It owns the active layout's state
  * and its autosave; a section owns its own header and its own grid.
  *
@@ -152,6 +163,19 @@ export default class SalesforceNavigator extends LightningElement {
   grabbedSectionIndex;
   grabbedSectionOrigin;
   sectionAnnouncement = "";
+
+  // Flipped on every announcement so that two identical sentences in a row
+  // are still two distinct strings — see ANNOUNCEMENT_NONCE above.
+  sectionAnnouncementNonce = "";
+
+  // Where focus has to land on the *next* render, for the two gestures that
+  // end a keyboard drag. It cannot be inferred from `grabbedSectionIndex`,
+  // because ending the drag is exactly what clears that: a cancel performs a
+  // real reorder back to the origin, which destroys and rebuilds the card the
+  // user was holding, and by the time that render arrives there is no grab
+  // left to read a target from. Without this the user is dropped on
+  // `document.body` with no focus anywhere in the page.
+  cardFocusIndex;
 
   // Saves run one after another rather than in parallel. Without this, two
   // changes a second apart on a user with no record yet would each see a null
@@ -471,7 +495,9 @@ export default class SalesforceNavigator extends LightningElement {
     const index = event.detail.index;
     this.grabbedSectionIndex = index;
     this.grabbedSectionOrigin = index;
-    this.sectionAnnouncement = `${this.sectionNameAt(index)} grabbed. ${this.sectionPositionOf(index)}.`;
+    this.announceSection(
+      `${this.sectionNameAt(index)} grabbed. ${this.sectionPositionOf(index)}.`
+    );
   }
 
   handleSectionKeyMove(event) {
@@ -482,8 +508,11 @@ export default class SalesforceNavigator extends LightningElement {
     this.grabbedSectionIndex = landed;
     // Announced even when nothing moved: at either end, silence would leave
     // a screen reader user unable to tell a key that did not register from
-    // one that had nowhere to go.
-    this.sectionAnnouncement = `${name} moved. ${this.sectionPositionOf(landed)}.`;
+    // one that had nowhere to go. Two presses at the same end produce the
+    // same sentence, and an unchanged string is no DOM write and therefore
+    // no announcement — which is why this goes through `announceSection`
+    // rather than assigning the field directly. See ANNOUNCEMENT_NONCE.
+    this.announceSection(`${name} moved. ${this.sectionPositionOf(landed)}.`);
 
     if (landed !== from) {
       this.moveSectionTo(from, landed);
@@ -492,7 +521,13 @@ export default class SalesforceNavigator extends LightningElement {
 
   handleSectionKeyDrop(event) {
     const index = event.detail.index;
-    this.sectionAnnouncement = `${this.sectionNameAt(index)} dropped. ${this.sectionPositionOf(index)}.`;
+    this.announceSection(
+      `${this.sectionNameAt(index)} dropped. ${this.sectionPositionOf(index)}.`
+    );
+    // A drop performs no reorder, so this card survives the render — but the
+    // grab is still being released, so the same hand-off the cancel needs is
+    // recorded here rather than relying on that happening to stay true.
+    this.cardFocusIndex = index;
     this.releaseSectionGrab();
   }
 
@@ -500,17 +535,31 @@ export default class SalesforceNavigator extends LightningElement {
     const from = event.detail.index;
     const origin = this.grabbedSectionOrigin;
     const name = this.sectionNameAt(from);
+    const landed = origin === undefined ? from : origin;
 
     if (origin !== undefined && origin !== from) {
       this.moveSectionTo(from, origin);
     }
-    this.sectionAnnouncement = `Move cancelled. ${name} returned. ${this.sectionPositionOf(origin === undefined ? from : origin)}.`;
+    this.announceSection(
+      `Move cancelled. ${name} returned. ${this.sectionPositionOf(landed)}.`
+    );
+    // Recorded *before* the grab is released, and consumed on the render the
+    // reorder above schedules — which is the render that destroys the card
+    // the user was holding.
+    this.cardFocusIndex = landed;
     this.releaseSectionGrab();
   }
 
   releaseSectionGrab() {
     this.grabbedSectionIndex = undefined;
     this.grabbedSectionOrigin = undefined;
+  }
+
+  announceSection(message) {
+    this.sectionAnnouncementNonce = this.sectionAnnouncementNonce
+      ? ""
+      : ANNOUNCEMENT_NONCE;
+    this.sectionAnnouncement = message + this.sectionAnnouncementNonce;
   }
 
   /**
@@ -540,11 +589,21 @@ export default class SalesforceNavigator extends LightningElement {
    * cancel — the drag becomes unfinishable.
    */
   renderedCallback() {
-    if (this.grabbedSectionIndex === undefined) {
+    // A live grab wins, because it is re-asserted on every render for as long
+    // as the drag lasts; `cardFocusIndex` is the one-shot hand-off the two
+    // gestures that *end* a drag leave behind, and it is consumed here
+    // whether or not it was used, so it cannot outlive the render it was set
+    // for and steal focus from something else later.
+    const target =
+      this.grabbedSectionIndex === undefined
+        ? this.cardFocusIndex
+        : this.grabbedSectionIndex;
+    this.cardFocusIndex = undefined;
+    if (target === undefined) {
       return;
     }
     const cards = this.template.querySelectorAll("c-navigator-section");
-    const grabbed = cards[this.grabbedSectionIndex];
+    const grabbed = cards[target];
     if (grabbed && this.template.activeElement !== grabbed) {
       grabbed.focusCard();
     }
