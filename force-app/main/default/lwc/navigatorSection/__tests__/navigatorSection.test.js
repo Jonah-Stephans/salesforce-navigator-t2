@@ -709,6 +709,36 @@ describe("c-navigator-section", () => {
       expect(rule[0]).not.toMatch(/prefers-color-scheme|--slds-c-|--lwc-/);
     });
 
+    it("carries its section's name, so it is not announced as nothing", () => {
+      // The card is draggable and reachable by Tab. Without a name it is an
+      // interactive element a screen reader announces as nothing at all.
+      const card = cardOf(createSection());
+
+      expect(card.getAttribute("aria-label")).toBe("Selling");
+    });
+
+    it("follows the section's name through a rename", async () => {
+      // The name has to be read from the section on every render rather than
+      // captured once, or the card keeps announcing the old name for the rest
+      // of the session.
+      const element = createSection();
+      expect(cardOf(element).getAttribute("aria-label")).toBe("Selling");
+
+      element.section = resolvedSection({ name: "Buying" });
+      await Promise.resolve();
+
+      expect(cardOf(element).getAttribute("aria-label")).toBe("Buying");
+    });
+
+    it("still names a card whose section name is empty", () => {
+      // An all-whitespace name is refused at the rename, but a stored layout
+      // can still arrive carrying one, and a nameless card is the very bug
+      // the label exists to fix.
+      const card = cardOf(createSection(resolvedSection({ name: "   " })));
+
+      expect(card.getAttribute("aria-label")).toBe("Unnamed section");
+    });
+
     it("attaches its own drag instruction text only while the card is grabbed", async () => {
       const element = createSection();
       const card = cardOf(element);

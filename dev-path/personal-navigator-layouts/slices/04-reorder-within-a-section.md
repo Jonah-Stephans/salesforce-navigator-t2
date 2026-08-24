@@ -582,7 +582,29 @@ correct forever would still pass.** That is a code-review matter, not a testable
       the nonce is injected into user-facing announcement text on every arrow press. Fix direction:
       assert in both re-announcement tests that the two announcements are equal once characters in
       the zero-width range are stripped, so a distinguisher that is actually read aloud fails.
-- [ ] **The section card half of the discoverability finding is still open** — this re-opens
+- [x] fixed — per the engineer's decision, **the accessible name only**. The `<article>` now carries
+      `aria-label={cardLabel}`, a getter that reads the section's own name on every render so a
+      rename carries to the announcement as well as to the heading, and falls back to
+      `"Unnamed section"` when the name is blank — `handleRenameCommit` refuses an all-whitespace
+      rename, but nothing scrubs one already stored, and a blank `aria-label` is the same as no
+      label, which is the bug being fixed. Nothing else on the card was touched: `draggable`,
+      `tabindex="0"`, `cardClass`, the grabbed-only `aria-describedby` and the `aria-live` region
+      are unchanged, and no `aria-grabbed` or `aria-dropeffect` was introduced. **The hint half was
+      declined by the engineer**: no "Press Space to move" hint, no `aria-roledescription`, nothing
+      describing the grab gesture on the card. The engineer accepted the stated consequence — card
+      dragging stays undiscoverable from the keyboard, the same as it is today — so what remains is
+      a decision, not an oversight. Three tests written first and each watched fail on a real
+      assertion: `carries its section's name, so it is not announced as nothing` with
+      `expect(received).toBe(expected) // Object.is equality — Expected: "Selling" Received: null`,
+      `follows the section's name through a rename` with the same failure on the first assertion,
+      and `still names a card whose section name is empty` with `Expected: "Unnamed section"
+      Received: null`. Both mutations of the shipped fix are caught: deleting the `aria-label`
+      attribute fails **3** tests, and freezing `cardLabel` behind a memo so it cannot follow a
+      rename fails **1**, with `Expected: "Buying" Received: "Selling"`. Suite is 217 and green;
+      lint, the SLDS gate and prettier all pass, and the deploy went through after the org's four
+      files were retrieved to a temp dir and diffed against `git HEAD` — the only difference on any
+      of them is the trailing newline the platform strips.
+      **The section card half of the discoverability finding is still open** — this re-opens
       `A keyboard user has no route to discover the grab gesture`. That finding named two components:
       *"The section card is a bare `<article tabindex="0">` with no accessible name, no `role`, and
       no `aria-roledescription`; the item is a plain link."* Fix pass two shipped a hint on the

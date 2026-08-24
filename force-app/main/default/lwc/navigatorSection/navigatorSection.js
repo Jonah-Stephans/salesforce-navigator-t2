@@ -124,6 +124,26 @@ export default class NavigatorSection extends LightningElement {
       : "rstk-nav-section";
   }
 
+  /**
+   * What a screen reader calls this card.
+   *
+   * The card is `draggable` and reachable by Tab, and an interactive element
+   * with no accessible name is announced as nothing at all — the user is
+   * barely told it is there, never mind what it holds. The section's own name
+   * is what it is; it is read from `section` on every render rather than
+   * captured once, so a rename carries to the announcement as well as to the
+   * heading.
+   *
+   * A stored layout can still arrive carrying a blank name — `handleRenameCommit`
+   * refuses an all-whitespace rename, but nothing scrubs one that is already
+   * stored — and a blank `aria-label` is the same as no label, which is the
+   * bug this exists to fix. So a blank falls back to a generic name rather
+   * than to nothing.
+   */
+  get cardLabel() {
+    return this.name.trim() ? this.name : "Unnamed section";
+  }
+
   /** The idref and the id both exist only while this card is grabbed. */
   get instructionsId() {
     return this.grabbed
