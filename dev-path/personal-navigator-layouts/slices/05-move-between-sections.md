@@ -614,7 +614,7 @@ rather than being documentary.
       04's own behaviour is now *stronger* than it was: reverting `moveItemWithinSection` to ignore
       `tabs` fails 3.
 
-- [ ] **`grabbedItemOrigin` is re-seated off the *grabbed item's* shift rather than off its own, so
+- [x] won't fix — **`grabbedItemOrigin` is re-seated off the *grabbed item's* shift rather than off its own, so
       when a sibling between the held item and its origin leaves, Escape returns the item to a slot
       it was never picked up from — and writes that.** This re-opens the origin half of the
       re-seating finding above; the identity half (`grabbedItemIndex`) is correct and stays correct.
@@ -654,6 +654,24 @@ rather than being documentary.
       above-the-grab test) — or clamp-recompute it on the surviving list some other way. Whatever is
       chosen needs a test with the departure *below* the grab, because the existing one cannot
       distinguish the two rules.
+
+      **Engineer's decision, 2026-08-24, taken at the fix cap and recorded here at their request.**
+      Accepted rather than fixed. The sequence needs a keyboard user to be holding an item mid-grab,
+      a *different* item lying between the held item and its origin to leave the section in that
+      window, and the user to then cancel rather than drop — three things in order, none of which is
+      an ordinary path. Everything else on the slice is closed and all eighteen of the earlier
+      mutations were re-verified as still caught.
+
+      **What is being accepted, stated plainly so nobody re-derives it as a surprise:** the item
+      lands one slot from where it was picked up, past an item it started ahead of, and the parent
+      autosaves that position. There is no error and nothing to notice — the user would have to spot
+      the wrong order themselves and move it back by hand. The identity half of the re-seating is
+      correct and unaffected; only the origin is wrong, and only on cancel.
+
+      The fix direction and the discriminating test are written above and remain accurate if this is
+      ever picked up. The gap that let it through is worth carrying forward on its own: the existing
+      test drives a departure *above* the grab, which the shipped rule happens to get right, so
+      dropping the origin shift entirely still fails only that one test.
 - [x] false positive — that the setter-versus-`renderedCallback` reasoning is post-hoc, or that the
       suite cannot tell the two apart. Relocated the call: `set section` left assigning only, and
       `this.reseatOrReleaseGrab()` placed as the first statement of `renderedCallback`. **3 failed**
