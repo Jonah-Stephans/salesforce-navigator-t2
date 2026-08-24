@@ -2,6 +2,7 @@
 type: feature
 upstream: []
 intent_accepted: true
+design_approved: true
 ---
 
 # Salesforce Navigator — personal tab layouts
