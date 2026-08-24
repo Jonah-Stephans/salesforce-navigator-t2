@@ -52,6 +52,36 @@ reason: jsdom 20.0.3 defines no `DragEvent`, no `DataTransfer` and no `PointerEv
 `getBoundingClientRect()` returns zeros and `elementFromPoint` throws, so the drag gesture cannot be
 simulated at all.
 
+### What the fix pass changed about slice 04's claims
+
+Finding 1 was not a slice 05 regression. `moveItemWithinSection` has run a *rendered* index into the
+*stored* layout since slice 04, so **slice 04's within-section reorder was wrong in the same way**
+whenever a section stored an id the running user could not reach: the wrong item moved, and the item
+they could not see was relocated and persisted. Slice 04's own file is not edited — this is the
+trace a reviewer follows instead.
+
+What slice 04 can no longer claim as written: that its reorder moves the item the user picked. It
+did not, in that one case. What it *can* claim, from this commit onward, is stronger than what it
+claimed then — the fix is at the seam rather than in either mover, so **there is no exported
+function in `navigatorLayoutModel` that takes a stored index at all**, and the next operation cannot
+reintroduce the shape. Slice 04's `moveItemWithinSection(layout, sectionIndex, from, to)` signature
+is gone; it is `(layout, tabs, sectionIndex, from, to)`, and the 22 call sites in that slice's model
+tests were updated to pass the accessible tab list. Their assertions are untouched. The new
+regression test on this axis lives in this slice's suite —
+`reorders the item the user picked up when an earlier one is out of reach` — because this is where
+the fixture that can see it was written.
+
+The suite is **267 across 5 suites** after the fix pass: all 257 still pass, plus ten new tests —
+four in `navigatorLayoutModel` and one in `salesforceNavigator` for the seam on each axis and each
+route, one apiece for the double announcement and the duplicate id, and two model tests pinning that
+an unreachable id keeps its stored position across a move. The settled invariants were re-checked by
+reading rather than assumed: `grep -rn "splice("` over `force-app` outside `__tests__` still returns
+**exactly two lines, both inside `reorder`**, and `aria-grabbed` / `aria-dropeffect` appear only in
+the tests that assert their absence. The deploy reported the same three-bundle conflict the previous
+slices did; all ten org-side files were retrieved to a scratchpad with
+`--target-metadata-dir ... --unzip` and diffed against `git show HEAD:<path>`, and every one differs
+only by the trailing newline the platform strips, so `--ignore-conflicts` was used.
+
 ### The three unticked criteria, and why
 
 **Criterion 1 — dragging an item from one section into another, at a chosen position, surviving a
@@ -217,7 +247,32 @@ rather than being documentary.
 
 ## Critique findings
 
-- [ ] **A cross-section move acts on the item's *stored* index while the user chose its *rendered*
+- [x] fixed — the translation was put in `navigatorLayoutModel`, and the seam was closed by removing
+      the thing that could be got wrong rather than by getting it right at each call site.
+      `moveItemWithinSection` and `moveItemBetweenSections` now take `(layout, tabs, ...)` — the same
+      two arguments `resolveLayout` takes, in the same order — and read every index they are given as
+      a position in the *resolved* list. **There is no exported function left that takes a stored
+      index**, so a caller cannot pass a resolved one into a stored-layout function by forgetting
+      something: there is nothing to pass it to. Three private helpers do the work —
+      `renderedPositions` (entry `n` is the stored index of the item rendered at position `n`, so the
+      array *is* the translation), `storedSource` and `storedDestination` — and the clamp is applied
+      on the *resolved* list before translating, because that is the list the gesture counted along:
+      ArrowUp on the first item the user can see must stay at the top of what they can see, not jump
+      above an entry that is not on screen. `resolveLayout` still does not leak into stored state:
+      the accessible set decides only *which entry a position names*, never what is written, and an
+      unreachable id is neither moved nor dropped nor renumbered. `salesforceNavigator` passes
+      `this.items` alongside `this.layout` at both call sites; `itemLabelAt` already read the
+      resolved list with the resolved index, so the announcement became true for free. Five
+      reproductions were written first and watched fail against shipped code — the menu route
+      (`expect(received).toEqual(expected)`: `[["Action Plans","Contacts"],[]]` received where
+      `[["Contacts"],["Action Plans"]]` was expected — the screen did not change), the drag route
+      (identically), and the within-section keyboard reorder, whose payload assertion is the
+      slice 04 half. Every one of them stores `Account` in `Selling` while `getNavItems` returns only
+      `standard-ActionHub` and `Contact`, which is the fixture shape the 257 had nowhere.
+
+      The critic's finding, kept verbatim:
+
+      **A cross-section move acts on the item's *stored* index while the user chose its *rendered*
       one, so when any earlier item in the source section is inaccessible the wrong item moves — and
       the announcement names the item that did not.** `resolveLayout` drops stored ids the running
       user cannot reach, so `navigatorSection.renderItems` is indexed over the *filtered* list, and
@@ -243,7 +298,26 @@ rather than being documentary.
       go through. Nothing in the 257 can see this: every fixture's stored ids are all present in
       `getNavItems`, so filtered index and stored index are the same number everywhere — the same
       shape of blind spot as row 13's all-section-0 fixtures, one level down.
-- [ ] **A cross-section move made while that item is keyboard-grabbed fires two assertive live
+- [x] fixed — the grab is released on the way into `handleItemMoveTo`, which is the half of the
+      critic's own fix direction that makes the distinction *knowable* rather than guessed at.
+      `releaseGrabIfItemGone` is left exactly as it was: it cannot tell "withdrawn" from "moved
+      away" and should not have to, so instead the section is told. A new
+      `releaseGrabForDepartingItem(index)` ends the grab, silently, before the `itemmoveto` is
+      dispatched — silently because the parent announces the move itself, and a second sentence
+      about the same gesture is the problem being fixed. It releases only when the departing item
+      *is* the grabbed one: another item leaving is not this drag's business, and dropping a grab
+      the user is still holding would strand them mid-move with nothing said. By the time the
+      section re-renders there is no grab for the vanish-detection to trip over, so the section's
+      region is left reading what it last said and only the parent speaks.
+      Watched red first:
+      `expect(received).toBe(expected)` — `Expected: "Action Plans grabbed. Position 2 of 2."`,
+      `Received: "Move cancelled. Action Plans is no longer available."`. The test also asserts the
+      parent still says `"Action Plans moved to Support."` and that no item is left grabbed, so the
+      fix cannot be mistaken for silencing both regions.
+
+      The critic's finding, kept verbatim:
+
+      **A cross-section move made while that item is keyboard-grabbed fires two assertive live
       regions at once, saying contradictory things.** Reachable with a mouse: `handleClick` blocks
       navigation mid-grab but not focus, and the Move to… menu button is a sibling of the anchor,
       so a grabbed item can still have its menu clicked. Driven in jsdom: Space on `Accounts` in
@@ -257,7 +331,24 @@ rather than being documentary.
       that the two axes never fired together. Fix direction: `releaseGrabIfItemGone` needs to
       distinguish an item that left this section by a move it was told about from one that stopped
       being accessible, or the grab needs releasing on the way into `handleItemMoveTo`.
-- [ ] **Moving an item into a section that already holds the same tab id produces a within-section
+- [x] fixed — guarded now rather than recorded, and by dropping the stale copy rather than by
+      refusing the move. Refusing would make the gesture a silent no-op, which is the exact shape of
+      the defect above it; dropping means the user gets what they asked for — the item in the
+      destination, at the position they chose, once. `moveItemBetweenSections` filters the moved id
+      out of the destination list before appending, so the surviving copy is the one that was moved
+      and it carries **the user's own `rename`**, not the abandoned entry's. The resolved-to-stored
+      translation is computed over the deduplicated list, so a position chosen against a list one
+      entry longer simply clamps. **What the user sees:** the item arrives where they asked, the
+      section shows one copy where a hand-edited payload had shown two, and the announcement
+      (`"Accounts moved to Support."`) is unchanged and true. Watched red first at both levels — the
+      model's `expect(received).toEqual(expected)` on the source section, and end to end
+      `["Accounts","Contacts","Accounts"]` received where `["Contacts","Accounts"]` was expected,
+      with the `[LWC error]: Duplicated "key" attribute value ... "14:Account" appears more than
+      once` on the console exactly as reported.
+
+      The critic's finding, kept verbatim:
+
+      **Moving an item into a section that already holds the same tab id produces a within-section
       duplicate, an LWC duplicated-`key` error, and a duplicated entry in the written payload.**
       `moveItemBetweenSections` removes from the source by index (correct) and appends to the
       destination unconditionally, with no check that the destination already lists that id. Driven

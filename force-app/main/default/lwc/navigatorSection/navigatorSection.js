@@ -389,6 +389,17 @@ export default class NavigatorSection extends LightningElement {
    * supply on its own — which section it is leaving.
    */
   handleItemMoveTo(event) {
+    // The item is about to leave this list, and `releaseGrabIfItemGone` cannot
+    // tell that from the tab being withdrawn — it would announce "Move
+    // cancelled. X is no longer available." while the parent announced "X
+    // moved to Support.", two assertive regions contradicting each other, and
+    // the false one is the more alarming. Ending the grab here is what makes
+    // the difference knowable: a grab released on the way out is a move the
+    // section was told about. It is silent because the parent announces the
+    // move itself, and it is reachable with a mouse — `navigatorItem`'s
+    // `handleClick` blocks navigation mid-grab but not focus, and the menu
+    // button is a sibling of the anchor.
+    this.releaseGrabForDepartingItem(event.detail.index);
     this.dispatch("itemmoveto", {
       fromSection: this.sectionIndex,
       fromIndex: event.detail.index,
@@ -470,6 +481,18 @@ export default class NavigatorSection extends LightningElement {
       )}.`
     );
     this.releaseGrab();
+  }
+
+  /**
+   * Ends a keyboard grab because the grabbed item is being moved out of this
+   * section, rather than because it went missing. Only the grabbed item's own
+   * departure releases it: another item leaving is not this drag's business,
+   * and dropping the grab silently would strand the user mid-move.
+   */
+  releaseGrabForDepartingItem(index) {
+    if (this.grabbedItemIndex === index) {
+      this.releaseGrab();
+    }
   }
 
   releaseGrab() {

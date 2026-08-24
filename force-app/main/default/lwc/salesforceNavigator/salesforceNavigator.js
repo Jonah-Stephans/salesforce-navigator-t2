@@ -459,10 +459,18 @@ export default class SalesforceNavigator extends LightningElement {
   // placement maths in this file, and no second copy of it anywhere.
   // -------------------------------------------------------------------
 
-  /** The one call site for a change of item order, whatever asked for it. */
+  /**
+   * The one call site for a change of item order, whatever asked for it.
+   *
+   * `from` and `to` are positions in the list on screen, which is the resolved
+   * list — an item whose tab the user cannot reach is absent from it, so those
+   * positions are not positions in `this.layout`. `this.items` travels with
+   * the layout for exactly that reason, and the model does the translation;
+   * see the note on the seam in `navigatorLayoutModel`.
+   */
   moveItemWithin(sectionIndex, from, to) {
     this.applyLayout(
-      moveItemWithinSection(this.layout, sectionIndex, from, to)
+      moveItemWithinSection(this.layout, this.items, sectionIndex, from, to)
     );
   }
 
@@ -486,6 +494,11 @@ export default class SalesforceNavigator extends LightningElement {
    * another, whatever asked for it — a drag or the Move to… menu. The
    * placement is `moveItemBetweenSections`, which does it with the same
    * `reorder` the within-section move uses; there is no placement maths here.
+   *
+   * `fromIndex` and `toIndex` are positions on screen, so `this.items` goes
+   * with the layout — see `moveItemWithin` above. `itemLabelAt` reads the
+   * *resolved* list with the *resolved* index, which is why the announcement
+   * names the item the user actually chose.
    */
   moveItemBetween(fromSection, fromIndex, toSection, toIndex) {
     // Read before the layout changes underneath them. Naming the destination
@@ -498,6 +511,7 @@ export default class SalesforceNavigator extends LightningElement {
     this.applyLayout(
       moveItemBetweenSections(
         this.layout,
+        this.items,
         fromSection,
         fromIndex,
         toSection,

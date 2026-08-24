@@ -1709,6 +1709,172 @@ describe("c-salesforce-navigator", () => {
         await flush();
       }
 
+      /**
+       * The same two sections, but `Selling` stores a third id the tab source
+       * does not return. Every other fixture in this suite stores only ids
+       * `getNavItems` reports, which makes the position an item is *rendered*
+       * at and the position it is *stored* at the same number everywhere — and
+       * a component that confused the two indistinguishable from one that did
+       * not.
+       */
+      const WITHDRAWN_LAYOUT = {
+        ...CROSS_SECTION_LAYOUT,
+        layoutJson: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          sections: [
+            {
+              name: "Selling",
+              columns: 2,
+              items: [
+                { id: "Account" },
+                { id: "standard-ActionHub" },
+                { id: "Contact" }
+              ]
+            },
+            { name: "Support", columns: 3, items: [] }
+          ]
+        })
+      };
+
+      /** Two of the three tabs: `Account` is stored, and out of reach. */
+      async function navigatorWithAWithdrawnTab() {
+        getLayouts.mockResolvedValue([WITHDRAWN_LAYOUT]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: [ACTION_HUB_ITEM, CONTACT_ITEM] });
+        await flush();
+        return element;
+      }
+
+      it("moves the item the user picked, not the one sharing its stored position", async () => {
+        const element = await navigatorWithAWithdrawnTab();
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Action Plans", "Contacts"],
+          []
+        ]);
+
+        // The first item on screen. It is stored second.
+        await chooseDestination(element, 0, 0, "Support");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Contacts"],
+          ["Action Plans"]
+        ]);
+
+        await settleAutosave();
+        // `Account` is still first in `Selling`, so restoring access still
+        // restores it in its original position.
+        expect(savedIds(updateLayout, 0)).toEqual(["Account", "Contact"]);
+        expect(savedIds(updateLayout, 1)).toEqual(["standard-ActionHub"]);
+      });
+
+      it("drags the item the user picked up, not the one sharing its stored position", async () => {
+        const element = await navigatorWithAWithdrawnTab();
+        const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        querySections(element)[1]
+          .shadowRoot.querySelector("article")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Contacts"],
+          ["Action Plans"]
+        ]);
+      });
+
+      it("reorders the item the user picked up when an earlier one is out of reach", async () => {
+        // Pre-existing from slice 04: the within-section reorder runs the
+        // same rendered index into the same stored layout. Fixed at the same
+        // seam, so it is pinned here.
+        const element = await navigatorWithAWithdrawnTab();
+
+        press(itemsIn(element, 0)[0].shadowRoot.querySelector("a"), " ");
+        await flush();
+        press(grabbedAnchor(element), "ArrowRight");
+        await flush();
+        press(grabbedAnchor(element), " ");
+        await flush();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Contacts", "Action Plans"],
+          []
+        ]);
+
+        await settleAutosave();
+        expect(savedIds(updateLayout, 0)).toEqual([
+          "Account",
+          "Contact",
+          "standard-ActionHub"
+        ]);
+      });
+
+      it("does not tell a screen reader the move was cancelled when a grabbed item is moved", async () => {
+        // Reachable with a mouse: `handleClick` blocks navigation mid-grab but
+        // not focus, and the menu button is a sibling of the anchor. The
+        // section's vanish-detection sees the item leave its list and cannot,
+        // on its own, tell "moved away" from "withdrawn".
+        const element = await navigatorWithTwoSections();
+
+        press(itemsIn(element, 0)[1].shadowRoot.querySelector("a"), " ");
+        await flush();
+
+        await chooseDestination(element, 0, 1, "Support");
+
+        const sectionRegion = querySections(
+          element
+        )[0].shadowRoot.querySelector(".rstk-nav-section__announcer");
+        expect(spoken(sectionRegion.textContent)).toBe(
+          "Action Plans grabbed. Position 2 of 2."
+        );
+        expect(
+          spoken(
+            element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+          )
+        ).toBe("Action Plans moved to Support.");
+        expect(queryItems(element).some((item) => item.grabbed)).toBe(false);
+      });
+
+      it("leaves one copy of a tab when a hand-edited layout already listed it in the destination", async () => {
+        // Not producible by any gesture this Navigator ships, and this is the
+        // first operation that could turn a cross-section duplicate into a
+        // within-section one — which LWC will not render, because the two
+        // entries share a `key`.
+        getLayouts.mockResolvedValue([
+          {
+            ...CROSS_SECTION_LAYOUT,
+            layoutJson: JSON.stringify({
+              schemaVersion: SCHEMA_VERSION,
+              sections: [
+                {
+                  name: "Selling",
+                  columns: 2,
+                  items: [{ id: "Account" }, { id: "standard-ActionHub" }]
+                },
+                {
+                  name: "Support",
+                  columns: 3,
+                  items: [{ id: "Account" }, { id: "Contact" }]
+                }
+              ]
+            })
+          }
+        ]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        await chooseDestination(element, 0, 0, "Support");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Action Plans"],
+          ["Contacts", "Accounts"]
+        ]);
+
+        await settleAutosave();
+        expect(savedIds(updateLayout, 1)).toEqual(["Contact", "Account"]);
+      });
+
       it("offers every other section on an item's menu, and never the item's own", async () => {
         const element = await navigatorWithTwoSections();
 

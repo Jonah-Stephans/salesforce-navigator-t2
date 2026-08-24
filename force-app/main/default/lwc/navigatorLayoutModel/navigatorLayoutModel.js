@@ -270,11 +270,108 @@ export function reorder(list, from, to) {
   return items;
 }
 
-/** Reorders one section's items. The other sections are untouched. */
-export function moveItemWithinSection(layout, sectionIndex, from, to) {
+// ---------------------------------------------------------------------------
+// The seam between what the user sees and what is stored.
+//
+// `resolveLayout` drops any stored id the running user cannot reach, so the
+// list a user points at is shorter than the list being rewritten, and the two
+// agree on position only when nothing was filtered. A gesture names a position
+// in the *resolved* list — the section indexes `renderItems` over it, and that
+// is the number every event carries upward.
+//
+// So every move function below takes `(layout, tabs)`, exactly as
+// `resolveLayout` does, and reads its indices as resolved ones. There is no
+// exported function here that takes a stored index, which is the point: a
+// caller cannot pass a resolved index into a stored-layout function by
+// forgetting something, because there is no such function to pass it to. The
+// translation happens once, here, rather than at each of the three call sites.
+//
+// This does not put `resolveLayout` into stored state, and must not: the
+// accessible set decides *which entry a position names*, never what is written.
+// An id the user cannot reach is neither moved nor dropped nor renumbered — it
+// stays at the stored position it was at, which is what makes restoring access
+// restore the item in place.
+// ---------------------------------------------------------------------------
+
+/** The ids the running user can actually reach, as a set. */
+function accessibleIdsOf(tabs) {
+  return new Set((tabs || []).map((tab) => tab.id));
+}
+
+/**
+ * The stored positions of the items a user can see, in the order they see
+ * them. Entry `n` is the stored index of the item rendered at position `n`,
+ * so this array *is* the translation.
+ */
+function renderedPositions(items, accessibleIds) {
+  const positions = [];
+  items.forEach((item, at) => {
+    if (accessibleIds.has(item.id)) {
+      positions.push(at);
+    }
+  });
+  return positions;
+}
+
+/**
+ * The stored index of the item rendered at `resolvedIndex`, or `undefined`
+ * when that names no item on screen — which is the same "there is nothing
+ * there to move" `reorder` already answers with an unchanged list.
+ */
+function storedSource(positions, resolvedIndex) {
+  return Number.isInteger(resolvedIndex) &&
+    resolvedIndex >= 0 &&
+    resolvedIndex < positions.length
+    ? positions[resolvedIndex]
+    : undefined;
+}
+
+/**
+ * The stored index a move to rendered position `resolvedIndex` should land at.
+ *
+ * The clamp is applied on the resolved list rather than on the stored one,
+ * because the resolved list is the one the gesture counted along: ArrowUp on
+ * the first item the user can see asks for -1 and must stay at the top of what
+ * they can see, not jump above an entry that is not on screen. A destination
+ * that is not a number is passed through untouched, so `reorder` goes on
+ * refusing it.
+ */
+function storedDestination(positions, resolvedIndex) {
+  const wanted = Number(resolvedIndex);
+  if (!Number.isFinite(wanted)) {
+    return wanted;
+  }
+  const at = Math.max(0, Math.min(positions.length - 1, Math.trunc(wanted)));
+  return positions[at];
+}
+
+/**
+ * Reorders one section's items. The other sections are untouched.
+ *
+ * `from` and `to` are positions in the list the user is looking at; `tabs` is
+ * the live accessible tab list, the same argument `resolveLayout` takes, and
+ * it is what turns those into positions in the stored list.
+ */
+export function moveItemWithinSection(layout, tabs, sectionIndex, from, to) {
+  const sections = sectionsOf(layout);
+  const unchanged = { sections: sections.map(copySection) };
+  if (!isPresent(sections, sectionIndex)) {
+    return unchanged;
+  }
+
+  const positions = renderedPositions(
+    itemsOf(sections[sectionIndex]),
+    accessibleIdsOf(tabs)
+  );
+  const storedFrom = storedSource(positions, from);
+  if (storedFrom === undefined) {
+    return unchanged;
+  }
+  const storedTo = storedDestination(positions, to);
+
   return replaceSection(layout, sectionIndex, (section) => {
     const copy = copySection(section);
-    return { ...copy, items: reorder(copy.items, from, to) };
+    return { ...copy, items: reorder(copy.items, storedFrom, storedTo) };
   });
 }
 
@@ -290,8 +387,21 @@ export function moveItemWithinSection(layout, sectionIndex, from, to) {
  * therefore lands at that end rather than being rejected, exactly as it does
  * within a section.
  *
+ * `fromIndex` and `toIndex` are positions in the lists the user is looking at,
+ * and `tabs` is what turns them into positions in the stored lists — see the
+ * note on the seam above `moveItemWithinSection`.
+ *
  * `toIndex` may be omitted, which is what the Move to… menu does: that menu
  * names a section and not a slot, so the item goes to the end of it.
+ *
+ * **A destination that already lists the moved id keeps one copy, not two.**
+ * No gesture this Navigator ships can produce that precondition, but a
+ * hand-edited payload can arrive with one, and this is the first operation
+ * that can turn a cross-section duplicate into a within-section one — two
+ * entries with the same `key`, which LWC refuses to render, and a duplicated
+ * entry in everything written afterwards. The stale entry gives way to the one
+ * the user actually moved, so the item lands where they asked and carries
+ * their own `rename` rather than the abandoned copy's.
  *
  * **Moving an item into the section it is already in leaves the layout
  * unchanged**, rather than becoming a reorder within that section. That is
@@ -302,6 +412,7 @@ export function moveItemWithinSection(layout, sectionIndex, from, to) {
  */
 export function moveItemBetweenSections(
   layout,
+  tabs,
   fromSection,
   fromIndex,
   toSection,
@@ -317,21 +428,36 @@ export function moveItemBetweenSections(
     return { sections };
   }
 
+  const accessibleIds = accessibleIdsOf(tabs);
   const source = sections[fromSection];
-  if (!isPresent(source.items, fromIndex)) {
+  const storedFrom = storedSource(
+    renderedPositions(source.items, accessibleIds),
+    fromIndex
+  );
+  if (storedFrom === undefined) {
     return { sections };
   }
 
-  const moved = source.items[fromIndex];
-  source.items = source.items.filter((_item, at) => at !== fromIndex);
+  const moved = source.items[storedFrom];
+  // Removed by stored position rather than by identity: a section holding two
+  // copies of one id must lose the copy the user picked up, not both.
+  source.items = source.items.filter((_item, at) => at !== storedFrom);
 
   const destination = sections[toSection];
-  const appended = destination.items.concat([moved]);
+  const appended = destination.items
+    .filter((item) => item.id !== moved.id)
+    .concat([moved]);
   const last = appended.length - 1;
+  // Counted over the appended list, so the moved item — which the user could
+  // see, or they could not have picked it up — is the last rendered position
+  // and a destination past the end lands there.
+  const positions = renderedPositions(appended, accessibleIds);
   destination.items = reorder(
     appended,
     last,
-    toIndex === undefined || toIndex === null ? last : toIndex
+    toIndex === undefined || toIndex === null
+      ? last
+      : storedDestination(positions, toIndex)
   );
 
   return { sections };

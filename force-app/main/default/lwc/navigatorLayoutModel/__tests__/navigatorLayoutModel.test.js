@@ -51,6 +51,16 @@ const OUR_SITE = {
 
 const ALL_TABS = [ACCOUNT, CONTACT, OUR_SITE];
 
+/**
+ * The accessible tab list, for a test whose subject is *which ids the running
+ * user can reach* rather than what they are called. The move functions look at
+ * nothing but `id`, which is the whole reason they can take the same `tabs`
+ * argument `resolveLayout` takes.
+ */
+function tabsFor(...ids) {
+  return ids.map((id) => ({ id, label: id, pageReference: {} }));
+}
+
 describe("buildSeededLayout", () => {
   it("puts every reachable tab into one section named All Items, in order", () => {
     const layout = buildSeededLayout(ALL_TABS);
@@ -520,7 +530,7 @@ describe("moveItemWithinSection", () => {
   it("moves an item to a new position inside its own section", () => {
     const before = frozenCopy();
 
-    const next = moveItemWithinSection(base, 0, 0, 2);
+    const next = moveItemWithinSection(base, ALL_TABS, 0, 0, 2);
 
     expect(next.sections[0].items.map((item) => item.id)).toEqual([
       "Contact",
@@ -537,7 +547,7 @@ describe("moveItemWithinSection", () => {
     // result can go straight into reactive state "without wondering whether
     // the previous value still exists" — and `reorder`'s own purity test does
     // not cover this, because `reorder` is handed an already-copied array.
-    const next = moveItemWithinSection(base, 0, 0, 2);
+    const next = moveItemWithinSection(base, ALL_TABS, 0, 0, 2);
 
     next.sections.forEach((section, at) => {
       expect(section).not.toBe(base.sections[at]);
@@ -565,7 +575,7 @@ describe("moveItemWithinSection", () => {
       ]
     };
 
-    const next = moveItemWithinSection(renamed, 0, 0, 1);
+    const next = moveItemWithinSection(renamed, ALL_TABS, 0, 0, 1);
 
     expect(next.sections[0].items).toEqual([
       { id: "Contact" },
@@ -574,7 +584,7 @@ describe("moveItemWithinSection", () => {
   });
 
   it("leaves every other section, and the section's own name and columns, alone", () => {
-    const next = moveItemWithinSection(base, 0, 2, 0);
+    const next = moveItemWithinSection(base, ALL_TABS, 0, 2, 0);
 
     expect(next.sections[0].name).toBe("First");
     expect(next.sections[0].columns).toBe(2);
@@ -594,16 +604,87 @@ describe("moveItemWithinSection", () => {
 
       for (let from = 0; from < ids.length; from += 1) {
         expect(
-          moveItemWithinSection(base, 0, from, to).sections[0].items.map(
-            (item) => item.id
-          )
+          moveItemWithinSection(
+            base,
+            ALL_TABS,
+            0,
+            from,
+            to
+          ).sections[0].items.map((item) => item.id)
         ).toEqual(reorder(ids, from, to));
       }
     }
   );
 
   it("leaves the layout alone when it names a section that is not there", () => {
-    expect(moveItemWithinSection(base, 7, 0, 1)).toEqual(base);
+    expect(moveItemWithinSection(base, ALL_TABS, 7, 0, 1)).toEqual(base);
+  });
+
+  // The seam. `from` and `to` are positions in the list the user is looking
+  // at, which is the *resolved* list; the layout being rewritten is the
+  // stored one, and the two are different lists the moment `resolveLayout`
+  // drops an id. Every other fixture in this file makes them the same number.
+  it("moves the item at that position on screen, not the one at that stored position", () => {
+    const stored = {
+      sections: [
+        {
+          name: "First",
+          columns: 2,
+          items: [
+            { id: "Account" },
+            { id: "Contact" },
+            { id: "standard-OurSite" }
+          ]
+        }
+      ]
+    };
+    // `Account` is stored but withdrawn, so the user sees two items and the
+    // one they call "the first" is stored second.
+    const next = moveItemWithinSection(
+      stored,
+      tabsFor("Contact", "standard-OurSite"),
+      0,
+      0,
+      1
+    );
+
+    expect(next.sections[0].items.map((item) => item.id)).toEqual([
+      "Account",
+      "standard-OurSite",
+      "Contact"
+    ]);
+  });
+
+  it("leaves an item the user cannot see exactly where it was stored", () => {
+    // The spec's promise: an item whose tab comes back comes back *in its
+    // original position*. An unrelated gesture must not spend that.
+    const stored = {
+      sections: [
+        {
+          name: "First",
+          columns: 2,
+          items: [
+            { id: "Account" },
+            { id: "Contact" },
+            { id: "standard-OurSite" }
+          ]
+        }
+      ]
+    };
+
+    const next = moveItemWithinSection(
+      stored,
+      tabsFor("Contact", "standard-OurSite"),
+      0,
+      1,
+      0
+    );
+
+    expect(next.sections[0].items.map((item) => item.id)).toEqual([
+      "Account",
+      "standard-OurSite",
+      "Contact"
+    ]);
   });
 });
 
@@ -627,6 +708,17 @@ describe("moveItemBetweenSections", () => {
     ]
   };
 
+  // Every id `base` stores, so that in these tests the index the user sees and
+  // the index the layout stores are the same number. The tests further down
+  // take an id away, which is the case that tells the two apart.
+  const REACHABLE = tabsFor(
+    "Account",
+    "Contact",
+    "standard-OurSite",
+    "standard-ActionHub",
+    "standard-ShieldHome"
+  );
+
   function frozenCopy() {
     return JSON.parse(JSON.stringify(base));
   }
@@ -638,7 +730,7 @@ describe("moveItemBetweenSections", () => {
   it("takes the item out of one section and puts it into another at the chosen position", () => {
     const before = frozenCopy();
 
-    const next = moveItemBetweenSections(base, 0, 1, 1, 0);
+    const next = moveItemBetweenSections(base, REACHABLE, 0, 1, 1, 0);
 
     expect(idsOf(next, 0)).toEqual(["Account", "standard-OurSite"]);
     expect(idsOf(next, 1)).toEqual([
@@ -652,7 +744,7 @@ describe("moveItemBetweenSections", () => {
   it("puts the item at the end of the destination when no position is named", () => {
     // The Move to… menu names a section and not a slot, so this is the whole
     // of what that route asks for.
-    const next = moveItemBetweenSections(base, 0, 0, 1, undefined);
+    const next = moveItemBetweenSections(base, REACHABLE, 0, 0, 1, undefined);
 
     expect(idsOf(next, 1)).toEqual([
       "standard-ActionHub",
@@ -662,7 +754,7 @@ describe("moveItemBetweenSections", () => {
   });
 
   it("carries the item's rename across the move, because a rename is the user's own wording", () => {
-    const next = moveItemBetweenSections(base, 0, 0, 1, 0);
+    const next = moveItemBetweenSections(base, REACHABLE, 0, 0, 1, 0);
 
     expect(next.sections[1].items[0]).toEqual({
       id: "Account",
@@ -690,9 +782,9 @@ describe("moveItemBetweenSections", () => {
         const movedId = base.sections[0].items[from].id;
         const appended = destinationIds.concat([movedId]);
 
-        expect(idsOf(moveItemBetweenSections(base, 0, from, 1, to), 1)).toEqual(
-          reorder(appended, appended.length - 1, to)
-        );
+        expect(
+          idsOf(moveItemBetweenSections(base, REACHABLE, 0, from, 1, to), 1)
+        ).toEqual(reorder(appended, appended.length - 1, to));
       }
     }
   );
@@ -700,11 +792,11 @@ describe("moveItemBetweenSections", () => {
   it("leaves the layout unchanged when the destination is the section it came from", () => {
     // Criterion 7. Structural rather than by care: the function itself
     // refuses, so no caller has to remember to.
-    expect(moveItemBetweenSections(base, 0, 0, 0, 2)).toEqual(base);
+    expect(moveItemBetweenSections(base, REACHABLE, 0, 0, 0, 2)).toEqual(base);
   });
 
   it("leaves every other section's name, columns and items alone", () => {
-    const next = moveItemBetweenSections(base, 0, 1, 1, 0);
+    const next = moveItemBetweenSections(base, REACHABLE, 0, 1, 1, 0);
 
     expect(next.sections[0].name).toBe("First");
     expect(next.sections[0].columns).toBe(2);
@@ -716,7 +808,7 @@ describe("moveItemBetweenSections", () => {
     // Structural equality cannot tell a copy from a shared reference, and the
     // module's docblock promises a copy. The same blind spot the two other
     // move functions were bitten by.
-    const next = moveItemBetweenSections(base, 0, 0, 1, 0);
+    const next = moveItemBetweenSections(base, REACHABLE, 0, 0, 1, 0);
 
     next.sections.forEach((section, at) => {
       expect(section).not.toBe(base.sections[at]);
@@ -731,7 +823,7 @@ describe("moveItemBetweenSections", () => {
   });
 
   it("survives a round trip through the payload, so the move is what reloads", () => {
-    const moved = moveItemBetweenSections(base, 0, 1, 1, 0);
+    const moved = moveItemBetweenSections(base, REACHABLE, 0, 1, 1, 0);
 
     expect(idsOf(deserializeLayout(serializeLayout(moved)), 1)).toEqual([
       "Contact",
@@ -741,13 +833,108 @@ describe("moveItemBetweenSections", () => {
   });
 
   it("leaves the layout alone when either section is not there", () => {
-    expect(moveItemBetweenSections(base, 7, 0, 1, 0)).toEqual(base);
-    expect(moveItemBetweenSections(base, 0, 0, 7, 0)).toEqual(base);
+    expect(moveItemBetweenSections(base, REACHABLE, 7, 0, 1, 0)).toEqual(base);
+    expect(moveItemBetweenSections(base, REACHABLE, 0, 0, 7, 0)).toEqual(base);
   });
 
   it("leaves the layout alone when the item is not there", () => {
-    expect(moveItemBetweenSections(base, 0, 9, 1, 0)).toEqual(base);
-    expect(moveItemBetweenSections(base, 0, -1, 1, 0)).toEqual(base);
+    expect(moveItemBetweenSections(base, REACHABLE, 0, 9, 1, 0)).toEqual(base);
+    expect(moveItemBetweenSections(base, REACHABLE, 0, -1, 1, 0)).toEqual(base);
+  });
+
+  // The seam, on this axis and on both sides of it: the source position is
+  // one the user picked off the screen, and so is the destination position.
+  it("takes out the item at that position on screen, not the one at that stored position", () => {
+    const stored = {
+      sections: [
+        {
+          name: "First",
+          columns: 2,
+          items: [
+            { id: "Account" },
+            { id: "standard-ActionHub" },
+            { id: "Contact" }
+          ]
+        },
+        { name: "Second", columns: 3, items: [] }
+      ]
+    };
+    // `Account` is stored but withdrawn: the first item on screen is stored
+    // second.
+    const next = moveItemBetweenSections(
+      stored,
+      tabsFor("standard-ActionHub", "Contact"),
+      0,
+      0,
+      1,
+      undefined
+    );
+
+    expect(idsOf(next, 0)).toEqual(["Account", "Contact"]);
+    expect(idsOf(next, 1)).toEqual(["standard-ActionHub"]);
+  });
+
+  it("lands the item at that position on screen in the destination, counting past what the user cannot see", () => {
+    const stored = {
+      sections: [
+        { name: "First", columns: 2, items: [{ id: "Contact" }] },
+        {
+          name: "Second",
+          columns: 3,
+          items: [{ id: "Account" }, { id: "standard-ActionHub" }]
+        }
+      ]
+    };
+    // The destination shows one item, because `Account` is withdrawn. A drop
+    // on screen position 0 there must land before that one item, and must not
+    // displace the withdrawn one.
+    const next = moveItemBetweenSections(
+      stored,
+      tabsFor("Contact", "standard-ActionHub"),
+      0,
+      0,
+      1,
+      0
+    );
+
+    expect(idsOf(next, 1)).toEqual([
+      "Account",
+      "Contact",
+      "standard-ActionHub"
+    ]);
+  });
+
+  // The destination already listing the moved id is not producible by any
+  // gesture this Navigator ships, but a hand-edited payload can arrive with
+  // one and this is the first operation that can turn a cross-section
+  // duplicate into a within-section one — two entries with the same `key`,
+  // which LWC refuses to render.
+  it("leaves one copy, not two, when the destination already lists the same tab", () => {
+    const stored = {
+      sections: [
+        {
+          name: "First",
+          columns: 2,
+          items: [{ id: "Account", rename: "Clients" }, { id: "Contact" }]
+        },
+        {
+          name: "Second",
+          columns: 3,
+          items: [{ id: "Account" }, { id: "standard-ActionHub" }]
+        }
+      ]
+    };
+
+    const next = moveItemBetweenSections(stored, REACHABLE, 0, 0, 1, undefined);
+
+    expect(idsOf(next, 0)).toEqual(["Contact"]);
+    expect(idsOf(next, 1)).toEqual(["standard-ActionHub", "Account"]);
+    // The surviving copy is the one that was moved, so the user's own wording
+    // travels with it rather than being replaced by the stale entry's.
+    expect(next.sections[1].items[1]).toEqual({
+      id: "Account",
+      rename: "Clients"
+    });
   });
 });
 
