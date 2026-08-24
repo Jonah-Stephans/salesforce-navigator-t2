@@ -115,6 +115,13 @@ function querySections(element) {
   return Array.from(element.shadowRoot.querySelectorAll("c-navigator-section"));
 }
 
+/** The section headers on screen, in order — the whole Navigator at a glance. */
+function sectionNames(element) {
+  return querySections(element).map(
+    (section) => section.shadowRoot.querySelector("h2").textContent
+  );
+}
+
 /** The layout the component last sent to Apex, parsed back out of the call. */
 function lastSavedLayout(apexMock) {
   const calls = apexMock.mock.calls;
@@ -349,11 +356,62 @@ describe("c-salesforce-navigator", () => {
       return settle;
     }
 
-    function sectionNames(element) {
-      return querySections(element).map(
-        (section) => section.shadowRoot.querySelector("h2").textContent
-      );
+    /**
+     * Hands back the callback the component registered on `getLayouts`, so a
+     * test can deliver a layout to `adoptActiveLayout` more than once. The
+     * component calls `getLayouts()` exactly once and a promise settles
+     * exactly once, so there is no other way to create the condition the
+     * guard inside `adoptActiveLayout` exists for — and the guard must hold
+     * on its own rather than because the template happens to be gated.
+     */
+    function capturedLayoutResolution() {
+      let deliver;
+      getLayouts.mockReturnValue({
+        then(onFulfilled) {
+          deliver = onFulfilled;
+          return { catch() {} };
+        }
+      });
+      return (rows) => deliver(rows);
     }
+
+    function storedRow(layoutId, sectionName) {
+      return {
+        layoutId,
+        name: "My Navigator",
+        isActive: true,
+        isReadable: true,
+        layoutJson: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          sections: [{ name: sectionName, columns: 2, items: [] }]
+        })
+      };
+    }
+
+    it("never assigns over a layout the user is already looking at and has changed", async () => {
+      // The other half of the pair the template gate is one half of. The
+      // template can only stop `adoptActiveLayout` running *before* the user
+      // has anything to change; the guard inside it is what stops a second
+      // resolution landing on top of a change they have already made and
+      // seen, which is silent data loss.
+      const deliver = capturedLayoutResolution();
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      deliver([storedRow(EXISTING_LAYOUT_ID, "Daily work")]);
+      await flush();
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+
+      element.shadowRoot.querySelector("lightning-button").click();
+      await flush();
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+
+      deliver([storedRow("a0X000000000009AAA", "Rival")]);
+      await flush();
+
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+    });
 
     it("offers nothing to change until the stored layout has arrived, so the fetch cannot discard a change", async () => {
       // The window this closes: `getLayouts` is fired without being awaited,
@@ -455,6 +513,98 @@ describe("c-salesforce-navigator", () => {
       expect(lastSavedLayout(createLayout).sections[0].items).toHaveLength(
         firstPage.length + secondPage.length
       );
+    });
+  });
+
+  describe("a layout row this version cannot read", () => {
+    // What `getLayouts` returns for a row whose payload the controller could
+    // not read: flagged rather than raised, with no `layoutJson` at all and
+    // the reason it could not be read. The client half of that contract is
+    // what this block holds down.
+    const UNREADABLE_ACTIVE_ROW = {
+      layoutId: "a0X000000000003AAA",
+      name: "Written by a newer Navigator",
+      isActive: true,
+      schemaVersion: 99,
+      isReadable: false,
+      unreadableReason:
+        "This layout was saved at schema version 99, which this version of the Navigator cannot read.",
+      layoutJson: null
+    };
+
+    const READABLE_ROW = {
+      layoutId: EXISTING_LAYOUT_ID,
+      name: "My Navigator",
+      isActive: false,
+      isReadable: true,
+      layoutJson: JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
+        sections: [
+          { name: "Daily work", columns: 2, items: [{ id: "Account" }] }
+        ]
+      })
+    };
+
+    it("adopts the readable layout beside it rather than the unreadable active one", async () => {
+      // The unreadable row is the *active* one, so a client that did not
+      // filter it out would adopt it — and `deserializeLayout(null)` is a
+      // layout with no sections, so every tab the user has would vanish from
+      // the screen with nothing said about it.
+      getLayouts.mockResolvedValue([READABLE_ROW, UNREADABLE_ACTIVE_ROW]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts"
+      ]);
+    });
+
+    it("says so, names what an administrator needs, and saves nothing", async () => {
+      getLayouts.mockResolvedValue([READABLE_ROW, UNREADABLE_ACTIVE_ROW]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const alert = element.shadowRoot.querySelector('[role="alert"]');
+      expect(alert).not.toBeNull();
+      // Not the reload wording: every reload reproduces this row, so telling
+      // the user to reload is telling them to do the one thing that cannot
+      // work. What they can act on is handing the reason to an administrator.
+      expect(alert.textContent).not.toContain("Reload the page");
+      expect(alert.textContent).toContain("administrator");
+      expect(alert.textContent).toContain(
+        UNREADABLE_ACTIVE_ROW.unreadableReason
+      );
+
+      // And no write, because every write this component makes passes
+      // `makeActive: true` and would deactivate the row it cannot read.
+      selectSectionMenuItem(element, 0, "columns-4");
+      await flush();
+      await settleAutosave();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+      // The change is still on screen, and the Navigator is not empty.
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+    });
+
+    it("keeps the reload wording for a read that merely failed", async () => {
+      // The two conditions are not the same failure. A rejected read is
+      // transient, so reloading is the right advice; an unreadable row
+      // reproduces forever, so it is not.
+      getLayouts.mockRejectedValue({ body: { message: "Read timed out" } });
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const alert = element.shadowRoot.querySelector('[role="alert"]');
+      expect(alert.textContent).toContain("Reload the page");
+      expect(alert.textContent).not.toContain("administrator");
     });
   });
 

@@ -32,18 +32,43 @@ const SAVE_ERROR_MESSAGE =
   "We could not save your layout. Your last change may not be kept.";
 
 /**
- * Shown when `getLayouts` fails, or when it reports a row it could not read.
- * It has to say more than "something went wrong", because the consequence is
- * specific: the Navigator on screen is the seeded one, and nothing the user
- * changes now will be written. Suppressing the write is the point — a create
- * made without a successful read passes `makeActive: true`, and the
- * controller clears `Is_Active__c` on the user's other layouts, so the real
- * layout we failed to read would be deactivated and (until the switcher slice)
- * unreachable.
+ * Shown when `getLayouts` itself fails. It has to say more than "something
+ * went wrong", because the consequence is specific: the Navigator on screen is
+ * the seeded one, and nothing the user changes now will be written.
+ * Suppressing the write is the point — a create made without a successful read
+ * passes `makeActive: true`, and the controller clears `Is_Active__c` on the
+ * user's other layouts, so the real layout we failed to read would be
+ * deactivated and (until the switcher slice) unreachable.
+ *
+ * Reloading is the right advice *here* and only here: a failed call is
+ * transient, so the next attempt may well succeed.
  */
 const LAYOUT_LOAD_ERROR_MESSAGE =
   "We could not load your saved layout, so this is the default arrangement. " +
   "Reload the page before changing anything — changes are not being saved.";
+
+/**
+ * Shown when the read succeeded but reported a row it could not read. This is
+ * a different failure from the one above and needs different words, because
+ * the *remedy* is different. That row is at a schema version this package does
+ * not know, or its payload was hand-edited into something that is not a
+ * payload; either way every reload reproduces it identically, so telling the
+ * user to reload is telling them to repeat the one thing that cannot work.
+ * What they can act on is handing the reason to somebody who can remove or
+ * repair the row — so `unreadableReason`, which the controller took the
+ * trouble to produce and which names the schema version, is surfaced rather
+ * than discarded.
+ */
+function unreadableLayoutMessage(reason) {
+  const detail = reason ? " Details for your administrator: " + reason : "";
+  return (
+    "One of your saved layouts cannot be read by this version of the " +
+    "Navigator, so this is the default arrangement and changes are not being " +
+    "saved. Reloading will not help — ask your administrator to remove or " +
+    "repair that layout." +
+    detail
+  );
+}
 
 /**
  * The layout a user gets when they first change something. They have not
@@ -177,9 +202,14 @@ export default class SalesforceNavigator extends LightningElement {
     // taking the whole call down with it, so the user's *other* layouts are
     // still usable. It cannot be adopted, and it must not be displaced
     // either: a save now would pass `makeActive: true` and clear its flag, so
-    // the same suppression the failed-read path uses applies here.
-    if (layouts.some((row) => row.isReadable === false)) {
-      this.layoutLoadErrorMessage = LAYOUT_LOAD_ERROR_MESSAGE;
+    // the same suppression the failed-read path uses applies here. The
+    // *wording* is not the same, though — this failure does not go away on a
+    // reload, and the row's own reason is what an administrator needs.
+    const unreadable = layouts.find((row) => row.isReadable === false);
+    if (unreadable) {
+      this.layoutLoadErrorMessage = unreadableLayoutMessage(
+        unreadable.unreadableReason
+      );
     }
     const readable = layouts.filter((row) => row.isReadable !== false);
 

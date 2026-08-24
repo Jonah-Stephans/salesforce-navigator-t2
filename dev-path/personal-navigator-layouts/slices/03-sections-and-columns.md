@@ -573,7 +573,20 @@ still there tomorrow.
       one, and that the cost stayed at `dmlUsed <= 2` / `queriesUsed <= 3`. `activatingOneUsersLayoutDoesNotDisturbAnother`
       covers the cross-user half. Zero-active is reachable only via `makeActive: false`, which the
       LWC never sends, and `adoptActiveLayout` falls back to `layouts[0]` regardless.
-- [ ] **The client half of the unreadable-row handling has no test at all, and losing it empties the
+- [x] fixed — a new `a layout row this version cannot read` describe holds the client half, with a
+      `getLayouts` returning one readable row plus one unreadable **active** row exactly as
+      `unreadableDto` builds it (`isReadable: false`, `layoutJson: null`). Two tests, one per line of
+      the pair: `adopts the readable layout beside it rather than the unreadable active one` asserts
+      the readable row's section headers **and** its items are what is on screen, and
+      `says so, names what an administrator needs, and saves nothing` asserts the `[role="alert"]`,
+      its wording, and that neither `createLayout` nor `updateLayout` is called after a change — and
+      that the section list is still not empty afterwards. Mutation-checked, both the critic's own
+      mutations: replacing `layouts.filter((row) => row.isReadable !== false)` with `layouts` turns
+      the first red with `expect(received).toEqual(expected) // deep equality / - Array [ "Daily
+      work", ] / + Array []` — every tab gone, which is the failure the critic described; deleting
+      the `layouts.some((row) => row.isReadable === false)` block turns the second red with
+      `expect(received).not.toBeNull() / Received: null` on the alert query.
+      **The client half of the unreadable-row handling has no test at all, and losing it empties the
       user's Navigator silently.** Re-opens finding 4, whose fix box claims "The client half matches:
       `adoptActiveLayout` chooses the active layout from the readable rows only, and an unreadable row
       raises the same alert and the same autosave suppression as a failed read". The Apex half got two
@@ -595,7 +608,17 @@ still there tomorrow.
       that mocks `getLayouts` with one readable row and one unreadable active row and asserts all
       four: the readable row's sections render, the `[role="alert"]` is present, no save is made
       after a change, and the section list is not empty.
-- [ ] **`adoptActiveLayout`'s refusal to reassign over an already-set `storedLayout` is not held down
+- [x] fixed — `never assigns over a layout the user is already looking at and has changed` holds it,
+      and it creates the condition the guard exists for rather than leaning on the template, the way
+      finding 8 was held. `getLayouts()` is called once and a promise settles once, so the test mocks
+      `getLayouts` with a thenable that hands back the callback the component registered
+      (`capturedLayoutResolution`) and delivers a layout to `adoptActiveLayout` twice: the first
+      delivery is adopted, the user then clicks *New section*, and the second delivery must not
+      displace what they are looking at. Mutation-checked with the critic's own mutation: deleting
+      `if (this.storedLayout !== undefined) { return; }` turns it red with
+      `expect(received).toEqual(expected) // deep equality / Array [ - "Daily work", - "New section",
+      + "Rival", ]` — the user's change replaced by a rival layout, silently.
+      **`adoptActiveLayout`'s refusal to reassign over an already-set `storedLayout` is not held down
       by any test.** Re-opens finding 1, whose fix box claims "`adoptActiveLayout` also refuses to
       assign over a `storedLayout` that is already set, so it is safe on its own rather than by
       depending on the template". Mutation-checked: deleting
@@ -609,7 +632,26 @@ still there tomorrow.
       template: call `adoptActiveLayout` against a component whose `storedLayout` is already set (or
       set `storedLayout` before settling a held-open `getLayouts`) and assert the already-set layout
       survives.
-- [ ] **The layout-load alert tells the user to reload the page, which cannot help on the
+- [x] fixed — the two conditions now say different things, because they have different remedies.
+      `LAYOUT_LOAD_ERROR_MESSAGE` keeps the reload wording and is now raised **only** by the rejected
+      promise, where the failure is transient. The unreadable-row path builds its message from
+      `unreadableLayoutMessage(unreadable.unreadableReason)`: "One of your saved layouts cannot be
+      read by this version of the Navigator, so this is the default arrangement and changes are not
+      being saved. Reloading will not help - ask your administrator to remove or repair that layout.
+      Details for your administrator: &lt;reason&gt;" — so the reason the controller took trouble to
+      produce, which names the schema version, reaches the person who can act on it. The advice is
+      what a user can actually do: there is no self-service route to a row this package cannot parse,
+      so it does not invent one. Rendering is unchanged — the same `[role="alert"]` and the same
+      `rstk-nav-error` / `rstk-nav-error__text` rules, whose hooks are all `--slds-g-*` semantic in
+      `var(--hook, fallback)` form — so it stays announced to assistive technology. Asserted both
+      ways: `says so, names what an administrator needs, and saves nothing` requires the alert to
+      carry "administrator" and the verbatim `unreadableReason` and **not** "Reload the page", and
+      `keeps the reload wording for a read that merely failed` requires the opposite pair on the
+      rejected-promise path. Red first, against the shipped single fixed string:
+      `expect(received).not.toContain(expected) // indexOf / Expected substring: not "Reload the
+      page" / Received string: "We could not load your saved layout, so this is the default
+      arrangement. Reload the page before changing anything - changes are not being saved."`
+      **The layout-load alert tells the user to reload the page, which cannot help on the
       unreadable-row path, and the reason the controller took trouble to produce is discarded.**
       Re-opens the messaging half of findings 2 and 4. `LAYOUT_LOAD_ERROR_MESSAGE` is a single fixed
       string, "We could not load your saved layout, so this is the default arrangement. Reload the
