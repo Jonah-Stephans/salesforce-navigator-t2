@@ -10,7 +10,9 @@
 # further ways the gate can rot silently, each with an assertion below:
 #
 #   1. `--max-warnings 0` disappears from `package.json`'s `lint` script, or
-#      from the `lint-staged` eslint entry.  → assertions A1, A3
+#      from the `lint-staged` eslint entry — or the entry keeps the flag and its
+#      *glob key* stops selecting `force-app/**/lwc/**`, so the flag is applied
+#      to nothing that ships.  → assertions A1, A3
 #   2. the `**/lwc/**` re-scoping in `eslint.config.js` stops matching
 #      `force-app/**/lwc/**` — the only path that ships — while still matching
 #      some other directory holding a fixture.  → assertions A1, A2
@@ -37,29 +39,43 @@ cd "$(dirname "$0")/.."
 
 PROBE_DIR="force-app/main/default/lwc/sldsGateProbe"
 
-# The eslint command the pre-commit hook runs, read out of package.json rather
+# The eslint entry the pre-commit hook runs, read out of package.json rather
 # than copied here. A copy would go green on a package.json that had lost the
-# flag, which is the whole failure this script exists to catch.
-LINT_STAGED_ESLINT=$(node -e '
+# flag, which is the whole failure this script exists to catch. Both halves of
+# the entry come back — the glob *key*, which decides which files the command
+# is ever applied to, and the command itself. Reading only the command leaves
+# the key free to stop selecting the shipping path with the gate still green.
+LINT_STAGED_ENTRY=$(node -e '
   const entries = require("./package.json")["lint-staged"] || {};
   const glob = Object.keys(entries).find(
     (g) => g.includes("lwc") && g.includes("css")
   );
   const cmd = [].concat(entries[glob] || []).find((c) => /(^|\/)eslint\b/.test(c));
   if (!cmd) process.exit(1);
+  console.log(glob);
   console.log(cmd);
 ') || {
   echo "FAIL: package.json has no lint-staged eslint entry globbing lwc CSS."
   echo "The pre-commit half of the gate is gone."
   exit 1
 }
+LINT_STAGED_GLOB=$(printf '%s\n' "$LINT_STAGED_ENTRY" | sed -n 1p)
+LINT_STAGED_ESLINT=$(printf '%s\n' "$LINT_STAGED_ENTRY" | sed -n 2p)
 
+# `exit`, not `return`: bash discards the return status of an EXIT trap, so a
+# `return 1` here would print the complaint below and still report success —
+# leaving an LWC bundle inside the one packageDirectories entry sfdx-project.json
+# declares. The script's own status is captured on the first line and re-raised
+# on the normal path, since an unconditional `exit` in an EXIT trap overwrites
+# it. An interrupt reaches here the same way and keeps its 130/143.
 cleanup() {
+  status=$?
   rm -rf "$PROBE_DIR"
   if [ -e "$PROBE_DIR" ]; then
     echo "FAIL: could not remove the probe at $PROBE_DIR. The tree is dirty."
-    return 1
+    exit 1
   fi
+  exit "$status"
 }
 trap cleanup EXIT
 
@@ -129,6 +145,22 @@ echo "ok: npm run lint rejects a hard-coded colour under force-app/**/lwc/**."
 # silences the notice eslint prints for an explicitly-named ignored file, which
 # would otherwise be the only sign a staged file had stopped being linted. So
 # this asserts the rule fires, not just that the exit code is non-zero.
+#
+# First: would lint-staged have selected this path at all? The command's flags
+# are worth nothing if the glob key stops matching force-app/**/lwc/**, and the
+# assertion below invokes the command directly, so it cannot see that on its
+# own. micromatch is what lint-staged itself matches with.
+if ! node -e '
+  const micromatch = require("micromatch");
+  const [glob, file] = process.argv.slice(1);
+  process.exit(micromatch([file], glob).length ? 0 : 1);
+' "$LINT_STAGED_GLOB" "$PROBE_DIR/sldsGateProbe.css"; then
+  fail "the lint-staged eslint glob no longer selects $PROBE_DIR/sldsGateProbe.css." \
+    "Glob read from package.json: $LINT_STAGED_GLOB" \
+    "The pre-commit hook lints no LWC CSS that ships, so its --max-warnings 0" \
+    "is applied to nothing on the only path that reaches an org."
+fi
+
 # Word-split on purpose: $LINT_STAGED_ESLINT is a command line read from
 # package.json, not a filename.
 # shellcheck disable=SC2086

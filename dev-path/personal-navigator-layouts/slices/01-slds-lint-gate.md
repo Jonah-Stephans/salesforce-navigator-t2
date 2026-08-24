@@ -190,6 +190,23 @@ The probe that settled finding 6's `on-surface-*` values also covered `--slds-g-
 #747474. Corrected both — same defect, same file, same probe, and leaving two known-wrong values in
 place to stay inside a finding's wording would be the wrong trade.
 
+### The `EXIT` trap now exits, and the interrupt status is unchanged by that
+
+Fix pass, the two findings above. `exit` in an `EXIT` trap overwrites the script's status, so
+`cleanup()` captures `$?` first and re-raises it on the normal path. The one thing worth recording is
+what that did *not* change: an interrupt's exit status is identical before and after. Measured both
+trap shapes side by side in minimal scripts — `cleanup(){ echo; return 1; }` and
+`cleanup(){ status=$?; echo; exit "$status"; }` — killed mid-run: `SIGINT` gives **0** under both,
+`SIGTERM` gives **143** under both. So the `exit` did not regress interrupt handling, and the SIGINT
+0 is bash's own behaviour for a signal delivered to a non-interactive script waiting on a foreground
+child, not something this trap introduced. Confirmed on the real script too: both signals leave
+`force-app/main/default/lwc/` empty and `git status --short` carrying only the intended file.
+
+The glob assertion uses `micromatch` directly from `node_modules` rather than shelling out to
+`lint-staged`. `lint-staged` matches with `micromatch`, so this is the same matcher on the same
+relative path; driving `lint-staged` itself would need a staged index and a commit, which this script
+must not create.
+
 ### Commit audit
 
 - [ ] excess — `.vscode/settings.json`, committed by `git add -A` and outside this slice's `touches`.
@@ -360,7 +377,15 @@ place to stay inside a finding's wording would be the wrong trade.
       file's claims that `--slds-c-*` is not caught by the linter, and that
       `--slds-g-color-border-info-1` and `--slds-g-color-neutral-100` do not exist, all check out
       against probes.
-- [ ] `verify-slds-gate.sh` reads the `lint-staged` eslint *command* out of `package.json` but never
+- [x] fixed — the `node -e` parse now returns the glob *key* alongside the command, and assertion A3
+      tests the probe path against that key with the `micromatch` lint-staged itself matches with,
+      before it runs the command at all. Saw it go red first: with the key narrowed to
+      `"test/**/{aura,lwc}/**/*.{js,css,html}"` and the command untouched, the gate went from all six
+      `ok:` lines and exit 0 to exit 1 on "the lint-staged eslint glob no longer selects
+      force-app/main/default/lwc/sldsGateProbe/sldsGateProbe.css", echoing the offending glob.
+      `package.json` restored, gate green again. The header comment's item 1 now names the glob key
+      as a third way that half of the gate can rot.
+      Original finding: `verify-slds-gate.sh` reads the `lint-staged` eslint *command* out of `package.json` but never
       checks that the entry's *glob* still selects `force-app/**/lwc/**`, so the pre-commit half of
       the gate can stop covering the shipping path with the gate still green. This re-opens the first
       `- [x] fixed` box, whose whole point was "the flag it guards is the flag it reads": the flag is
@@ -379,7 +404,16 @@ place to stay inside a finding's wording would be the wrong trade.
       probe path — e.g. resolve the glob key alongside the command in the `node -e` parse and test
       the probe path against it with the `micromatch` already present in `node_modules`, failing
       loudly if it does not match.
-- [ ] The `EXIT` trap's failure branch does not fail the run, so the script can leave probe files
+- [x] fixed — `cleanup()` now captures `status=$?` on its first line, `exit 1` on the dirty-tree
+      branch and `exit "$status"` on the normal one, so the trap raises its own failure without
+      overwriting the script's result. Saw it go red first: ran a copy of the script whose cleanup
+      had the removal stubbed with `mkdir -p "$PROBE_DIR"` — a removal that does not take. Before the
+      change it printed `FAIL: could not remove the probe ... The tree is dirty.` and exited **0**,
+      leaving the bundle under `force-app/`; after it, the same stub exits **1**. The other paths
+      were re-measured: a clean run exits 0, and an assertion failure (`--max-warnings 0` deleted
+      from the `lint-staged` entry) still exits 1 with the probe removed and `git status --short`
+      clean.
+      Original finding: The `EXIT` trap's failure branch does not fail the run, so the script can leave probe files
       under `force-app/` and still exit 0. `cleanup()` at `scripts/verify-slds-gate.sh:57-63` ends
       with `return 1` when `$PROBE_DIR` survives `rm -rf`, and `## Deviations` claims it "fails the
       run if the removal does not take". Bash discards the return status of an `EXIT` trap unless the
