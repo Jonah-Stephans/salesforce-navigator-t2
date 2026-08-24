@@ -70,6 +70,21 @@ label, and clicks one to arrive at it.
   values. This is a "how" fix — it does not change what the slice builds — so it is recorded here
   rather than paused.
 
+### The final fix pass was not re-reviewed by a critic
+
+Engineer's decision, 2026-08-24, taken in the `dev-path:build` session when asked. The last pass added
+one test and changed no production code, and the engineer chose to skip the critic pass that would
+normally follow it. Recorded here because it is a departure from the build-review loop and a reviewer
+should know which change did not get an independent read.
+
+The orchestrator verified the added test in place of a critic: it re-applied the critic's own mutation
+— reducing `handleKeydown`'s guard from `this.url !== undefined || event.key !== "Enter"` to
+`event.key !== "Enter"` — and confirmed the suite went to `1 failed, 21 passed`, then restored the
+guard and confirmed `22 passed`. That establishes the test bites on the defect it was written for. It
+is not equivalent to a critic pass, which would also have looked for what the test does not cover —
+and the box immediately below is an example of exactly that gap, found by the Build worker itself and
+reported rather than hidden.
+
 ## Critique findings
 
 - The pre-fix `navigatorTabSource.test.js` test `"caps the page size at the platform's own limit"`
@@ -628,7 +643,7 @@ The `scope` mutation, uncaught before this lap, is now caught by the widened
 `getNavItems.getLastConfig()` assertion. Every file restored after each mutation; `git status` clean
 apart from this slice file.
 
-- [ ] The "only in the no-href case" scoping of the keyboard fallback — the entire accessibility
+- [x] fixed — The "only in the no-href case" scoping of the keyboard fallback — the entire accessibility
       argument for the design chosen this lap — is held by convention alone, and one of the mutants
       it fails to catch is a real defect rather than a style slip. The shipped behaviour is correct
       (see the false positive below, which verifies it by rendering both states), but nothing in the
@@ -655,6 +670,29 @@ apart from this slice file.
       `tabindex` nor a `role` attribute and that dispatching a `keydown` with `key: "Enter"` on it
       leaves `getNavigateCalledWith()` `undefined`, plus a `key: " "` keydown in the rejection state
       asserting the same. Watch mutations (a) through (d) above each go red before calling it closed.
+      **Fix applied**: added one test to `navigatorItem.test.js`, "does not call Navigate on Enter
+      when the anchor already has a working href" — renders a normal (resolved-`GenerateUrl`) item,
+      confirms its `href` is the real resolved URL, dispatches a `keydown` with `key: "Enter"` on the
+      anchor, and asserts `getNavigateCalledWith()` is `undefined`. Test-first: ran it against the
+      unmutated component first (22 passing, green because the code is already correct), then applied
+      mutant (c) — reduced the guard from `if (this.url !== undefined || event.key !== "Enter")` to
+      `if (event.key !== "Enter")` — and reran just the new test:
+      `npx sfdx-lwc-jest -- force-app/main/default/lwc/navigatorItem -t "does not call Navigate on
+      Enter when the anchor already has a working href"` failed with
+      `expect(received).toBeUndefined() Received: {"pageReference": {"attributes": {"pageName":
+      "our-site-home"}, "state": {}, "type": "standard__cmsPage"}, "replace": false}` on
+      `expect(getNavigateCalledWith()).toBeUndefined()` — a real assertion failure. Restored the
+      guard; full suite back to `22 passed, 22 total`.
+      Also applied mutant (d) — the guard reduced to `if (this.url !== undefined)` — as the finding
+      asked. It is **not** caught: the new test (and the full 22-test suite) stayed green, because on
+      a working anchor `this.url` is already a defined string, so `this.url !== undefined` alone
+      still returns early regardless of which key is pressed — the working-anchor case this test
+      exercises is unaffected by dropping the `event.key !== "Enter"` half. Mutant (d)'s actual effect
+      (every key, including Space, activating the *fallback* item) is a rejection-state behaviour, and
+      no test in the file pins it; reported here plainly rather than widened to chase it, per this
+      pass's instructions. Restored the guard to its committed form afterward; `git diff --stat` on
+      `navigatorItem.js` shows no changes. Final state: `npm test` 22/22 passing, `npm run lint`
+      clean, `npm run prettier:verify` clean.
 
 - [x] false positive — that the fallback is not genuinely scoped to the no-href case, i.e. that a
       working anchor carries a redundant `tabindex` or a `role="link"` overriding its native
@@ -725,3 +763,14 @@ apart from this slice file.
       from a working item — the item is simply reachable by a different route. The engineer's
       decision above accepts exactly this and nothing was asked to surface the error, so it is
       recorded here honestly rather than re-raised.
+
+- [ ] Nothing pins the Enter half of `handleKeydown`'s guard, so a rejected item would activate on any
+      key. Found and reported by the Build worker in the final fix pass rather than left hidden, and
+      not re-reviewed by a critic — see the deviation above. Reducing the guard to
+      `this.url !== undefined` alone leaves the full 22-test suite green, because on a working anchor
+      `this.url` is a defined string and that half returns early regardless of key. The mutant's real
+      effect is on the rejection state: every key, Space included, would activate the fallback item. A
+      link activates on Enter and not on Space, so that is an accessibility defect rather than merely
+      an untested branch. The shipped behaviour is correct — a previous critic verified Space on a
+      fallback item leaves `Navigate` uncalled — and the gap is that no test holds it there. The fix
+      is one test in the rejected-`GenerateUrl` state asserting Space does not navigate.

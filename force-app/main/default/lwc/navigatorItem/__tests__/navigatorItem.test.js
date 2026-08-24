@@ -177,4 +177,30 @@ describe("c-navigator-item", () => {
       STORED_PAGE_REFERENCE
     );
   });
+
+  it("does not call Navigate on Enter when the anchor already has a working href", async () => {
+    // handleKeydown's guard has two halves: it only acts once `url` is
+    // undefined (the permanent-rejection fallback state) and the key is
+    // Enter. A native <a href> already fires `click` on Enter for free, so
+    // if the no-href half of that guard were dropped, pressing Enter on a
+    // *working* anchor would also run handleKeydown -> handleClick ->
+    // Navigate -- on top of the browser's own native Enter-click, firing
+    // two navigations. This pins that the fallback stays confined to the
+    // no-href case, rather than only that it fires in that case.
+    const element = createNavigatorItem();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const anchor = element.shadowRoot.querySelector("a");
+    expect(anchor.getAttribute("href")).toBe("/lightning/o/Account/home");
+
+    const keydownEvent = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true
+    });
+    anchor.dispatchEvent(keydownEvent);
+
+    expect(getNavigateCalledWith()).toBeUndefined();
+  });
 });
