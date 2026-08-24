@@ -216,3 +216,139 @@ Rows 17 and 18 are the two written to check that criterion 3's own new assertion
 rather than being documentary.
 
 ## Critique findings
+
+- [ ] **A cross-section move acts on the item's *stored* index while the user chose its *rendered*
+      one, so when any earlier item in the source section is inaccessible the wrong item moves — and
+      the announcement names the item that did not.** `resolveLayout` drops stored ids the running
+      user cannot reach, so `navigatorSection.renderItems` is indexed over the *filtered* list, and
+      that filtered index is what `itemmoveto` / `itemdrop` carry upward. `salesforceNavigator`
+      then hands it to `moveItemBetweenSections(this.layout, ...)`, and `this.layout` is the
+      **unfiltered stored** layout. The two indices agree only when nothing was filtered.
+      Reproduced in jsdom against the shipped code: a stored `Selling` of
+      `[Account, standard-ActionHub, Contact]` with `Account` absent from `getNavItems` renders as
+      `["Action Plans", "Contacts"]`; choosing "Move to Support" on the *first item on screen*
+      leaves the screen at `[["Action Plans","Contacts"],[]]` — visibly nothing happens — while the
+      payload written is
+      `Selling: [standard-ActionHub, Contact]`, `Support: [Account]`, and the live region says
+      `"Action Plans moved to Support."`. So: the user's chosen item does not move, an item they
+      cannot even see is relocated and persisted, and the screen reader is told something untrue.
+      The relocation is not recoverable by restoring access — the spec's own promise that a
+      lost-access item comes back *in its original position* is broken by an unrelated gesture.
+      The identical shape is on the drag route (`drop` on the destination card moves `Account`, not
+      the dragged item) and — pre-existing from slice 04 — on `moveItemWithinSection`
+      (`handleItemMove` passes the same filtered index into `this.layout`), so the fix belongs at
+      the seam, not in `moveItemBetweenSections`. Fix direction: carry the item's **id** upward
+      alongside or instead of its index and resolve it against the stored section, or have the
+      parent translate a resolved index into a stored one in one place that all three call sites
+      go through. Nothing in the 257 can see this: every fixture's stored ids are all present in
+      `getNavItems`, so filtered index and stored index are the same number everywhere — the same
+      shape of blind spot as row 13's all-section-0 fixtures, one level down.
+- [ ] **A cross-section move made while that item is keyboard-grabbed fires two assertive live
+      regions at once, saying contradictory things.** Reachable with a mouse: `handleClick` blocks
+      navigation mid-grab but not focus, and the Move to… menu button is a sibling of the anchor,
+      so a grabbed item can still have its menu clicked. Driven in jsdom: Space on `Accounts` in
+      `Selling`, then choosing "Support" from its menu, leaves the *section's* region reading
+      `"Move cancelled. Accounts is no longer available."` (from `releaseGrabIfItemGone`, which
+      cannot tell "the tab was withdrawn" from "the item moved to another section") while the
+      *parent's* region reads `"Accounts moved to Support."`. Both are `aria-live="assertive"`.
+      The move itself is correct and no stale grab is left behind — the defect is only the second,
+      false sentence, and it is the more alarming of the two. Note this is **not** the collision
+      slice 04's critic disproved: that check predates the cross-section route, and it was true then
+      that the two axes never fired together. Fix direction: `releaseGrabIfItemGone` needs to
+      distinguish an item that left this section by a move it was told about from one that stopped
+      being accessible, or the grab needs releasing on the way into `handleItemMoveTo`.
+- [ ] **Moving an item into a section that already holds the same tab id produces a within-section
+      duplicate, an LWC duplicated-`key` error, and a duplicated entry in the written payload.**
+      `moveItemBetweenSections` removes from the source by index (correct) and appends to the
+      destination unconditionally, with no check that the destination already lists that id. Driven
+      in jsdom from a stored layout holding `Account` in both `Selling` and `Support`: moving the
+      `Selling` copy to `Support` renders `Support` as `["Accounts","Contacts","Accounts"]`, logs
+      `[LWC error]: Duplicated "key" attribute value ... A key with value "14:Account" appears more
+      than once`, and writes `Support: [{id: Account}, {id: Contact}, {id: Account}]`. The
+      precondition — one id in two sections — is not producible by any gesture this Navigator ships
+      today, so this is a latent rather than a live defect; it becomes live the moment a payload
+      arrives with one (a hand-edited row, or a later slice's add-an-item picker). Recording it
+      because this is the first operation in the codebase that can turn a cross-section duplicate
+      into a within-section one. Fix direction: drop the moved id from the destination list before
+      appending, or refuse the move when the destination already lists it.
+- [x] false positive — that the append-then-`reorder` trick hides an off-by-one, or that `reorder`'s
+      clamp masks one. Every destination `-2, -1, 0, 1, 2, 3, 9` from every source position lands
+      exactly where `reorder` puts the appended item; position 0, the end, and an empty destination
+      all behave; a destination past either end lands at that end because `appended.length` is
+      `N + 1`, so the clamp's ceiling *is* the end slot rather than one short of it. Replacing the
+      block with a hand-inlined `splice` that skips the clamp is caught (1 failed, on the `-1` case
+      — `splice` counts a negative index from the end). Prepending instead of appending while still
+      moving from `last` — the "wrong end" mutation — is caught (18 failed).
+- [x] false positive — that the destination list is copied shallowly and shares the source's array,
+      or that the returned layout hands back the caller's own objects. Dropping `copySection` from
+      `moveItemBetweenSections` fails 5 tests, including `hands back copies, not the caller's own
+      section and item objects`, which asserts non-identity per section, per `items` array and on
+      the moved item, then writes a `rename` onto the returned item and checks the input is
+      untouched.
+- [x] false positive — that the `filter` removes from the source by index where it should remove by
+      identity. It removes by index, which is the correct choice: identity by `id` would delete
+      every copy when a section holds two, and identity by reference is what `copySection` has just
+      broken. Mutating it to `item.id !== moved.id` survives the suite, but in the wrong direction —
+      the shipped code is the safe one, and what survives is a test gap on a case the app cannot
+      currently produce (recorded as the duplicate-id finding above). Skipping the removal entirely
+      is caught (8 failed).
+- [x] false positive — that a Move to… menu can act on a stale section index after a section is
+      deleted or the sections are reordered. `moveTargets` is recomputed inside the `sections`
+      getter on every render from the current resolved list, so both the entry values and their
+      labels are rebuilt whenever the layout changes. Driven end to end in jsdom: delete section
+      `Alpha`, then move from the new section 0 to `Gamma` — the surviving item's menu already reads
+      `[["move-to-1","Gamma"]]` and the move lands correctly; then keyboard-reorder the sections
+      and move again — the menu reads `[["move-to-1","Beta"]]` and the move lands correctly. No
+      stale index is reachable.
+- [x] false positive — that the drop-target `dragDepth` counter conceals an untested *defect*.
+      Rewriting it as a boolean (`= 1` on enter, `= 0` on leave) does survive the suite, but the
+      shipped counter is the correct implementation and the difference it makes — the flicker as the
+      pointer crosses from the card onto one of its own items — needs a real `dragenter`/`dragleave`
+      pair from a real drag, which jsdom cannot produce. The build states this outright under
+      *Decisions taken during the build*. Its two siblings are not defects at all: removing
+      `this.dragDepth = 0` from `handleItemDrop` and from `handleItemDragEnd` also survives, because
+      in both cases the parent's `clearDrag()` has already turned `itemDragActive` off and
+      `isDropTarget` is an `&&`. They are correctly-preserved redundant guards, not dead code — the
+      card-drop reset is the one that is independently pinned (removing it fails 1).
+- [x] false positive — that criterion 7 is dishonestly ticked because its failure mode is
+      indistinguishable from "the gesture never fired". It is not: the tick does not rest on the
+      layout being unchanged, it rests on **no write happening**, which is a positive signal a
+      missing guard would emit. Deleting the parent's `from === to` short-circuit fails `writes
+      nothing when an item is dropped back into the section it came from` with a real
+      `updateLayout` call, and deleting the model's `fromSection === toSection` refusal fails its
+      own model test. The slice's own argument for the tick actually undersells this. The only
+      unreachable half is whether a browser fires the drop on this markup, which is the ceiling
+      criteria 1 and 5 are unticked for, and it is symmetric here rather than one-sided.
+- [x] false positive — that "replacing the menu with a `div` fails 8 tests" is inflated. Re-applied
+      independently (`lightning-button-menu` → `div`, same class, same `onselect`, closing tag
+      swapped): **8 failed, 249 passed**, exactly as reported. The caveat is worth stating even
+      though it does not change the count: all eight fail for one reason — every one of them selects
+      the menu by tag name — so it is one fact asserted eight times, not eight independent facts.
+      That is adequate for the narrow claim the slice actually makes (the route is a base component,
+      not a hand-rolled div) and is not evidence that a keyboard user can open the menu and walk it,
+      which is precisely why criterion 3 is left unticked. The claim and the tick are both honest.
+- [x] false positive — that criterion 3's second clause is over-claimed. `never asks to cross a
+      section boundary with an arrow key` does press all four arrows on a grabbed item and does
+      assert four `itemkeymove`s and zero `itemmoveto`s; disabling `ARROW_DELTAS` fails 14 tests
+      including that one. (Wording note only, not a finding: what the test pins is that arrows *do
+      not* cross. That they are *not required* to cross is a property of the menu, which is the
+      first clause — so the two halves are not as independent as the sentence reads.)
+- [x] false positive — that the shared placement claim is now false, or that a second copy of the
+      maths crept in. Re-checked by reading: `grep -rn "splice("` over all of `force-app` outside
+      `__tests__` returns exactly two lines, both inside `reorder`. `moveItemBetweenSections` is one
+      of its three call sites and `moveItemBetween` is the parent's single cross-section call site.
+- [x] false positive — an SLDS 2 violation in the new `_droptarget` rule. It uses
+      `--slds-g-color-surface-container-2`, `--slds-g-sizing-border-2`,
+      `--slds-g-color-border-accent-1` and `--slds-g-spacing-1`, all in `var(--hook, fallback)`
+      form, all present in `@salesforce-ux/sds-metadata`'s `SLDSStylingHooks.csv`, none from the 38
+      non-`light-dark()` families, and no `prefers-color-scheme`, `--slds-c-*` or `--lwc-*`. The
+      `outline` is a drop-target indicator rather than focus indication, so the focus-ring rule does
+      not apply to it. `npm run lint`, `npm run lint:slds-gate` and `npm run prettier:verify` are
+      all clean.
+- [x] false positive — that the whole 18-row mutation table might not still hold. All eighteen were
+      re-applied independently to shipped code and reverted, and every failure count matches what
+      the build recorded, row 13's closed survivor included (**2 failed**: the section-level test
+      built at index 1 and the parent-level move out of section 1). Twelve further mutations of my
+      own were applied; the survivors are accounted for above.
+
+fix_cycles: 0
