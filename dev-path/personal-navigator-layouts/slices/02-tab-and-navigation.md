@@ -1,6 +1,6 @@
 ---
 done: true
-fix_cycles: 2
+fix_cycles: 3
 depends_on:
   - dev-path/personal-navigator-layouts/slices/01-slds-lint-gate.md
 touches:
@@ -611,3 +611,117 @@ guard deleted (3 failed); `normalizeNavItems` reconstructing `pageReference` fro
       The window is very likely still short enough that a user cannot aim a cmd-click inside it,
       and no evidence here suggests otherwise, so this is not raised as a finding — but the
       comment states as fact something this repo has not measured.
+
+### Slice pass (re-review of the granted lap, commit `a5ae46c`)
+
+The previous pass's eight-mutation table was re-run in full and completed — the earlier run was cut
+off after mutation 4 and mutations 5-8 were never executed. Baseline on the committed tree is
+`Tests: 21 passed, 21 total`; `npm run lint` (`--max-warnings 0`) and `npm run prettier:verify` are
+both clean. All eleven are caught: `.then` not assigning `this.url` (1 failed); the `url = "#"`
+pending default removed (1 failed); `this.page += 1` deleted (2 failed); the merge branch reverted
+to `page === 0 ? ... : concat` (1 failed); `handleClick` hand-deriving the target from `this.tabId`
+(3 failed); the modifier-key guard deleted (3 failed); `normalizeNavItems` reconstructing
+`pageReference` from `developerName` (3 failed); `NAV_ITEMS_CONFIG.pageSize` changed to `25`
+(1 failed); and the three this lap was meant to close — the wire config's `scope` changed to `"all"`
+(1 failed), `formFactor` changed to `"Small"` (1 failed), `pageSize` changed to `25` (1 failed).
+The `scope` mutation, uncaught before this lap, is now caught by the widened
+`getNavItems.getLastConfig()` assertion. Every file restored after each mutation; `git status` clean
+apart from this slice file.
+
+- [ ] The "only in the no-href case" scoping of the keyboard fallback — the entire accessibility
+      argument for the design chosen this lap — is held by convention alone, and one of the mutants
+      it fails to catch is a real defect rather than a style slip. The shipped behaviour is correct
+      (see the false positive below, which verifies it by rendering both states), but nothing in the
+      21-test suite pins it. Four mutations of `navigatorItem.js` leave the full suite at
+      `Tests: 21 passed, 21 total`: (a) `fallbackTabIndex` changed to return `"0"` unconditionally;
+      (b) `fallbackRole` changed to return `"link"` unconditionally; (c) `handleKeydown`'s guard
+      reduced from `if (this.url !== undefined || event.key !== "Enter")` to
+      `if (event.key !== "Enter")`; (d) the same guard reduced to `if (this.url !== undefined)`.
+      Mutant (c) is the one that matters: with the no-href half of the guard gone, a working anchor
+      that already fires a native `click` on Enter would *also* run `handleKeydown` -> `handleClick`
+      -> `Navigate`, which is exactly the "second navigation path" the fix's own prose promises does
+      not exist — and the suite would not notice. Mutant (d) makes every key, including Space,
+      activate the fallback item, which the fix's own prose rules out. Mutants (a) and (b) put an
+      explicit `tabindex` and an explicit `role="link"` on every working anchor, overriding the
+      native semantics the comment in `navigatorItem.js` lines 62-70 says are deliberately left
+      alone. For contrast, the four mutations that only touch the positive fallback case are all
+      caught: inverting the guard to `this.url === undefined ||` (1 failed), and removing each of
+      `onkeydown={handleKeydown}`, `tabindex={fallbackTabIndex}` and `role={fallbackRole}` from
+      `navigatorItem.html` (1 failed each). So the two new tests pin only that the fallback fires;
+      nothing pins that it stays confined to the fallback. This is the same shape of finding as the
+      wire-config one closed immediately above — a load-bearing invariant asserted in prose and in a
+      code comment but in no test. The fix is one more test in `navigatorItem.test.js`, in the
+      working-anchor (resolved `GenerateUrl`) state, asserting that the anchor carries neither a
+      `tabindex` nor a `role` attribute and that dispatching a `keydown` with `key: "Enter"` on it
+      leaves `getNavigateCalledWith()` `undefined`, plus a `key: " "` keydown in the rejection state
+      asserting the same. Watch mutations (a) through (d) above each go red before calling it closed.
+
+- [x] false positive — that the fallback is not genuinely scoped to the no-href case, i.e. that a
+      working anchor carries a redundant `tabindex` or a `role="link"` overriding its native
+      semantics. Checked by rendering all three states in a scratch probe under
+      `navigatorItem/__tests__/` (since removed; `git status` clean) and printing the anchor's real
+      `outerHTML`. Resolved `GenerateUrl`:
+      `<a class="rstk-nav-item" href="/lightning/o/Account/home" data-tab-id="standard-OurSite" aria-label="Our Site">`
+      — `hasAttribute("tabindex")` is `false` and `hasAttribute("role")` is `false`, so LWC does
+      remove the attribute entirely on an `undefined` bound value, exactly as the fix claims.
+      Pending `GenerateUrl` (a promise that never settles): `href="#"`, again no `tabindex` and no
+      `role`. Rejected `GenerateUrl`: no `href`, plus `tabindex="0" role="link"`. The scoping is
+      correct as shipped. What is *not* covered by any test is that it stays correct — recorded as
+      the open finding above.
+
+- [x] false positive — that Space activates the fallback item, or that a working anchor
+      double-fires on Enter. Same probe: on the rejected-`GenerateUrl` anchor a `keydown` with
+      `key: " "` leaves `Navigate` uncalled and `defaultPrevented` `false`; on the
+      resolved-`GenerateUrl` anchor a `keydown` with `key: "Enter"` also leaves `Navigate` uncalled
+      and `defaultPrevented` `false`, because `handleKeydown` returns early while `this.url` is a
+      string. Enter, not Space, is correct for a link, and the working anchor's native
+      Enter-fires-click behaviour is not doubled. Note the jsdom limit: jsdom does not synthesise a
+      `click` from an Enter `keydown` on a native `<a href>` at all, so this probe establishes only
+      that the component adds nothing on that path — that the native activation still happens is a
+      browser guarantee, not something asserted here.
+
+- [x] false positive — that the `keydown` route is a second navigation path. `handleKeydown`
+      (`navigatorItem.js` lines 79-89) has no `Navigate` call of its own; it calls
+      `this.handleClick(event)`, which is the single site of
+      `this[NavigationMixin.Navigate](this.pageReference)`. Confirmed by mutation rather than by
+      reading: hand-deriving the target from `this.tabId` inside `handleClick` turns three tests
+      red, and one of the three is the new Enter test — so the Enter route provably goes through
+      that one call with the stored `pageReference` verbatim. `grep` for `NavigationMixin.Navigate`
+      across `force-app/` returns exactly one production occurrence.
+
+- [x] false positive — that the fallback item does not land in the tab order. The probe focuses the
+      rejected-`GenerateUrl` anchor and `shadowRoot.activeElement` is that anchor, with
+      `a.tabIndex === 0`. `tabindex="0"` is document order, so the item keeps its position in the
+      list rather than being hoisted or pushed to the end. What could *not* be established here:
+      screen-reader announcement. jsdom computes no accessibility tree and runs no AT, so "announced
+      as a link" rests on `role="link"` plus the existing `aria-label={label}` being correct ARIA,
+      not on an observation. The `.rstk-nav-item:focus-visible` box-shadow in `navigatorItem.css`
+      applies by element, not by `:link`, so the fallback item does get a focus ring — also by
+      inspection, since jsdom does not evaluate `:focus-visible` styling.
+
+- [x] false positive — that modifier+Enter on a fallback item being inert is a new defect.
+      It is inert: the probe shows a `keydown` with `key: "Enter", shiftKey: true` on the
+      rejected-`GenerateUrl` anchor leaves `Navigate` uncalled and `defaultPrevented` `false`,
+      because `handleKeydown` delegates to `handleClick`, whose modifier guard returns early. But
+      that is the accepted trade, not a regression: with no `href` there is nothing for the browser
+      to open in a new tab, and the engineer's decision recorded above states in terms that the
+      fallback "loses only middle-click and open-in-new-tab for that one item". The mouse
+      modifier-click on the same item is inert for the same reason and was accepted at the previous
+      pass. Recorded for the record, not raised.
+
+- [x] false positive — that a fourth non-biting test hides among the 21. Read all three suites in
+      full looking for one. The closest candidate is `navigatorTabSource.test.js`'s "caps the page
+      size at the platform's own limit", which the Build worker's own note at line 75 flagged as
+      once tautological — it is not tautological now, because it asserts
+      `expect(MAX_PAGE_SIZE).toBe(100)` *before* comparing `NAV_ITEMS_CONFIG.pageSize` to it, so
+      moving both constants together still turns it red (mutation 8 above, 1 failed). Every other
+      assertion in all three files is pinned by at least one of the nineteen mutations run this
+      pass. The genuine gap the adversarial read turned up is the fallback-scoping one recorded as
+      the open finding above, and it is a missing test rather than a blessed-wrong one.
+
+- [x] false positive — that nothing announcing the `GenerateUrl` failure to the user is an unclosed
+      defect. Confirmed as the state of the code: the rejected-`GenerateUrl` render contains no
+      `aria-live` node, no `role="alert"`, no `aria-disabled` and no textual or visual difference
+      from a working item — the item is simply reachable by a different route. The engineer's
+      decision above accepts exactly this and nothing was asked to surface the error, so it is
+      recorded here honestly rather than re-raised.
