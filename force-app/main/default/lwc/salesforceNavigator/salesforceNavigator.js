@@ -23,6 +23,7 @@ import {
   setSectionColumns,
   reorder,
   moveItemWithinSection,
+  moveItemBetweenSections,
   moveSection
 } from "c/navigatorLayoutModel";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
@@ -155,6 +156,13 @@ export default class SalesforceNavigator extends LightningElement {
   dragKind;
   dragSectionIndex;
 
+  // Which item, within `dragSectionIndex`, is being dragged. Needed only for
+  // the cross-section move: a drop inside the *same* section is resolved by
+  // that section on its own, but a drop into a different one arrives here with
+  // no memory of what left, because the section the item came from never sees
+  // the drop.
+  dragItemIndex;
+
   // A keyboard drag of a whole section card. This lives here, and not in the
   // section, for a mechanical reason: reordering the sections changes every
   // section's index and therefore its key, so the child components are
@@ -162,11 +170,21 @@ export default class SalesforceNavigator extends LightningElement {
   // announcement and the focus restoration have to survive that too.
   grabbedSectionIndex;
   grabbedSectionOrigin;
-  sectionAnnouncement = "";
+
+  /**
+   * This component's live region. It carries two kinds of announcement, and
+   * both belong here rather than in a section for the same reason: the gesture
+   * outlives the card. A section reorder rebuilds every card, and a
+   * cross-section move destroys the item component in the section it left —
+   * an announcement made from either place would be destroyed as it was made.
+   * Announcements about an item's position *within* one section stay in that
+   * section, because nothing there is rebuilt.
+   */
+  announcement = "";
 
   // Flipped on every announcement so that two identical sentences in a row
   // are still two distinct strings — see ANNOUNCEMENT_NONCE above.
-  sectionAnnouncementNonce = "";
+  announcementNonce = "";
 
   // Where focus has to land on the *next* render, for the two gestures that
   // end a keyboard drag. It cannot be inferred from `grabbedSectionIndex`,
@@ -345,10 +363,25 @@ export default class SalesforceNavigator extends LightningElement {
    * by some unrelated change cannot quietly prune it.
    */
   get sections() {
-    return resolveLayout(this.layout, this.items).map((section) => ({
+    const resolved = resolveLayout(this.layout, this.items);
+    return resolved.map((section) => ({
       ...section,
-      isGrabbed: section.index === this.grabbedSectionIndex
+      isGrabbed: section.index === this.grabbedSectionIndex,
+      // Where an item in this section could go: every *other* section. Worked
+      // out here because this is the only component that knows there is more
+      // than one section — a section knows nothing of its siblings, and an
+      // item knows nothing of anything. A section is deliberately absent from
+      // its own items' menus: "move this to where it already is" is not an
+      // offer, and the drag path refuses the same move for the same reason.
+      moveTargets: resolved
+        .filter((other) => other.index !== section.index)
+        .map((other) => ({ value: String(other.index), label: other.name }))
     }));
+  }
+
+  /** Whether an item drag is in flight, which is the sections' cue to show a drop target. */
+  get isItemDragActive() {
+    return this.dragKind === "item";
   }
 
   /**
@@ -448,9 +481,50 @@ export default class SalesforceNavigator extends LightningElement {
     this.moveItemWithin(sectionIndex, from, to);
   }
 
+  /**
+   * The one call site for a move of an item out of one section and into
+   * another, whatever asked for it — a drag or the Move to… menu. The
+   * placement is `moveItemBetweenSections`, which does it with the same
+   * `reorder` the within-section move uses; there is no placement maths here.
+   */
+  moveItemBetween(fromSection, fromIndex, toSection, toIndex) {
+    // Read before the layout changes underneath them. Naming the destination
+    // is the point of the announcement — "moved" on its own tells a screen
+    // reader user that something happened and not where it went — and after
+    // `applyLayout` the item is no longer at `fromIndex`.
+    const label = this.itemLabelAt(fromSection, fromIndex);
+    const destination = this.sectionNameAt(toSection);
+
+    this.applyLayout(
+      moveItemBetweenSections(
+        this.layout,
+        fromSection,
+        fromIndex,
+        toSection,
+        toIndex
+      )
+    );
+    this.announce(`${label} moved to ${destination}.`);
+  }
+
+  /** The Move to… menu's route in. The drag's route in is `handleSectionDrop`. */
+  handleItemMoveTo(event) {
+    const { fromSection, fromIndex, toSection } = event.detail;
+    // The menu names a section and not a slot, so no destination index is
+    // passed and the item goes to the end of that section.
+    this.moveItemBetween(fromSection, fromIndex, toSection, undefined);
+  }
+
+  itemLabelAt(sectionIndex, itemIndex) {
+    const section = this.sections[sectionIndex];
+    const item = section ? section.items[itemIndex] : undefined;
+    return item ? item.label : "";
+  }
+
   handleItemDragStart(event) {
     this.dragKind = "item";
     this.dragSectionIndex = event.detail.sectionIndex;
+    this.dragItemIndex = event.detail.index;
   }
 
   handleSectionDragStart(event) {
@@ -458,19 +532,40 @@ export default class SalesforceNavigator extends LightningElement {
     this.dragSectionIndex = event.detail.index;
   }
 
+  /**
+   * A drop landing on a section — its card, or one of its items with no drag
+   * of that section's own behind it. It means one of two entirely different
+   * things depending on which drag began, and this is the only component that
+   * knows which.
+   */
   handleSectionDrop(event) {
     const from = this.dragSectionIndex;
+    const fromIndex = this.dragItemIndex;
     const kind = this.dragKind;
     this.clearDrag();
 
-    // An *item* dropped onto another section is cross-section movement,
-    // which is a different pattern with its own menu and is not built here.
-    // It has to be ignored rather than approximated: turning it into a
-    // section reorder would move a card the user never picked up.
+    const to = event.detail.index;
+
+    if (kind === "item") {
+      // A drop back onto the section the item came from leaves the layout
+      // exactly as it was, and — the part that matters — writes nothing. The
+      // order is identical either way, so without this guard the only visible
+      // consequence would be a save the user did not ask for. The model
+      // refuses the same move independently; this is the half that keeps the
+      // autosave out of it. Mirrors the section axis's guard below.
+      if (from === undefined || from === to) {
+        return;
+      }
+      // `itemIndex` is present when the drop landed on one of the destination's
+      // items and absent when it landed on the card itself, which is exactly
+      // the difference between "put it here" and "put it in there".
+      this.moveItemBetween(from, fromIndex, to, event.detail.itemIndex);
+      return;
+    }
+
     if (kind !== "section" || from === undefined) {
       return;
     }
-    const to = event.detail.index;
     if (from === to) {
       return;
     }
@@ -484,6 +579,7 @@ export default class SalesforceNavigator extends LightningElement {
   clearDrag() {
     this.dragKind = undefined;
     this.dragSectionIndex = undefined;
+    this.dragItemIndex = undefined;
   }
 
   // The keyboard equivalent for a whole section card. Same four gestures as
@@ -495,7 +591,7 @@ export default class SalesforceNavigator extends LightningElement {
     const index = event.detail.index;
     this.grabbedSectionIndex = index;
     this.grabbedSectionOrigin = index;
-    this.announceSection(
+    this.announce(
       `${this.sectionNameAt(index)} grabbed. ${this.sectionPositionOf(index)}.`
     );
   }
@@ -510,9 +606,9 @@ export default class SalesforceNavigator extends LightningElement {
     // a screen reader user unable to tell a key that did not register from
     // one that had nowhere to go. Two presses at the same end produce the
     // same sentence, and an unchanged string is no DOM write and therefore
-    // no announcement — which is why this goes through `announceSection`
+    // no announcement — which is why this goes through `announce`
     // rather than assigning the field directly. See ANNOUNCEMENT_NONCE.
-    this.announceSection(`${name} moved. ${this.sectionPositionOf(landed)}.`);
+    this.announce(`${name} moved. ${this.sectionPositionOf(landed)}.`);
 
     if (landed !== from) {
       this.moveSectionTo(from, landed);
@@ -521,7 +617,7 @@ export default class SalesforceNavigator extends LightningElement {
 
   handleSectionKeyDrop(event) {
     const index = event.detail.index;
-    this.announceSection(
+    this.announce(
       `${this.sectionNameAt(index)} dropped. ${this.sectionPositionOf(index)}.`
     );
     // A drop performs no reorder, so this card survives the render — but the
@@ -540,7 +636,7 @@ export default class SalesforceNavigator extends LightningElement {
     if (origin !== undefined && origin !== from) {
       this.moveSectionTo(from, origin);
     }
-    this.announceSection(
+    this.announce(
       `Move cancelled. ${name} returned. ${this.sectionPositionOf(landed)}.`
     );
     // Recorded *before* the grab is released, and consumed on the render the
@@ -555,11 +651,9 @@ export default class SalesforceNavigator extends LightningElement {
     this.grabbedSectionOrigin = undefined;
   }
 
-  announceSection(message) {
-    this.sectionAnnouncementNonce = this.sectionAnnouncementNonce
-      ? ""
-      : ANNOUNCEMENT_NONCE;
-    this.sectionAnnouncement = message + this.sectionAnnouncementNonce;
+  announce(message) {
+    this.announcementNonce = this.announcementNonce ? "" : ANNOUNCEMENT_NONCE;
+    this.announcement = message + this.announcementNonce;
   }
 
   /**

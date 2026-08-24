@@ -24,6 +24,22 @@
   box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
 }
 
+/* The section an item is being dragged over, while the drag is in progress.
+   Without it a cross-section drag is a guess: the item is under the pointer
+   and nothing on screen says which section is about to receive it.
+
+   Deliberately a different signal from `_grabbed` above — that one says "you
+   are holding this", this one says "this is where it would land" — so it takes
+   the accent border rather than the focus ring, and both are semantic hooks
+   that resolve per colour mode. SLDS's own drag classes are no help:
+   `.slds-has-drag*` only applies inside a file-selector dropzone. */
+.rstk-nav-section_droptarget {
+  background-color: var(--slds-g-color-surface-container-2, #f3f3f3);
+  outline: var(--slds-g-sizing-border-2, 2px) dashed
+    var(--slds-g-color-border-accent-1, #0b5cab);
+  outline-offset: var(--slds-g-spacing-1, 0.25rem);
+}
+
 .rstk-nav-section__header {
   display: flex;
   align-items: center;

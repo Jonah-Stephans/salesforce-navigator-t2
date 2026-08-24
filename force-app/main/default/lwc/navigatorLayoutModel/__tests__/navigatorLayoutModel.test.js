@@ -14,6 +14,7 @@ import {
   setSectionColumns,
   reorder,
   moveItemWithinSection,
+  moveItemBetweenSections,
   moveSection
 } from "c/navigatorLayoutModel";
 
@@ -603,6 +604,150 @@ describe("moveItemWithinSection", () => {
 
   it("leaves the layout alone when it names a section that is not there", () => {
     expect(moveItemWithinSection(base, 7, 0, 1)).toEqual(base);
+  });
+});
+
+describe("moveItemBetweenSections", () => {
+  const base = {
+    sections: [
+      {
+        name: "First",
+        columns: 2,
+        items: [
+          { id: "Account", rename: "Clients" },
+          { id: "Contact" },
+          { id: "standard-OurSite" }
+        ]
+      },
+      {
+        name: "Second",
+        columns: 3,
+        items: [{ id: "standard-ActionHub" }, { id: "standard-ShieldHome" }]
+      }
+    ]
+  };
+
+  function frozenCopy() {
+    return JSON.parse(JSON.stringify(base));
+  }
+
+  function idsOf(layout, sectionIndex) {
+    return layout.sections[sectionIndex].items.map((item) => item.id);
+  }
+
+  it("takes the item out of one section and puts it into another at the chosen position", () => {
+    const before = frozenCopy();
+
+    const next = moveItemBetweenSections(base, 0, 1, 1, 0);
+
+    expect(idsOf(next, 0)).toEqual(["Account", "standard-OurSite"]);
+    expect(idsOf(next, 1)).toEqual([
+      "Contact",
+      "standard-ActionHub",
+      "standard-ShieldHome"
+    ]);
+    expect(base).toEqual(before);
+  });
+
+  it("puts the item at the end of the destination when no position is named", () => {
+    // The Move to… menu names a section and not a slot, so this is the whole
+    // of what that route asks for.
+    const next = moveItemBetweenSections(base, 0, 0, 1, undefined);
+
+    expect(idsOf(next, 1)).toEqual([
+      "standard-ActionHub",
+      "standard-ShieldHome",
+      "Account"
+    ]);
+  });
+
+  it("carries the item's rename across the move, because a rename is the user's own wording", () => {
+    const next = moveItemBetweenSections(base, 0, 0, 1, 0);
+
+    expect(next.sections[1].items[0]).toEqual({
+      id: "Account",
+      rename: "Clients"
+    });
+  });
+
+  /**
+   * The criterion is that the cross-section move uses the *same placement
+   * function* as the within-section reorder. One agreeing example would not
+   * show that — two implementations can agree on one case — so every
+   * destination in range and two past each end are required to land exactly
+   * where `reorder` puts the item once it has been appended to the
+   * destination list. A hand-inlined splice that skipped `reorder`'s clamp
+   * agrees on every in-range case and diverges only here.
+   */
+  const DESTINATIONS = [-2, -1, 0, 1, 2, 3, 9];
+
+  it.each(DESTINATIONS)(
+    "places the item exactly where reorder does for a destination of %i",
+    (to) => {
+      const destinationIds = idsOf(base, 1);
+
+      for (let from = 0; from < base.sections[0].items.length; from += 1) {
+        const movedId = base.sections[0].items[from].id;
+        const appended = destinationIds.concat([movedId]);
+
+        expect(idsOf(moveItemBetweenSections(base, 0, from, 1, to), 1)).toEqual(
+          reorder(appended, appended.length - 1, to)
+        );
+      }
+    }
+  );
+
+  it("leaves the layout unchanged when the destination is the section it came from", () => {
+    // Criterion 7. Structural rather than by care: the function itself
+    // refuses, so no caller has to remember to.
+    expect(moveItemBetweenSections(base, 0, 0, 0, 2)).toEqual(base);
+  });
+
+  it("leaves every other section's name, columns and items alone", () => {
+    const next = moveItemBetweenSections(base, 0, 1, 1, 0);
+
+    expect(next.sections[0].name).toBe("First");
+    expect(next.sections[0].columns).toBe(2);
+    expect(next.sections[1].name).toBe("Second");
+    expect(next.sections[1].columns).toBe(3);
+  });
+
+  it("hands back copies, not the caller's own section and item objects", () => {
+    // Structural equality cannot tell a copy from a shared reference, and the
+    // module's docblock promises a copy. The same blind spot the two other
+    // move functions were bitten by.
+    const next = moveItemBetweenSections(base, 0, 0, 1, 0);
+
+    next.sections.forEach((section, at) => {
+      expect(section).not.toBe(base.sections[at]);
+      expect(section.items).not.toBe(base.sections[at].items);
+    });
+
+    const moved = next.sections[1].items[0];
+    expect(moved).not.toBe(base.sections[0].items[0]);
+
+    moved.rename = "Customers";
+    expect(base.sections[0].items[0].rename).toBe("Clients");
+  });
+
+  it("survives a round trip through the payload, so the move is what reloads", () => {
+    const moved = moveItemBetweenSections(base, 0, 1, 1, 0);
+
+    expect(idsOf(deserializeLayout(serializeLayout(moved)), 1)).toEqual([
+      "Contact",
+      "standard-ActionHub",
+      "standard-ShieldHome"
+    ]);
+  });
+
+  it("leaves the layout alone when either section is not there", () => {
+    expect(moveItemBetweenSections(base, 7, 0, 1, 0)).toEqual(base);
+    expect(moveItemBetweenSections(base, 0, 0, 7, 0)).toEqual(base);
+  });
+
+  it("leaves the layout alone when the item is not there", () => {
+    expect(moveItemBetweenSections(base, 0, 9, 1, 0)).toEqual(base);
+    expect(moveItemBetweenSections(base, 0, -1, 1, 0)).toEqual(base);
   });
 });
 

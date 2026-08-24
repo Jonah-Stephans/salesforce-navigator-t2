@@ -56,7 +56,7 @@
         class="slds-assistive-text rstk-nav-announcer"
         aria-live="assertive"
         aria-atomic="true"
-        >{sectionAnnouncement}</span
+        >{announcement}</span
       >
 
       <div class="rstk-nav-sections">
@@ -65,10 +65,12 @@
             key={section.key}
             section={section}
             grabbed={section.isGrabbed}
+            item-drag-active={isItemDragActive}
             onsectionrename={handleSectionRename}
             onsectioncolumns={handleSectionColumns}
             onsectiondelete={handleSectionDelete}
             onitemmove={handleItemMove}
+            onitemmoveto={handleItemMoveTo}
             onitemdragstart={handleItemDragStart}
             onsectiondragstart={handleSectionDragStart}
             onsectiondrop={handleSectionDrop}

@@ -115,6 +115,20 @@ function querySections(element) {
   return Array.from(element.shadowRoot.querySelectorAll("c-navigator-section"));
 }
 
+/**
+ * Every section's item labels on screen, in order, as one array per section.
+ * `queryItems` flattens the sections away, which is fine for a within-section
+ * reorder and useless for a move *between* sections — the whole question there
+ * is which section an item ended up in.
+ */
+function itemLabelsBySection(element) {
+  return querySections(element).map((section) =>
+    Array.from(section.shadowRoot.querySelectorAll("c-navigator-item")).map(
+      (item) => item.label
+    )
+  );
+}
+
 /** The section headers on screen, in order — the whole Navigator at a glance. */
 function sectionNames(element) {
   return querySections(element).map(
@@ -1587,11 +1601,10 @@ describe("c-salesforce-navigator", () => {
         expect(cardAt(element, 0).hasAttribute("aria-describedby")).toBe(false);
       });
 
-      it("leaves an item dragged into another section alone — that is a later slice", async () => {
-        // Arrow keys deliberately do not cross containers, and neither does
-        // this: cross-section movement is its own pattern, with its own
-        // menu, and is not built here. What matters is that attempting it
-        // changes nothing rather than corrupting either section.
+      it("moves a dragged item into the section it was dropped on, not the card it was dropped on", async () => {
+        // The counterpart of the section-axis test above: the same gesture on
+        // an *item* drag must move the item, and must not move a card the user
+        // never picked up.
         const element = await navigatorWithSections();
         const first = queryItems(element)[0].shadowRoot.querySelector("a");
         const second = queryItems(element)[1].shadowRoot.querySelector("a");
@@ -1601,11 +1614,305 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
-        expect(queryItems(element).map((item) => item.label)).toEqual([
-          "Accounts",
-          "Contacts"
+        expect(itemLabelsBySection(element)).toEqual([
+          [],
+          ["Accounts", "Contacts"],
+          []
+        ]);
+      });
+    });
+
+    /**
+     * Cross-section movement — a different pattern from the within-section
+     * reorder above, and deliberately so. Arrow keys do not cross a section
+     * boundary; the item's Move to… menu does, and it is the same menu a
+     * mouse user gets.
+     *
+     * Note what is and is not reachable here. The menu, the announcement, the
+     * same-section refusal and the payload that results are ordinary DOM and
+     * ordinary events, so all of them are driven end to end. The drag
+     * *gesture* is not: jsdom 20 defines no DragEvent and no DataTransfer, so
+     * the drag tests below drive the handlers those events are bound to and
+     * claim nothing about the browser firing them.
+     */
+    describe("moving an item into another section", () => {
+      const CROSS_SECTION_LAYOUT = {
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "My Navigator",
+        isActive: true,
+        schemaVersion: SCHEMA_VERSION,
+        layoutJson: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          sections: [
+            {
+              name: "Selling",
+              columns: 2,
+              items: [
+                { id: "Account", rename: "Clients" },
+                { id: "standard-ActionHub" }
+              ]
+            },
+            { name: "Support", columns: 3, items: [{ id: "Contact" }] }
+          ]
+        })
+      };
+
+      async function navigatorWithTwoSections() {
+        getLayouts.mockResolvedValue([CROSS_SECTION_LAYOUT]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+        return element;
+      }
+
+      function itemsIn(element, sectionIndex) {
+        return Array.from(
+          querySections(element)[sectionIndex].shadowRoot.querySelectorAll(
+            "c-navigator-item"
+          )
+        );
+      }
+
+      function menuOf(element, sectionIndex, itemIndex) {
+        return itemsIn(element, sectionIndex)[
+          itemIndex
+        ].shadowRoot.querySelector("lightning-button-menu");
+      }
+
+      function menuEntries(element, sectionIndex, itemIndex) {
+        return Array.from(
+          itemsIn(element, sectionIndex)[itemIndex].shadowRoot.querySelectorAll(
+            "lightning-menu-item"
+          )
+        );
+      }
+
+      function savedIds(apexMock, sectionIndex) {
+        return lastSavedLayout(apexMock).sections[sectionIndex].items.map(
+          (item) => item.id
+        );
+      }
+
+      /** Picks a destination from an item's Move to… menu, by its label. */
+      async function chooseDestination(
+        element,
+        sectionIndex,
+        itemIndex,
+        label
+      ) {
+        const entry = menuEntries(element, sectionIndex, itemIndex).find(
+          (each) => each.label === label
+        );
+        menuOf(element, sectionIndex, itemIndex).dispatchEvent(
+          new CustomEvent("select", { detail: { value: entry.value } })
+        );
+        await flush();
+      }
+
+      it("offers every other section on an item's menu, and never the item's own", async () => {
+        const element = await navigatorWithTwoSections();
+
+        expect(menuEntries(element, 0, 0).map((entry) => entry.label)).toEqual([
+          "Support"
+        ]);
+        expect(menuEntries(element, 1, 0).map((entry) => entry.label)).toEqual([
+          "Selling"
+        ]);
+      });
+
+      it("moves the item to the section a keyboard user picks, and writes it", async () => {
+        // The whole cross-section route without a mouse anywhere in it: a
+        // menu, chosen by its label, on an item that is a plain link.
+        const element = await navigatorWithTwoSections();
+
+        await chooseDestination(element, 0, 1, "Support");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients"],
+          ["Contacts", "Action Plans"]
+        ]);
+
+        await settleAutosave();
+        expect(savedIds(updateLayout, 0)).toEqual(["Account"]);
+        expect(savedIds(updateLayout, 1)).toEqual([
+          "Contact",
+          "standard-ActionHub"
+        ]);
+      });
+
+      it("moves an item out of the second section as readily as out of the first", async () => {
+        // The mirror of the test above, and it is here because every
+        // single-section fixture makes "this section" and "section 0" the same
+        // string: a component that reported a constant index would be
+        // invisible without a move that starts somewhere else.
+        const element = await navigatorWithTwoSections();
+
+        await chooseDestination(element, 1, 0, "Selling");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients", "Action Plans", "Contacts"],
+          []
+        ]);
+      });
+
+      it("still shows a menu-moved item in its new section after a reload", async () => {
+        // A remount on the payload that was actually written is what a reload
+        // is, since nothing else survives one.
+        const element = await navigatorWithTwoSections();
+        await chooseDestination(element, 0, 1, "Support");
+        await settleAutosave();
+
+        const written = updateLayout.mock.calls[0][0].layoutJson;
+        document.body.removeChild(element);
+        jest.clearAllMocks();
+
+        getLayouts.mockResolvedValue([
+          { ...CROSS_SECTION_LAYOUT, layoutJson: written }
+        ]);
+        const reloaded = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        expect(itemLabelsBySection(reloaded)).toEqual([
+          ["Clients"],
+          ["Contacts", "Action Plans"]
+        ]);
+      });
+
+      it("announces the move to a screen reader, naming the section it went to", async () => {
+        const element = await navigatorWithTwoSections();
+
+        await chooseDestination(element, 0, 1, "Support");
+
+        const region = element.shadowRoot.querySelector(".rstk-nav-announcer");
+        expect(spoken(region.textContent)).toBe(
+          "Action Plans moved to Support."
+        );
+      });
+
+      it("keeps the item's own rename when it changes section", async () => {
+        // The rename is the user's own wording and has nothing to do with
+        // where the item sits, so crossing a boundary must not drop it.
+        const element = await navigatorWithTwoSections();
+
+        await chooseDestination(element, 0, 0, "Support");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Action Plans"],
+          ["Contacts", "Clients"]
+        ]);
+        await settleAutosave();
+        expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([
+          { id: "Contact" },
+          { id: "Account", rename: "Clients" }
+        ]);
+      });
+
+      it("shows no menu at all when the layout has only one section", async () => {
+        // Nowhere to move to, so nothing that offers to.
+        getLayouts.mockResolvedValue([]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["All Items"]);
+        queryItems(element).forEach((item) => {
+          expect(
+            item.shadowRoot.querySelector("lightning-button-menu")
+          ).toBeNull();
+        });
+      });
+
+      it("drops the item at the position it was dropped at, not at the end", async () => {
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[1].shadowRoot.querySelector("a");
+        const landing = itemsIn(element, 1)[0].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        landing.dispatchEvent(dragEvent("dragover"));
+        landing.dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients"],
+          ["Action Plans", "Contacts"]
+        ]);
+      });
+
+      it("puts the item at the end when it is dropped on the card rather than on an item", async () => {
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        querySections(element)[1]
+          .shadowRoot.querySelector("article")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Action Plans"],
+          ["Contacts", "Clients"]
+        ]);
+      });
+
+      it("writes nothing when an item is dropped back into the section it came from", async () => {
+        // Criterion 7. Asserted on the *write* rather than on the order,
+        // because the order is identical either way — which is exactly why a
+        // missing guard would be invisible on screen.
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        querySections(element)[0]
+          .shadowRoot.querySelector("article")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+        await settleAutosave();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients", "Action Plans"],
+          ["Contacts"]
         ]);
         expect(updateLayout).not.toHaveBeenCalled();
+      });
+
+      it("tells the sections an item drag is in flight, and only while it is", async () => {
+        // The drop-target affordance needs two facts, and this is the half the
+        // parent owns: a section cannot tell an item drag from a section drag,
+        // because it never sees both.
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
+
+        expect(
+          querySections(element).map((section) => section.itemDragActive)
+        ).toEqual([false, false]);
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        await flush();
+        expect(
+          querySections(element).map((section) => section.itemDragActive)
+        ).toEqual([true, true]);
+
+        dragged.dispatchEvent(dragEvent("dragend"));
+        await flush();
+        expect(
+          querySections(element).map((section) => section.itemDragActive)
+        ).toEqual([false, false]);
+      });
+
+      it("does not tell the sections an item drag is in flight when a card is dragged", async () => {
+        const element = await navigatorWithTwoSections();
+
+        querySections(element)[0]
+          .shadowRoot.querySelector("article")
+          .dispatchEvent(
+            new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+          );
+        await flush();
+
+        expect(
+          querySections(element).map((section) => section.itemDragActive)
+        ).toEqual([false, false]);
       });
     });
   });

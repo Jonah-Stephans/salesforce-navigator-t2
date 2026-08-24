@@ -15,6 +15,17 @@ const ARROW_DELTAS = {
 };
 
 /**
+ * The prefix on every Move to… entry's value.
+ *
+ * The menu is this item's overflow menu and later slices add Rename… and
+ * Remove to it, so a bare section index would become ambiguous the moment a
+ * second kind of entry arrives. Prefixing now costs nothing and means the
+ * handler below reads the menu rather than assuming what is in it — the same
+ * shape `navigatorSection` already uses for its own `columns-N` entries.
+ */
+const MOVE_TO_PREFIX = "move-to-";
+
+/**
  * One tab: a real anchor, navigated with `NavigationMixin` against the
  * stored `pageReference` verbatim — no branching, no derivation. That is
  * what makes a rename (added by a later slice) structurally unable to
@@ -35,6 +46,20 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
    */
   @api index = 0;
   @api grabbed = false;
+
+  /**
+   * The sections this item could move to — every section of the layout except
+   * the one it is already in — as `{value, label}`, where `value` is the
+   * destination section's index. Supplied by the parent through the section,
+   * because a section knows nothing of its siblings and an item knows nothing
+   * of anything.
+   *
+   * This menu is the cross-section mechanism, and it is deliberately not an
+   * arrow key: Salesforce's own `dnd-a11y-patterns` has arrows move within a
+   * container and a Move button move between them, and the whole point is that
+   * a keyboard user reaches the same menu a mouse user does.
+   */
+  @api moveTargets = [];
 
   // Defaults to a real, non-empty href so the anchor is always a genuine
   // link — in tab order, exposing a link role, and supporting native
@@ -143,6 +168,54 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
    */
   get describedById() {
     return this.grabbed ? this.instructionsId : this.hintId;
+  }
+
+  // -------------------------------------------------------------------
+  // The Move to… menu — the cross-section move, and the one route to it that
+  // does not need a mouse. Ordinary DOM and ordinary events: no gesture is
+  // involved, which is why unlike the drag path all of it is testable.
+  // -------------------------------------------------------------------
+
+  /**
+   * Whether there is anywhere to move to. A layout with a single section
+   * would otherwise give every item a menu button that opens onto nothing —
+   * one more thing in the tab order, saying nothing when it is reached.
+   */
+  get hasMoveTargets() {
+    return Array.isArray(this.moveTargets) && this.moveTargets.length > 0;
+  }
+
+  /**
+   * The destinations as menu entries. The prefix is added here rather than by
+   * the parent so that how this menu encodes its own entries stays inside this
+   * component — the parent supplies section indexes and gets one back.
+   */
+  get moveMenuItems() {
+    return (this.moveTargets || []).map((target) => ({
+      value: `${MOVE_TO_PREFIX}${target.value}`,
+      label: target.label
+    }));
+  }
+
+  /**
+   * What a screen reader calls the menu button. Every item in a section
+   * carries one, so a button announced only as "Show menu" leaves the user
+   * with a column of identically-named buttons and no way to tell which item
+   * they are acting on.
+   */
+  get menuLabel() {
+    return `Actions for ${this.label}`;
+  }
+
+  handleMenuSelect(event) {
+    const value = event.detail.value;
+    if (!value || !value.startsWith(MOVE_TO_PREFIX)) {
+      return;
+    }
+    this.dispatch("itemmoveto", {
+      index: this.index,
+      toSection: Number(value.slice(MOVE_TO_PREFIX.length))
+    });
   }
 
   /**

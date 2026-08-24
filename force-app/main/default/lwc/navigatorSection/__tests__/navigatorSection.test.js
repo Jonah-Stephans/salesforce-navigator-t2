@@ -766,6 +766,132 @@ describe("c-navigator-section", () => {
     });
   });
 
+  describe("moving an item into another section", () => {
+    function cardOf(element) {
+      return element.shadowRoot.querySelector("article");
+    }
+
+    it("hands each item the destinations the parent worked out", () => {
+      // A section knows nothing of its siblings, so the list of other sections
+      // arrives with the resolved section and is passed straight through.
+      const targets = [{ value: "1", label: "Support" }];
+      const element = createSection({
+        ...resolvedSection(),
+        moveTargets: targets
+      });
+
+      itemsOf(element).forEach((item) => {
+        expect(item.moveTargets).toEqual(targets);
+      });
+    });
+
+    it("forwards a chosen destination upward with its own section index", () => {
+      // Deliberately not the section at index 0. A card that reported a
+      // constant would be indistinguishable from one that reports itself
+      // anywhere else in this file, because every other fixture here is a
+      // single section and so is always index 0.
+      const second = resolveLayout(
+        {
+          sections: [
+            { name: "First", columns: 3, items: [{ id: "Account" }] },
+            {
+              name: "Second",
+              columns: 3,
+              items: [{ id: "Account" }, { id: "Contact" }]
+            }
+          ]
+        },
+        TABS
+      )[1];
+      const element = createSection(second);
+      const handler = jest.fn();
+      element.addEventListener("itemmoveto", handler);
+
+      fire(itemsOf(element)[1], "itemmoveto", { index: 1, toSection: 0 });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        fromSection: 1,
+        fromIndex: 1,
+        toSection: 0
+      });
+    });
+
+    it("names the position an item was dropped at when it forwards a foreign drop", () => {
+      // A drop from another section has no `dragFromIndex` here, so it is
+      // forwarded to the parent — and it has to carry *where* in this section
+      // it landed, or a cross-section drag could only ever append.
+      const element = createSection();
+      const handler = jest.fn();
+      element.addEventListener("sectiondrop", handler);
+
+      fire(itemsOf(element)[1], "itemdrop", { index: 1 });
+
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        index: 0,
+        itemIndex: 1
+      });
+    });
+
+    it("looks like a drop target while an item is dragged over it, and only then", async () => {
+      // Criterion 5. Two facts have to be true at once: an item drag is in
+      // flight — which only the parent can know, since it is the only thing
+      // that sees both kinds of drag — and the pointer is over this card.
+      const element = createSection();
+      const card = cardOf(element);
+
+      card.dispatchEvent(new CustomEvent("dragenter", { bubbles: true }));
+      await Promise.resolve();
+      expect(card.classList.contains("rstk-nav-section_droptarget")).toBe(
+        false
+      );
+
+      element.itemDragActive = true;
+      await Promise.resolve();
+      expect(card.classList.contains("rstk-nav-section_droptarget")).toBe(true);
+      expect(card.classList.contains("rstk-nav-section")).toBe(true);
+
+      card.dispatchEvent(new CustomEvent("dragleave", { bubbles: true }));
+      await Promise.resolve();
+      expect(card.classList.contains("rstk-nav-section_droptarget")).toBe(
+        false
+      );
+    });
+
+    it("stops looking like a drop target once the drop has happened", async () => {
+      const element = createSection();
+      const card = cardOf(element);
+      element.itemDragActive = true;
+
+      card.dispatchEvent(new CustomEvent("dragenter", { bubbles: true }));
+      await Promise.resolve();
+      expect(card.classList.contains("rstk-nav-section_droptarget")).toBe(true);
+
+      card.dispatchEvent(
+        new CustomEvent("drop", { bubbles: true, cancelable: true })
+      );
+      await Promise.resolve();
+
+      expect(card.classList.contains("rstk-nav-section_droptarget")).toBe(
+        false
+      );
+    });
+
+    it("gives the drop target a real appearance that works in both colour modes", () => {
+      // jsdom applies no CSS, so the class assertions above cannot see an
+      // empty rule. This reads the stylesheet that ships.
+      const css = readFileSync(
+        join(__dirname, "..", "navigatorSection.css"),
+        "utf8"
+      );
+      const rule = css.match(/\.rstk-nav-section_droptarget\s*\{[^}]*\}/);
+
+      expect(rule).not.toBeNull();
+      expect(rule[0]).toContain("--slds-g-");
+      expect(rule[0]).not.toMatch(/prefers-color-scheme|--slds-c-|--lwc-/);
+    });
+  });
+
   it("refuses to rename a section to nothing at all", async () => {
     const element = createSection();
     const handler = jest.fn();

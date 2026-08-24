@@ -630,4 +630,114 @@ describe("c-navigator-item", () => {
       expect(element.shadowRoot.activeElement).toBe(anchorOf(element));
     });
   });
+
+  describe("the Move to… menu", () => {
+    // Arrow keys deliberately do not cross a section boundary — that is the
+    // pattern, not an omission — so this menu is the cross-section mechanism,
+    // and it is the same menu a mouse user gets. Unlike the drag gesture it is
+    // ordinary DOM and ordinary events, so all of it is reachable here.
+    const TARGETS = [
+      { value: "1", label: "Selling" },
+      { value: "2", label: "Support" }
+    ];
+
+    function menuOf(element) {
+      return element.shadowRoot.querySelector("lightning-button-menu");
+    }
+
+    function menuItemsOf(element) {
+      return Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      );
+    }
+
+    it("lists every destination it was given, under the label that section has", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+      );
+
+      expect(menuItemsOf(element).map((item) => item.label)).toEqual([
+        "Selling",
+        "Support"
+      ]);
+    });
+
+    it("offers no menu at all when there is nowhere to move to", async () => {
+      // A layout with one section would otherwise show every item a menu that
+      // opens onto nothing.
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: [] })
+      );
+
+      expect(menuOf(element)).toBeNull();
+    });
+
+    it("reports the chosen destination upward, with its own position", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 2, moveTargets: TARGETS })
+      );
+      const handler = jest.fn();
+      element.addEventListener("itemmoveto", handler);
+
+      const chosen = menuItemsOf(element)[1];
+      menuOf(element).dispatchEvent(
+        new CustomEvent("select", { detail: { value: chosen.value } })
+      );
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        index: 2,
+        toSection: 2
+      });
+    });
+
+    it("never asks to cross a section boundary with an arrow key", async () => {
+      // The second half of the keyboard criterion, and it is a *negative*:
+      // arrows are not required to cross a boundary and are not expected to.
+      // Salesforce's own dnd-a11y-patterns has arrows move within a container
+      // and a menu move between them, so an arrow that crossed would be the
+      // defect, not the feature.
+      const element = await settled(
+        createNavigatorItem({ index: 1, moveTargets: TARGETS, grabbed: true })
+      );
+      const crossed = jest.fn();
+      const within = jest.fn();
+      element.addEventListener("itemmoveto", crossed);
+      element.addEventListener("itemkeymove", within);
+
+      ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].forEach((key) => {
+        anchorOf(element).dispatchEvent(keydown(key));
+      });
+
+      expect(crossed).not.toHaveBeenCalled();
+      expect(within).toHaveBeenCalledTimes(4);
+    });
+
+    it("puts the cross-section route in a base menu component rather than a hand-rolled one", async () => {
+      // `lightning-button-menu` is what makes this operable without a mouse:
+      // it is focusable, in the tab order, and handles its own keys. jsdom
+      // stubs base components, so its key handling cannot be driven here —
+      // what is pinned is that the route is that component and not a div with
+      // a click handler, which is the choice the keyboard criterion rests on.
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+      );
+
+      expect(menuOf(element)).not.toBeNull();
+      expect(menuOf(element).tagName.toLowerCase()).toBe(
+        "lightning-button-menu"
+      );
+    });
+
+    it("names the item in the menu's accessible name, so several menus are told apart", async () => {
+      // Every item in a section carries one of these, and a menu button
+      // announced only as "Show menu" leaves a screen reader user with a
+      // column of identical buttons.
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+      );
+
+      expect(menuOf(element).alternativeText).toContain("Our Site");
+    });
+  });
 });

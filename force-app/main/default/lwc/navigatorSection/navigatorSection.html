@@ -10,6 +10,8 @@
     aria-label={cardLabel}
     aria-describedby={instructionsId}
     ondragstart={handleCardDragStart}
+    ondragenter={handleCardDragEnter}
+    ondragleave={handleCardDragLeave}
     ondragover={handleCardDragOver}
     ondrop={handleCardDrop}
     ondragend={handleCardDragEnd}
@@ -69,6 +71,7 @@
             page-reference={item.pageReference}
             index={item.index}
             grabbed={item.isGrabbed}
+            move-targets={moveTargets}
             onitemdragstart={handleItemDragStart}
             onitemdragover={handleItemDragOver}
             onitemdrop={handleItemDrop}
@@ -77,6 +80,7 @@
             onitemkeymove={handleItemKeyMove}
             onitemkeydrop={handleItemKeyDrop}
             onitemkeycancel={handleItemKeyCancel}
+            onitemmoveto={handleItemMoveTo}
           ></c-navigator-item>
         </li>
       </template>

@@ -58,6 +58,17 @@ export default class NavigatorSection extends LightningElement {
    */
   @api grabbed = false;
 
+  /**
+   * Whether an *item* drag — anyone's — is currently in flight. Owned by the
+   * parent for the same reason `dragKind` is: a drop landing on a card can
+   * mean "put this section here" or "put this item in that section", and only
+   * the component that sees both kinds of drag can tell them apart. Without
+   * it this card would light up as a drop target while a whole *section* was
+   * being dragged over it, which is a different gesture with a different
+   * result.
+   */
+  @api itemDragActive = false;
+
   isRenaming = false;
   draftName = "";
 
@@ -68,6 +79,15 @@ export default class NavigatorSection extends LightningElement {
   // us. Undefined means no drag of ours is in flight, and a drop arriving in
   // that state is a drag that began somewhere else.
   dragFromIndex;
+
+  // How many nested `dragenter`s are outstanding on this card. A plain
+  // boolean flipped by `dragenter`/`dragleave` flickers off every time the
+  // pointer crosses from the card onto one of its own items, because the
+  // browser fires `dragleave` on the element being left before `dragenter` on
+  // the one being entered — and an item covers most of a card. Counting the
+  // pairs is what makes "the pointer is somewhere inside this card" a single
+  // fact rather than a race.
+  dragDepth = 0;
 
   // The keyboard drag: where the grabbed item is now, and where it started.
   // Both are needed because each arrow press is applied to the stored layout
@@ -119,9 +139,36 @@ export default class NavigatorSection extends LightningElement {
   }
 
   get cardClass() {
-    return this.grabbed
-      ? "rstk-nav-section rstk-nav-section_grabbed"
-      : "rstk-nav-section";
+    const classes = ["rstk-nav-section"];
+    if (this.grabbed) {
+      classes.push("rstk-nav-section_grabbed");
+    }
+    if (this.isDropTarget) {
+      classes.push("rstk-nav-section_droptarget");
+    }
+    return classes.join(" ");
+  }
+
+  /**
+   * Whether this card is the one an item would land in if the user let go now.
+   * Both halves are required: a drag has to be in flight *and* the pointer has
+   * to be over this card. Without the visible answer a cross-section drag is a
+   * guess — the item is under the pointer and nothing on screen says which
+   * section is about to receive it.
+   */
+  get isDropTarget() {
+    return this.itemDragActive && this.dragDepth > 0;
+  }
+
+  /**
+   * The sections this card's items could move to — every section but this one
+   * — passed straight through from the parent. A section knows nothing about
+   * its siblings, so it cannot work this out and does not try.
+   */
+  get moveTargets() {
+    return this.section && this.section.moveTargets
+      ? this.section.moveTargets
+      : [];
   }
 
   /**
@@ -302,6 +349,7 @@ export default class NavigatorSection extends LightningElement {
     const from = this.dragFromIndex;
     const to = event.detail.index;
     this.dragFromIndex = undefined;
+    this.dragDepth = 0;
 
     if (from === undefined) {
       // A drop with no drag of ours behind it began somewhere else — another
@@ -310,7 +358,14 @@ export default class NavigatorSection extends LightningElement {
       // this section is what makes the whole card a target; the parent, which
       // is the only thing that can see both kinds of drag, decides what it
       // means. It must never become a move of an item of ours.
-      this.dispatch("sectiondrop", { index: this.sectionIndex });
+      //
+      // `itemIndex` is *where in this section* the drop landed. Without it a
+      // cross-section drag could only ever append, and the criterion is that
+      // the user drops the item "at a chosen position".
+      this.dispatch("sectiondrop", {
+        index: this.sectionIndex,
+        itemIndex: to
+      });
       return;
     }
     if (from === to) {
@@ -323,7 +378,22 @@ export default class NavigatorSection extends LightningElement {
     // Fires whether or not the drop landed anywhere, so a drag abandoned over
     // open space leaves no stale source behind for the next drop to pick up.
     this.dragFromIndex = undefined;
+    this.dragDepth = 0;
     this.dispatch("sectiondragend", { index: this.sectionIndex });
+  }
+
+  /**
+   * The cross-section move, chosen from an item's own menu rather than
+   * dragged. The item knows which destination was picked and its own position;
+   * this adds the one fact neither it nor the parent's event listener could
+   * supply on its own — which section it is leaving.
+   */
+  handleItemMoveTo(event) {
+    this.dispatch("itemmoveto", {
+      fromSection: this.sectionIndex,
+      fromIndex: event.detail.index,
+      toSection: event.detail.toSection
+    });
   }
 
   // -------------------------------------------------------------------
@@ -498,12 +568,30 @@ export default class NavigatorSection extends LightningElement {
     }
   }
 
+  // `dragenter` and `dragleave` both bubble from this card's own contents,
+  // which is what makes the counter above the right shape: entering an item
+  // inside the card is an enter on the card too, and the pointer has not left
+  // until every one of those has been matched by a leave.
+  handleCardDragEnter() {
+    this.dragDepth += 1;
+  }
+
+  handleCardDragLeave() {
+    this.dragDepth = Math.max(0, this.dragDepth - 1);
+  }
+
   handleCardDrop(event) {
     event.preventDefault();
+    this.dragDepth = 0;
+    // A drop on the card itself names no position within it, so none is
+    // reported: the parent puts the item at the end of the section. A drop on
+    // one of the items *does* name one, and takes the other branch — see
+    // `handleItemDrop`.
     this.dispatch("sectiondrop", { index: this.sectionIndex });
   }
 
   handleCardDragEnd() {
+    this.dragDepth = 0;
     this.dispatch("sectiondragend", { index: this.sectionIndex });
   }
 

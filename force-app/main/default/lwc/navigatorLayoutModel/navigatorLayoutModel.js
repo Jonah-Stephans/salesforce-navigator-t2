@@ -278,6 +278,65 @@ export function moveItemWithinSection(layout, sectionIndex, from, to) {
   });
 }
 
+/**
+ * Moves an item out of one section and into another, at a chosen position.
+ *
+ * **The placement is `reorder`, not a second implementation of it.** The item
+ * is appended to a copy of the destination's list and then `reorder`ed from
+ * that last slot to where it is wanted, so the cross-section move and the
+ * within-section reorder are the same function applied to the same kind of
+ * list — which is the criterion this exists to satisfy, and the reason
+ * `reorder`'s clamp applies here for free. A destination past either end
+ * therefore lands at that end rather than being rejected, exactly as it does
+ * within a section.
+ *
+ * `toIndex` may be omitted, which is what the Move to… menu does: that menu
+ * names a section and not a slot, so the item goes to the end of it.
+ *
+ * **Moving an item into the section it is already in leaves the layout
+ * unchanged**, rather than becoming a reorder within that section. That is
+ * structural rather than a rule a caller has to remember: an item dropped
+ * back onto its own section has been put back where it was, and
+ * `moveItemWithinSection` is the function for the case where a *position*
+ * within one section was actually chosen.
+ */
+export function moveItemBetweenSections(
+  layout,
+  fromSection,
+  fromIndex,
+  toSection,
+  toIndex
+) {
+  const sections = sectionsOf(layout).map(copySection);
+
+  if (
+    !isPresent(sections, fromSection) ||
+    !isPresent(sections, toSection) ||
+    fromSection === toSection
+  ) {
+    return { sections };
+  }
+
+  const source = sections[fromSection];
+  if (!isPresent(source.items, fromIndex)) {
+    return { sections };
+  }
+
+  const moved = source.items[fromIndex];
+  source.items = source.items.filter((_item, at) => at !== fromIndex);
+
+  const destination = sections[toSection];
+  const appended = destination.items.concat([moved]);
+  const last = appended.length - 1;
+  destination.items = reorder(
+    appended,
+    last,
+    toIndex === undefined || toIndex === null ? last : toIndex
+  );
+
+  return { sections };
+}
+
 /** Reorders the sections themselves — the same `reorder`, a different axis. */
 export function moveSection(layout, from, to) {
   return { sections: reorder(sectionsOf(layout).map(copySection), from, to) };
@@ -293,8 +352,13 @@ function replaceSection(layout, index, replacer) {
   };
 }
 
-function isPresent(sections, index) {
-  return Number.isInteger(index) && index >= 0 && index < sections.length;
+/**
+ * Whether `index` names a real position in `list`. Used on both axes — the
+ * sections of a layout and the items of a section — because "is there
+ * anything there to move?" is the same question either way.
+ */
+function isPresent(list, index) {
+  return Number.isInteger(index) && index >= 0 && index < list.length;
 }
 
 function copySection(section) {

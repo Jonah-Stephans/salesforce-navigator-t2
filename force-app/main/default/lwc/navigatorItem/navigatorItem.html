@@ -1,22 +1,55 @@
 <template>
-  <a
-    href={url}
-    class={anchorClass}
-    data-tab-id={tabId}
-    draggable="true"
-    aria-label={label}
-    aria-describedby={describedById}
-    tabindex={fallbackTabIndex}
-    role={fallbackRole}
-    onclick={handleClick}
-    onkeydown={handleKeydown}
-    ondragstart={handleDragStart}
-    ondragover={handleDragOver}
-    ondrop={handleDrop}
-    ondragend={handleDragEnd}
-  >
-    <span class="rstk-nav-item__label">{label}</span>
-  </a>
+  <!-- The anchor and the overflow menu sit on one row. A menu button cannot
+       live inside the anchor — a button inside a link is invalid and the
+       browser's own activation of the link would swallow it — so the two are
+       siblings, and this row is what keeps them beside each other rather than
+       stacked. -->
+  <div class="rstk-nav-item__row">
+    <a
+      href={url}
+      class={anchorClass}
+      data-tab-id={tabId}
+      draggable="true"
+      aria-label={label}
+      aria-describedby={describedById}
+      tabindex={fallbackTabIndex}
+      role={fallbackRole}
+      onclick={handleClick}
+      onkeydown={handleKeydown}
+      ondragstart={handleDragStart}
+      ondragover={handleDragOver}
+      ondrop={handleDrop}
+      ondragend={handleDragEnd}
+    >
+      <span class="rstk-nav-item__label">{label}</span>
+    </a>
+
+    <!-- The cross-section move, and the only route to it that does not need a
+         mouse: arrow keys deliberately do not cross a section boundary, which
+         is the pattern rather than a gap in it. `lightning-button-menu` is
+         keyboard-operable in its own right, so this is the same menu and the
+         same gesture for both kinds of user. Absent when the layout has only
+         one section, so nobody is handed a menu that opens onto nothing. -->
+    <template lwc:if={hasMoveTargets}>
+      <lightning-button-menu
+        class="rstk-nav-item__menu"
+        alternative-text={menuLabel}
+        icon-size="x-small"
+        menu-alignment="auto"
+        variant="border-filled"
+        onselect={handleMenuSelect}
+      >
+        <lightning-menu-subheader label="Move to…"></lightning-menu-subheader>
+        <template for:each={moveMenuItems} for:item="target">
+          <lightning-menu-item
+            key={target.value}
+            value={target.value}
+            label={target.label}
+          ></lightning-menu-item>
+        </template>
+      </lightning-button-menu>
+    </template>
+  </div>
 
   <!-- Exactly one description node is present at a time, and the anchor's
        `aria-describedby` above points at whichever it is. The full

@@ -1,3 +1,20 @@
+/* The anchor and the overflow menu on one row, with the anchor taking the
+   space and the menu taking only what it needs. */
+.rstk-nav-item__row {
+  display: flex;
+  align-items: center;
+  gap: var(--slds-g-spacing-1, 0.25rem);
+}
+
+.rstk-nav-item__row .rstk-nav-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rstk-nav-item__menu {
+  flex: 0 0 auto;
+}
+
 /* An item is a real, permanently-interactive link — SLDS 2 removes borders
    from cards, but this is not a card. It is styled as an interactive
    element, so a border-2 (functional/interactive) is correct here, not a
