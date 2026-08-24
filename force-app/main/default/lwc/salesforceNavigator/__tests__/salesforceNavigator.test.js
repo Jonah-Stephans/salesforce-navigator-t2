@@ -123,10 +123,50 @@ describe("c-salesforce-navigator", () => {
       nextPageUrl:
         "/services/data/v67.0/ui-api/nav-items?formFactor=Large&page=1&pageSize=100"
     });
+    await flush();
+
+    // The component must actually have asked the wire adapter for the next
+    // page — not merely rendered whatever the test handed it, which is all
+    // the assertion below this one can tell us on its own.
+    expect(getNavItems.getLastConfig().page).toBe(1);
+
     getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
     await flush();
 
     const items = element.shadowRoot.querySelectorAll("c-navigator-item");
+    expect(items).toHaveLength(totalCount);
+    // And it must stop advancing once the platform reports no further page.
+    expect(getNavItems.getLastConfig().page).toBe(1);
+  });
+
+  it("does not duplicate items when the wire adapter re-emits the final page after pagination completes", async () => {
+    // An LDS cache refresh can redeliver the current page's config at any
+    // time — that is a normal event for a UI API adapter, not a contrived
+    // one, and it must not grow the rendered list.
+    const firstPage = Array.from({ length: MAX_PAGE_SIZE }, (_, i) =>
+      buildItem(i)
+    );
+    const secondPage = Array.from({ length: 74 }, (_, i) =>
+      buildItem(MAX_PAGE_SIZE + i)
+    );
+    const totalCount = firstPage.length + secondPage.length;
+
+    const element = createNavigator();
+    getNavItems.emit({
+      navItems: firstPage,
+      nextPageUrl:
+        "/services/data/v67.0/ui-api/nav-items?formFactor=Large&page=1&pageSize=100"
+    });
+    getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
+    await flush();
+
+    let items = element.shadowRoot.querySelectorAll("c-navigator-item");
+    expect(items).toHaveLength(totalCount);
+
+    getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
+    await flush();
+
+    items = element.shadowRoot.querySelectorAll("c-navigator-item");
     expect(items).toHaveLength(totalCount);
   });
 

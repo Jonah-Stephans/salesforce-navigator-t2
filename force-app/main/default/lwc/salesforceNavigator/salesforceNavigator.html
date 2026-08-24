@@ -23,11 +23,11 @@
       >
         <template for:each={items} for:item="item">
           <li
-            key={item.developerName}
+            key={item.id}
             class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-4 slds-p-around_x-small"
           >
             <c-navigator-item
-              tab-id={item.developerName}
+              tab-id={item.id}
               label={item.label}
               page-reference={item.pageReference}
             ></c-navigator-item>

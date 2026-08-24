@@ -1,7 +1,8 @@
 import {
   hasMorePages,
   MAX_PAGE_SIZE,
-  NAV_ITEMS_CONFIG
+  NAV_ITEMS_CONFIG,
+  normalizeNavItems
 } from "c/navigatorTabSource";
 
 describe("navigatorTabSource", () => {
@@ -30,5 +31,28 @@ describe("navigatorTabSource", () => {
   it("reports no further page when the response has no pagination info at all", () => {
     expect(hasMorePages({})).toBe(false);
     expect(hasMorePages(undefined)).toBe(false);
+  });
+
+  describe("normalizeNavItems", () => {
+    it("maps the platform's envelope and per-item field names to a stable { id, label, pageReference } shape", () => {
+      const pageReference = {
+        type: "standard__objectPage",
+        attributes: { objectApiName: "Account", actionName: "home" },
+        state: {}
+      };
+
+      expect(
+        normalizeNavItems({
+          navItems: [
+            { developerName: "Account", label: "Accounts", pageReference }
+          ]
+        })
+      ).toEqual([{ id: "Account", label: "Accounts", pageReference }]);
+    });
+
+    it("returns an empty array when the response has no navItems", () => {
+      expect(normalizeNavItems({})).toEqual([]);
+      expect(normalizeNavItems(undefined)).toEqual([]);
+    });
   });
 });

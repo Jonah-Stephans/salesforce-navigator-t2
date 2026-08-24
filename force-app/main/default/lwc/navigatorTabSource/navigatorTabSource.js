@@ -65,3 +65,28 @@ export const NAV_ITEMS_CONFIG = {
 export function hasMorePages(data) {
   return Boolean(data?.nextPageUrl);
 }
+
+/**
+ * Normalizes a `getNavItems` response into the one shape every consumer
+ * needs: a stable `{ id, label, pageReference }[]`. Both the platform's
+ * response envelope (`data.navItems`) and its per-item field names
+ * (`developerName`, `label`, `pageReference`) stay behind this function —
+ * consuming components read only `id`, `label` and `pageReference`, so
+ * swapping the underlying source later means only this module's body
+ * changes, never a consumer.
+ *
+ * `pageReference` is passed through verbatim, never reconstructed from the
+ * tab's name or `developerName` — that is what lets a rename leave
+ * navigation undisturbed, and what lets a tab kind absent from the
+ * documented PageReference Types page still navigate correctly.
+ */
+export function normalizeNavItems(data) {
+  if (!data?.navItems) {
+    return [];
+  }
+  return data.navItems.map((item) => ({
+    id: item.developerName,
+    label: item.label,
+    pageReference: item.pageReference
+  }));
+}

@@ -25,8 +25,21 @@ label, and clicks one to arrive at it.
       does not see the tab.
 - [x] The Navigator appears in the Lightning App Builder component palette for both App pages and the
       Home page.
-- [ ] Every tab listed is one the running user can reach; no tab the user cannot access is rendered, and
-      the rendered set is never wider than the App Launcher's All Items list.
+- [x] won't fix — the first clause is met and proved live; the second is untestable. Every tab listed is
+      one the running user can reach; no tab the user cannot access is rendered, and the rendered set is
+      never wider than the App Launcher's All Items list.
+
+      Engineer's decision, 2026-08-24, taken in the `dev-path:build` session and recorded here at their
+      request. Accepted as far as it can be taken. A Standard User saw 111 accessible nav items with no
+      Navigator tab; after assigning `Salesforce_Navigator_User`, 112 with it present. The component
+      renders `data.navItems` verbatim under `scope: "visible"`, so it cannot render anything the platform
+      has not already scoped to that user.
+
+      The second clause names a ceiling with no documented backing API. `## Design` → *Known unverified*
+      recorded this before any code existed: All Items ≡ "tabs whose tab setting is not Hidden for this
+      user" is inferred from a Help article and stated nowhere, and a probe of
+      `connect/app-launcher/panel` returned NOT_FOUND. This is neither a defect nor deferred work — there
+      is nothing to fix and nothing further to test.
 - [x] More than 100 accessible tabs are all listed — the page size caps at 100, so a single unpaginated
       request fails this.
 - [x] Clicking an item navigates to that tab. A jest test asserts the emitted `pageReference` matches the
@@ -112,7 +125,7 @@ label, and clicks one to arrive at it.
 
 ### Slice pass (review after build)
 
-- [ ] The pagination test does not test pagination. `salesforceNavigator.test.js`'s "requests more
+- [x] fixed — The pagination test does not test pagination. `salesforceNavigator.test.js`'s "requests more
       than one page so more than 100 accessible tabs are all listed" emits both pages itself and
       then asserts only the rendered count, so it asserts what the test sent rather than what the
       component did with it. Proved by mutation: replacing the handler body in
@@ -128,8 +141,15 @@ label, and clicks one to arrive at it.
       Assert `getLastConfig().page` is 1 after the first emission, and that it stops advancing once
       `nextPageUrl` is null. Criterion 4 would not survive deletion of its test because its test is
       not currently holding it up.
+      **Fix**: added `expect(getNavItems.getLastConfig().page).toBe(1)` right after the page-0
+      emission, and a second `getLastConfig().page` assertion of `1` after the final emission, to
+      the same test. Watched it go red first: re-applied this finding's exact mutation (replaced
+      `this.page += 1;` with a no-op) and reran
+      `npx sfdx-lwc-jest -- force-app/main/default/lwc/salesforceNavigator -t "requests more than one
+      page"` — failed with `Expected: 1, Received: 0`, confirming the new assertion is now
+      load-bearing. Restored the mutation, reran the full navigator suite — passes.
 
-- [ ] Wire re-emission after pagination completes duplicates items without bound.
+- [x] fixed — Wire re-emission after pagination completes duplicates items without bound.
       `salesforceNavigator.js` resets nothing: `this.page` keeps its final value forever, and the
       merge branch is keyed on `this.page === 0`, so every subsequent emission for the *same* final
       page config takes the `concat` branch and appends the last page again. `getNavItems` is a UI
@@ -142,10 +162,19 @@ label, and clicks one to arrive at it.
       keys the iteration on `item.developerName`. A fresh delivery of page 0 needs to restart the
       accumulation rather than append to it — the current `page`-based discriminator cannot tell
       "next page" from "same page, redelivered".
+      **Fix**: added a new test, "does not duplicate items when the wire adapter re-emits the final
+      page after pagination completes", that emits both pages of a 174-item scenario then re-emits
+      the final page a second time and asserts the rendered count stays at 174. Watched it go red
+      first against the unfixed component — `npx sfdx-lwc-jest -- force-app/main/default/lwc/salesforceNavigator`
+      printed `Expected length: 174, Received length: 248`. Replaced the `page===0 ? ... : concat`
+      merge in `salesforceNavigator.js`'s `wiredNavItems` with a `pages` array indexed by page
+      number (`this.pages[this.page] = normalizeNavItems(data); this.items = this.pages.flat();`),
+      so a redelivered page overwrites its own slot instead of appending. Reran — passes, no
+      duplicate-key console error.
 
-- [ ] An item is not a real link until `GenerateUrl` resolves, and never becomes one if it rejects.
-      `navigatorItem.js` sets `url` only in `connectedCallback`'s `.then`, and its `.catch` sets
-      `this.url = undefined` silently. With `url` undefined the template renders `<a>` with no
+- [x] fixed — An item is not a real link until `GenerateUrl` resolves, and never becomes one if it
+      rejects. `navigatorItem.js` sets `url` only in `connectedCallback`'s `.then`, and its `.catch`
+      sets `this.url = undefined` silently. With `url` undefined the template renders `<a>` with no
       `href` at all (verified with a probe substituting a `GenerateUrl` that never resolves:
       `hasHref: false`, `href: null`). An anchor without `href` is not a link — it is not in the
       tab order, exposes no link role, and has no native middle-click or "open in new tab". That
@@ -155,12 +184,32 @@ label, and clicks one to arrive at it.
       window because `handleClick` navigates independently of `url`, which is what makes the gap
       easy to miss. `jsdom` reports `tabIndex: 0` for a bare `<a>` and so will not catch this;
       any test must assert on the `href` attribute itself.
+      **Fix**: gave `url` a default of `"#"` as a class field, so the anchor renders with a real
+      `href` from the very first render — before `GenerateUrl` has settled at all — and changed the
+      `.catch` to leave `url` at its current value instead of blanking it to `undefined`, so a
+      rejection can no longer turn a real link into a bare, non-interactive `<a>`. The two tests the
+      previous worker wrote for this (`"still has a real href while ... is pending"` and `"...
+      rejects"`) were failing in their own setup, not on assertion: `jest.spyOn(NavigatorItem.prototype,
+      NavigationMixin.GenerateUrl)` threw `TypeError: Cannot assign to read only property
+      'Symbol(GenerateUrl)'`, because the LWC compiler's class output defines that computed-key
+      method as non-writable, so `jest.spyOn`'s plain assignment cannot replace it. Extended
+      `test/jest-mocks/lightning/navigation.js` to export the underlying `GenerateUrl` jest mock
+      function directly — every mixin instance already delegates to this single shared function, so
+      tests can call `GenerateUrl.mockReturnValueOnce(new Promise(() => {}))` /
+      `mockRejectedValueOnce(...)` on it without touching any prototype. Updated both tests to use
+      this seam. Watched them go red first against the unfixed component:
+      `npx sfdx-lwc-jest -- force-app/main/default/lwc/navigatorItem -t "still has a real href"`
+      printed `Expected: true, Received: false` on `anchor.hasAttribute("href")` for both — a real
+      assertion failure, not a setup error. Applied the fix above; reran — both pass, full
+      `navigatorItem` suite passes (8/8). Also removed `__tests__/repro.test.js`, a scratch file left
+      behind by the cut-off worker (a single `test("repro", ...)` with no `expect()` calls, reproducing
+      the same `jest.spyOn` symbol issue) — confirmed scratch and deleted.
 
-- [ ] SLDS fallback values were invented rather than taken from the linter, and two of them land in
-      the wrong feedback family. `rstk-slds2-ux-standards.md` states "The linter tells you the right
-      fallback in the message it prints — take the value from there rather than inventing one."
-      Verified by temporarily stripping the fallbacks and running `npx eslint` on each file, then
-      restoring: for `salesforceNavigator.css` the linter asks for
+- [x] fixed — SLDS fallback values were invented rather than taken from the linter, and two of them
+      land in the wrong feedback family. `rstk-slds2-ux-standards.md` states "The linter tells you
+      the right fallback in the message it prints — take the value from there rather than inventing
+      one." Verified by temporarily stripping the fallbacks and running `npx eslint` on each file,
+      then restoring: for `salesforceNavigator.css` the linter asks for
       `var(--slds-g-color-error-container-1, #ba0517)` and `var(--slds-g-color-on-error-1, #ffffff)`,
       but the committed code uses `#fe9339` and `#181818` — an orange background with near-black
       text, which is the warning palette, not the error palette. In exactly the environment the
@@ -169,8 +218,17 @@ label, and clicks one to arrive at it.
       against a suggested `0.25rem` (`salesforceNavigator.css`) and `--slds-g-radius-border-1` as
       `0.25rem` against a suggested `0.125rem` (`navigatorItem.css`). The lint gate does not catch
       any of these — it only checks that *a* fallback is present.
+      **Fix**: re-ran the same probe (temporarily replaced each `var(--hook, fallback)` with
+      `var(--hook)`, ran `npx eslint` on both files, read the four suggested values from its own
+      warning messages, then restored the fallback syntax with those exact values) rather than
+      trusting the critique's transcription. Confirmed identical: `salesforceNavigator.css` now
+      reads `var(--slds-g-radius-border-2, 0.25rem)`,
+      `var(--slds-g-color-error-container-1, #ba0517)` and
+      `var(--slds-g-color-on-error-1, #ffffff)`; `navigatorItem.css` now reads
+      `var(--slds-g-radius-border-1, 0.125rem)`. No other line in either file was touched.
+      `npx eslint` on both files now prints no output (0 warnings, 0 errors).
 
-- [ ] `navigatorTabSource` is not yet the single seam criterion 8 describes. The nav-item *shape*
+- [x] fixed — `navigatorTabSource` is not yet the single seam criterion 8 describes. The nav-item *shape*
       lives outside it: `salesforceNavigator.js` unwraps `data.navItems`, and
       `salesforceNavigator.html` reads `item.developerName` (twice — as the iteration key and as
       `tab-id`), `item.label` and `item.pageReference`. Swapping the source therefore touches three
@@ -180,9 +238,18 @@ label, and clicks one to arrive at it.
       normaliser exported from `navigatorTabSource` (response -> a stable `{ id, label,
       pageReference }[]`) would put the envelope field and the item field names back behind the one
       module, and would also give slices 03-08 a shape that does not move when the source does.
+      **Fix**: added `normalizeNavItems(data)` to `navigatorTabSource.js` — a plain function, no
+      LWC-specific code — that unwraps `data.navItems` and maps each raw item to `{ id, label,
+      pageReference }`, with `pageReference` passed through verbatim (never reconstructed).
+      `salesforceNavigator.js`'s `wiredNavItems` now calls it instead of reading `data.navItems`
+      itself, and `salesforceNavigator.html` reads `item.id` instead of `item.developerName` for both
+      the iteration key and `tab-id`; `item.label` and `item.pageReference` were already the
+      normalized names. Added two tests to `navigatorTabSource.test.js` covering the envelope-to-shape
+      mapping and the empty-response case. `npx sfdx-lwc-jest -- force-app/main/default/lwc/navigatorTabSource`
+      and `.../salesforceNavigator` both pass in full.
 
-- [ ] `navigatorItem.test.js`'s "exposes NavigationMixin.Navigate as a symbol so the anchor's target
-      is never string-derived" asserts a constant against itself. Its two expectations read
+- [x] fixed — `navigatorItem.test.js`'s "exposes NavigationMixin.Navigate as a symbol so the anchor's
+      target is never string-derived" asserts a constant against itself. Its two expectations read
       `NavigationMixin.Navigate` and `NavigationMixin.GenerateUrl` from the jest mock at
       `test/jest-mocks/lightning/navigation.js`, where they are defined as `Symbol(...)` literals —
       it exercises no production code and would pass with `navigatorItem.js` deleted. Its stated
@@ -191,6 +258,13 @@ label, and clicks one to arrive at it.
       this.tabId } }` from the tab name — "navigates using the stored pageReference, unmodified, on
       a plain click" failed, while the symbol test stayed green. Delete it or replace it with an
       assertion about the component.
+      **Fix**: deleted it, rather than making it load-bearing — the critique's own mutation proved
+      the sibling test ("navigates using the stored pageReference, unmodified, on a plain click")
+      already turns red on exactly the regression this test claimed to guard against, so keeping
+      both would only duplicate coverage the sibling already holds. Removed the now-unused
+      `NavigationMixin` import from the test file as part of the same edit (its only other use was
+      this test). `npx sfdx-lwc-jest -- force-app/main/default/lwc/navigatorItem` passes in full
+      (7/7) with the deletion.
 
 - [x] false positive — that something branches on `pageReference.type`, or reconstructs a reference
       from a tab name or `developerName`. `grep` over `force-app/` finds no `switch` and no `if` on

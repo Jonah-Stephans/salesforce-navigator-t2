@@ -1,9 +1,9 @@
 import { createElement } from "lwc";
 import NavigatorItem from "c/navigatorItem";
 import {
-  NavigationMixin,
   getNavigateCalledWith,
-  getGenerateUrlCalledWith
+  getGenerateUrlCalledWith,
+  GenerateUrl
 } from "lightning/navigation";
 
 // A pageReference shape verified against a live org: a real nav item, passed
@@ -88,11 +88,36 @@ describe("c-navigator-item", () => {
     }
   );
 
-  it("exposes NavigationMixin.Navigate as a symbol so the anchor's target is never string-derived", () => {
-    // Guards against a regression back to a hand-constructed URL: the mixin
-    // API is symbol-keyed, not a plain method name a component could stub
-    // out with its own derivation.
-    expect(typeof NavigationMixin.Navigate).toBe("symbol");
-    expect(typeof NavigationMixin.GenerateUrl).toBe("symbol");
+  it("still has a real href while NavigationMixin.GenerateUrl is pending", async () => {
+    // A bare <a> with no href is not a link — no tab order, no link role,
+    // no native middle-click/"open in new tab" — which is the whole
+    // mechanism the "real link" criterion relies on. A promise that never
+    // resolves models the moment between render and GenerateUrl settling.
+    // `jest.spyOn(NavigatorItem.prototype, NavigationMixin.GenerateUrl)`
+    // cannot be used here: the LWC compiler's class output defines that
+    // computed-key method as non-writable, so `jest.spyOn`'s plain
+    // assignment throws `Cannot assign to read only property`. Overriding
+    // the shared `GenerateUrl` mock function directly reaches the same
+    // call without touching the prototype.
+    GenerateUrl.mockReturnValueOnce(new Promise(() => {}));
+
+    const element = createNavigatorItem();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const anchor = element.shadowRoot.querySelector("a");
+    expect(anchor.hasAttribute("href")).toBe(true);
+  });
+
+  it("still has a real href, rather than losing it, when NavigationMixin.GenerateUrl rejects", async () => {
+    GenerateUrl.mockRejectedValueOnce(new Error("GenerateUrl failed"));
+
+    const element = createNavigatorItem();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const anchor = element.shadowRoot.querySelector("a");
+    expect(anchor.hasAttribute("href")).toBe(true);
   });
 });

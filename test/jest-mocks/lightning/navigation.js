@@ -71,5 +71,17 @@ export {
   CurrentPageReference,
   NavigationContext,
   getNavigateCalledWith,
-  getGenerateUrlCalledWith
+  getGenerateUrlCalledWith,
+  // Exported directly (rather than requiring `jest.spyOn` on the
+  // symbol-keyed prototype method) so a test can drive a pending or
+  // rejected resolution: `GenerateUrl.mockReturnValueOnce(...)` /
+  // `mockRejectedValueOnce(...)`. `jest.spyOn(SomeComponent.prototype,
+  // NavigationMixin.GenerateUrl)` does not work here — the LWC compiler's
+  // class output defines that computed-key method as non-writable, so the
+  // plain assignment `jest.spyOn` performs throws
+  // `TypeError: Cannot assign to read only property 'Symbol(GenerateUrl)'`.
+  // `GenerateUrl` is already the single `jest.fn()` every component's
+  // mixin method delegates to, so overriding it here reaches every caller
+  // without touching any prototype.
+  GenerateUrl
 };

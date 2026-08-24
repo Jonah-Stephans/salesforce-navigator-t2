@@ -7,7 +7,11 @@ import { LightningElement, wire } from "lwc";
 // shape, the pagination math, and the reasoning behind the choice — still
 // lives in that one file.
 import { getNavItems } from "lightning/uiAppsApi";
-import { NAV_ITEMS_CONFIG, hasMorePages } from "c/navigatorTabSource";
+import {
+  NAV_ITEMS_CONFIG,
+  hasMorePages,
+  normalizeNavItems
+} from "c/navigatorTabSource";
 
 const GENERIC_ERROR_MESSAGE =
   "We could not load your tabs. Try reloading the page.";
@@ -24,6 +28,15 @@ export default class SalesforceNavigator extends LightningElement {
   errorMessage;
   isLoading = true;
 
+  // Indexed by page number rather than appended to, so that a wire
+  // re-emission for a page already received (an LDS cache refresh
+  // redelivering the current, possibly final, page — a normal event for a
+  // UI API adapter) overwrites that page's slot instead of duplicating it.
+  // `this.page` alone cannot tell "next page" from "same page, redelivered"
+  // once pagination has finished advancing, but the page number a response
+  // belongs to can.
+  pages = [];
+
   // `page` is the only reactive piece of the wire config — LWC's wire
   // adapter reactivity tracks direct field reassignment of the values named
   // by a `'$fieldName'` config property, not values derived inside a getter
@@ -38,8 +51,8 @@ export default class SalesforceNavigator extends LightningElement {
   wiredNavItems({ data, error }) {
     if (data) {
       this.errorMessage = undefined;
-      this.items =
-        this.page === 0 ? data.navItems : this.items.concat(data.navItems);
+      this.pages[this.page] = normalizeNavItems(data);
+      this.items = this.pages.flat();
 
       if (hasMorePages(data)) {
         this.page += 1;

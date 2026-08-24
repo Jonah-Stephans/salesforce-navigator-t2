@@ -12,7 +12,13 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   @api label;
   @api pageReference;
 
-  url;
+  // Defaults to a real, non-empty href so the anchor is always a genuine
+  // link — in tab order, exposing a link role, and supporting native
+  // middle-click / "open in new tab" — from first render, before
+  // `GenerateUrl` has settled at all. `connectedCallback` below only ever
+  // upgrades this value on success; it must never be cleared back to
+  // `undefined`, or the anchor stops being a link.
+  url = "#";
 
   connectedCallback() {
     this[NavigationMixin.GenerateUrl](this.pageReference)
@@ -20,7 +26,13 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
         this.url = url;
       })
       .catch(() => {
-        this.url = undefined;
+        // Leave `url` at its current value (the "#" default, since
+        // GenerateUrl never resolved) rather than blanking it out. A
+        // rejected GenerateUrl must not turn a real link into a bare `<a>`
+        // with no `href` — that would drop it from the tab order, remove
+        // its link role, and lose native middle-click/"open in new tab",
+        // which is the entire mechanism the "real link" criterion relies
+        // on.
       });
   }
 
