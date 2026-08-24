@@ -17,30 +17,47 @@ an App or Home page, which shows the same tabs the running user can see in the A
 scoped to that user's access and never wider — arranged into named sections the user controls. A
 section is a card holding a chosen set of items at a chosen column count; items can be dragged
 within and between sections, renamed to the user's own wording, and clicked to navigate straight to
-the tab. A user keeps as many named layouts as they like and switches between them, and the whole
-component reads as native platform UI in both light and dark mode.
+the tab. Items can be removed from a layout and added back from a picker of everything the user can
+reach, and sections can be renamed, deleted and reordered. A user keeps as many named layouts as
+they like and switches between them, and the whole component reads as native platform UI in both
+light and dark mode. Every gesture that works with a mouse works from the keyboard.
 
 ## Outcomes
 
 - The component renders only tabs the running user can see in the App Launcher's All Items list; a
   tab the user cannot access never appears, and the rendered set is never wider than that list.
-- The component is reachable as its own tab that an administrator can place at the front of any app,
-  and is available in the Lightning App Builder component palette for both App pages and the Home
-  page.
-- A user can create a named section and set its column count; the section renders its items in that
-  number of columns.
+- An item whose tab the user has lost access to, or which has been deleted from the org, stops
+  rendering without the stored layout being altered; if access is restored the item reappears in its
+  original position.
+- The component ships a `CustomTab` that surfaces it, and declares itself to the Lightning App
+  Builder component palette for both App pages and the Home page.
+- A user can create a named section and set its column count between one and six; the section renders
+  its items in that number of columns.
+- A user can rename a section, delete it, and reorder sections within the layout; deleting a section
+  returns its items to the pool of items available to add, rather than discarding them.
 - A user can drag an item to a new position within its section, and drag an item from one section
   into another; both placements survive a page reload and a new session.
+- A user can remove an item from a layout and add it back from a picker listing every tab they can
+  reach that is not already in the layout.
 - A user can rename an item to their own wording; the renamed label is displayed in place of the
   Salesforce label, and the item still navigates to the same tab.
-- Clicking an item navigates the user to that tab.
+- Clicking an item navigates the user to that tab, and the item is a real link — middle-click and
+  open-in-new-tab work.
+- Every reorder, move, rename, removal and section operation is performable from the keyboard alone,
+  with each change announced to a screen reader.
+- A user with no layout yet sees every tab they can reach in one seeded section, without a layout
+  record being written until they first change something.
 - A user can save more than one named layout and switch which one is active; switching re-renders
   the sections, items, column counts and renames belonging to the selected layout.
-- Every layout, section, item placement, column count and rename is stored against the individual
-  user, and is neither visible to nor alterable by another user.
+- Every layout, section, item placement, column count and rename is owned by the individual user. No
+  user can see or change another user's layouts through the Navigator or through ordinary record
+  access — the store is Private with role-hierarchy access disabled. Users holding `View All Data` /
+  `Modify All Data` retain their standard platform-wide visibility, as they do for all org data.
 - All colour, spacing and typography come from SLDS 2 global styling hooks, with no hard-coded
   colour values, and the component renders correctly under the Cosmos theme in both light and dark
   mode.
+- The repository can mechanically detect a hard-coded colour, spacing or typography value in this
+  component's CSS, and a pull request carrying one cannot go green.
 
 ## Out of scope
 
@@ -52,6 +69,15 @@ component reads as native platform UI in both light and dark mode.
 - Changing the App Launcher itself, or changing the org's own tab labels — a rename is the user's own
   wording, local to their layout.
 - Themes other than Cosmos, and any styling route that bypasses SLDS 2 global styling hooks.
+- **Placing the tab into any app's navigation, and assigning the permission set.** Neither can ship
+  as source — `CustomApplication` deploys as a full replace of an app's nav list, and
+  `PermissionSetAssignment` is data rather than metadata. Both are documented admin steps; see
+  `## Design`, *What an administrator must do*.
+- **Icons on items.** There is no supported route from a tab to an SLDS icon name, and the nav-item
+  icon fields were empty in every item observed. Items are text, which is what the All Items list
+  this component improves on is already.
+- **Portability of the store into a namespaced package.** This spec ships unnamespaced; see
+  `## Design`, *The namespace decision*.
 
 ## Current state
 
@@ -148,13 +174,11 @@ safe by care.
 click. Salesforce's own sample calls `preventDefault()` unconditionally, so honouring
 ctrl/cmd/shift-click requires guarding on `evt.metaKey || evt.ctrlKey || evt.shiftKey`.
 
-**Icons have no good answer.** There is no supported API returning an SLDS icon name. `getObjectInfo`'s
-`themeInfo` carries exactly two fields, `color` and a versioned PNG `iconUrl` — deriving
-`standard:account` means parsing an undocumented internal path (`t4v35`). `lightning-icon`'s `src`
-accepts only a static-resource SVG sprite fragment, not a PNG URL. And **verified: `iconUrl` and
-`color` came back null on all 174 nav items** in a fresh scratch org, so the nav-items icon fields are
-not dependable. Naive `standard:` + lowercased API name breaks often (`Product2`→`product`,
-`Order`→`orders`, `Asset`→`asset_object`), and custom objects get an unpredictable `custom:customNN`.
+**Icons have no good answer, which is why the design has none.** There is no supported API returning
+an SLDS icon name; `getObjectInfo.themeInfo` gives only a colour and a versioned PNG URL whose path
+(`t4v35`) is undocumented and unstable, `lightning-icon`'s `src` will not take a PNG, and
+**verified: `iconUrl` and `color` came back null on all 174 nav items** in a fresh scratch org. Items
+are text. See `## Out of scope`.
 
 ### Outcomes 3–4 — sections, columns and dragging
 
@@ -204,30 +228,23 @@ because it is scoped to a browser profile rather than a user: two people sharing
 layouts, and a new machine, an incognito window or an LWS configuration change loses everything
 silently.
 
-Ranked, with the reasoning:
+**The winner, and the one thing people get wrong about it.** A custom object at OWD Private with
+`OwnerId` = the user. Subscriber rows are subscriber data, so it survives a package upgrade natively,
+and a Long Text Area holds 131,072 characters. The trap: **"Grant Access Using Hierarchies" must be
+unchecked.** With it on — the default — every manager above the owner in the role hierarchy sees
+their reports' layouts, which quietly breaks the isolation Outcome.
 
-1. **Custom object, OWD Private, `OwnerId` = the user, one record per layout carrying a JSON payload.**
-   Survives a package upgrade natively (subscriber rows are subscriber data). Long Text Area holds
-   131,072 characters. One thing people forget: **uncheck "Grant Access Using Hierarchies"** — with
-   it on, which is the default, every manager above the owner sees their reports' layouts.
-2. **Platform Cache session partition in front of it** — optional, only if latency proves a problem,
-   never the source of truth.
-3. **Custom field on `User`** — viable fallback whose one real edge is surviving a Developer sandbox
-   refresh, where a custom object's rows do not. Loses on mixed DML (`User` is a setup sObject),
-   on permissions (writing User records wants *Manage Internal Users*, so safety collapses onto never
-   forgetting `WHERE Id = :UserInfo.getUserId()`), and on one-blob-for-all-layouts.
-4. **`localStorage`** — first-paint optimisation only, never the store.
-5. **Hierarchy Custom Settings — rule out.** They look right and are the worst option. There is *no*
-   isolation: `SetupOwnerId` scopes which row `getInstance()` resolves to, not which rows a user can
-   read, and "protected" only bites inside a managed package. No Long Text Area (255 characters per
-   Text field). And a shared org-wide cap that takes every other custom-setting-dependent feature in
-   the org down with it when it blows.
-6. **Platform Cache as the store — rule out.** Session cache expires when the session does, which is
-   precisely the Outcome's durability requirement inverted; org cache is org-wide and readable by any
-   Apex in the namespace.
-7. **Custom Metadata Types — rule out.** Org configuration, written by asynchronous *deployment* via
-   the Apex Metadata API, requiring *Customize Application*. A drag that fires a metadata deployment
-   is not shippable. No per-user dimension exists.
+**Ruled out, and why, so nobody re-proposes them.** *Hierarchy Custom Settings* look like the natural
+fit and are the worst option on the list: they have no sharing model at all (`SetupOwnerId` scopes
+which row `getInstance()` resolves to, not which rows a user can read), no Long Text Area, and a
+shared org-wide cap that takes every other custom-setting-dependent feature down with it. *Platform
+Cache* is documented as temporary — session cache expires when the session does, which is this
+Outcome's durability requirement exactly inverted. *Custom Metadata Types* are org configuration
+written by asynchronous deployment requiring *Customize Application*; a drag that fires a metadata
+deployment is not shippable. *A custom field on `User`* is the one real fallback — its edge is
+surviving a Developer sandbox refresh — but `User` is a setup sObject, so its DML cannot be mixed
+with anything else, and writing it wants *Manage Internal Users*, which collapses safety onto never
+forgetting `WHERE Id = :UserInfo.getUserId()`.
 
 **The shape question, with the arithmetic.** For 4 layouts × 6 sections × 12 items:
 
@@ -383,17 +400,315 @@ deliberately broken variants to make the server state its own requirements. The 
 
 ## Open questions
 
-- Where does a user's set of layouts persist, and does that store need to survive a package upgrade?
-  — owner: engineer, at Design.
-- Are layouts global to the user across every placement of the component, or scoped per app or per
-  placement? The arriving text says a user switches between layouts, but not whether the tab
-  placement and a Home-page placement share one active layout. — owner: engineer, at Design.
-- What happens to an item already saved in a section when the user loses access to that tab, or the
-  tab is deleted from the org? — owner: engineer, at Design.
-- What does a user with no layout yet see on first open — an empty Navigator they populate, or every
-  accessible item in one starting section? — owner: engineer, at Design. Note that the org-wide
-  default layout, which is the natural answer, is explicitly the second spec and cannot be depended
-  on here.
+All four questions Initiate raised were answered at Design, on 2026-08-24. They are recorded here
+resolved rather than deleted, because the answers are load-bearing and the reasoning lives in
+`## Design`.
+
+- **Where do layouts persist, and must the store survive a package upgrade?** A custom object,
+  `Navigator_Layout__c`, one record per layout. Yes, it must survive an upgrade, and it does so
+  natively — subscriber rows are subscriber data. See *The store*.
+- **Are layouts global to the user, or scoped per placement?** Global. The platform foreclosed the
+  alternative: `lightning__Tab` rejects `<property>` outright, server-enforced, so a tab placement
+  cannot carry a design-time scope key at all. See *One active layout, everywhere*.
+- **What happens when a user loses access to a tab, or it is deleted?** It stops rendering and the
+  stored layout is not touched; if access returns, so does the item, in its original position. See
+  *Resolution at render time*.
+- **What does a user with no layout see on first open?** Every tab they can reach, in one seeded
+  section, computed and not persisted until they first change something. See *First open*.
+
+No question remains open at the design gate.
+
+## Design
+
+Decided in conversation with the engineer on 2026-08-24, across two rounds of twenty-two questions.
+Every decision below is the engineer's; the reasoning is recorded so a later reader can tell a
+choice from an accident.
+
+### The shape of the thing
+
+Four LWCs and one Apex controller.
+
+| Bundle | Owns |
+| --- | --- |
+| `salesforceNavigator` | the layout switcher, the active layout's state, cross-section moves, autosave |
+| `navigatorSection` | one section card: its header menus, its own item ordering, its drop target |
+| `navigatorItem` | one item: the anchor, the drag source, the per-item overflow menu |
+| `navigatorItemPicker` | the modal for adding items back into a layout |
+
+Plus `navigatorLayoutModel`, a plain ES module with no LWC in it, holding the pure functions —
+`reorder`, the seeded-layout builder, the render-time access intersection, and the payload
+(de)serialiser. This is where the tests point.
+
+**Why the item is its own component and why that costs something.** Drag events are `composed: true`,
+so they cross the shadow boundary, but they arrive **retargeted** — verified under this repo's own
+jest setup, a `dragstart` from a div inside a child's shadow root reaches the parent with
+`event.target` equal to the host element, not the div. So `draggable` and `data-id` go on the item's
+*host*, or the item handles `dragstart` itself and re-emits a `CustomEvent` carrying an explicit
+payload. The second is what we do — it keeps the parent from ever needing to see inside a child.
+
+### Enumerating the user's tabs
+
+`getNavItems` from `lightning/uiAppsApi`, wrapped in a single module, `navigatorTabSource`, which is
+the only file in the component that knows where tab data comes from.
+
+**This module is Beta and the wrapper is the whole mitigation.** `lightning/uiAppsApi` carries
+Salesforce's "not for production use" disclaimer. It was chosen anyway, and the reasoning matters
+more than the choice: the GA alternative, `TabDefinition`, gives a stable name but no
+`pageReference`, so the component would hand-derive one — and a live org returned **five distinct
+`pageReference` types across 174 items, two of which (`standard__cmsPage`,
+`standard__directCmpReference`) are not on the documented PageReference Types page at all.** A
+hand-derived branch cannot know about those and would mis-navigate them silently. The Beta label is a
+supportability risk; hand-derivation is a correctness risk that fails quietly. If this must later
+ship on a supported basis, `navigatorTabSource` is the one file that changes, and unsupported tab
+kinds must then be **omitted rather than guessed at**.
+
+Pagination is mandatory — `pageSize` caps at 100 and a bare scratch org already returns 174 items.
+
+**Never reach for these two.** `TabDefinition` exists twice: the Object Reference object is
+user-scoped, the Tooling API object of the same name returns every tab in the org and requires *View
+Setup and Configuration*. And an Apex self-callout to `/ui-api/nav-items` through a Named Credential
+runs as the **named principal, not the running user**. Both over-report, and over-reporting is the
+one failure mode Outcome 1 exists to prevent.
+
+### Navigation, and why a rename cannot break it
+
+Each item renders as a real `<a href>`, the URL from `NavigationMixin.GenerateUrl`, with `click`
+calling `NavigationMixin.Navigate` on the item's stored `pageReference` **verbatim — no branching, no
+derivation**. Middle-click and open-in-new-tab therefore work. Salesforce's own sample calls
+`preventDefault()` unconditionally; we guard on `evt.metaKey || evt.ctrlKey || evt.shiftKey` and let
+the default through, or modifier-clicks are swallowed.
+
+A stored item is `{ id, rename? }` where `id` is the `developerName`. The label rendered is
+`rename ?? platformLabel` and the navigation target is resolved from the live tab source by `id`.
+**The rename and the target are different fields, so a rename cannot reach the target.** Outcome 5 is
+satisfied structurally rather than by care.
+
+### Resolution at render time
+
+Stored ids are intersected against the live accessible set on every render. An item whose tab the
+user can no longer reach simply does not render; nothing is written, nothing is deleted, and
+restoring access restores the item in place. This is also why the payload stores no labels: an org
+relabelling a tab propagates on the next render for free.
+
+### One active layout, everywhere
+
+Layouts are global to the user. The tab placement, an App page placement and a Home page placement
+all show the same active layout.
+
+This is not only a simplicity preference. `lightning__Tab` **rejects `<property>` and
+`<supportedFormFactors>` outright — server-enforced, confirmed by a failed validation deploy** — so a
+tab placement cannot be given a design-time scope key. Per-placement scoping would work on two of the
+three surfaces and be impossible on the third.
+
+### The store
+
+```
+Navigator_Layout__c          OWD Private, Grant Access Using Hierarchies OFF
+  OwnerId                    the user
+  Name                       the layout's name
+  Is_Active__c               Checkbox
+  Sort_Order__c              Number
+  Schema_Version__c          Number
+  Layout_JSON__c             Long Text Area (131,072)
+```
+
+One record per layout. `Layout_JSON__c` holds the sections — each with a name, a column count and an
+ordered list of `{ id, rename? }`. No labels, no icons, no pageReferences: everything derivable from
+the platform is derived.
+
+**Why a blob and not a normalised model.** For 4 layouts × 6 sections × 12 items, normalising costs
+316 records per user against 4 — a 79× difference, ~3.0 GB against ~39 MB at 5,000 users. The DML gap
+is worse: one cross-section drag renumbers both sections, so a normalised save is up to 72 upserts
+plus a delete pass, against one `update`. And SOQL supports only one level of parent-to-child
+subquery from the root, so Layout→Section→Item could not be read in a single rooted query anyway.
+
+**What the blob costs, and the mitigation that is not optional.** The platform will not migrate the
+inside of a Long Text Area across a package upgrade. `Schema_Version__c` and a versioned deserialiser
+that reads v1 and writes v2 ship **from the first commit**, not when they are first needed. Treat the
+JSON shape as a published contract — the second spec, the admin-authored org-wide default layout,
+will inherit it.
+
+`Is_Active__c` is enforced by the controller, which clears the flag on the user's other layouts in
+the same transaction as it sets it.
+
+**Accepted consequence, written down rather than discovered:** Developer and Developer Pro sandboxes
+are configuration-only and exclude custom object records, so every user's layouts vanish on a Dev
+sandbox refresh. Partial Copy with a matching template, and Full sandboxes, carry them.
+
+### The namespace decision
+
+`sfdx-project.json` is `"namespace": ""` and stays that way. **This store is therefore not portable
+into a namespaced package**: `Navigator_Layout__c` would become `ns__Navigator_Layout__c` and rows
+written in orgs that installed the unnamespaced version would not migrate.
+
+This was raised as an altitude stop, because it binds a spec that does not exist yet — the second
+spec stores against this same object. The engineer decided it here rather than promoting it. The
+constraint, stated so the next person does not discover it the expensive way: **if packaging ever
+becomes real, the namespace must be set before a single customer row exists.**
+
+### Data access
+
+One Apex class, `NavigatorLayoutController`, `with sharing`:
+
+- `@AuraEnabled(cacheable=true) getLayouts()` — SOQL `WITH USER_MODE`, and an explicit
+  `OwnerId = :UserInfo.getUserId()` predicate regardless. Sharing is defence in depth, never the
+  filter.
+- `@AuraEnabled saveLayout(...)` — DML with `AccessLevel.USER_MODE`.
+
+Chosen over a split `lightning/uiRecordApi` write plus a separate read because the payload is a blob
+rather than a form, and one seam is more assertable than two. **Consequence, flagged now rather than
+at Build:** this repo's hook-enforced testing rule requires a `System.runAs` permission test because
+the class is `with sharing`, and a 200-record bulk test because it carries DML. The bulk test is an
+odd fit for a per-user controller; it is enforced at SubagentStop and is not negotiable.
+
+`sourceApiVersion` moves 66.0 → 67.0, which makes user mode the default rather than something a
+scanner has to catch.
+
+### Interaction
+
+**No edit mode.** HTML5 drag-and-drop already separates a click from a drag — a `click` only fires if
+no drag occurred — so an item is permanently clickable *and* permanently draggable.
+
+- **Item overflow menu:** Move to…, Rename…, Remove.
+- **Section header:** the section name, an **Add items** button opening the picker, and an overflow
+  menu carrying Rename section…, Column count (1–6), Delete section.
+- **Component header:** the active layout's name as a `lightning-button-menu` listing every layout
+  with the active one checked, then New layout…, Rename layout…, Delete layout….
+- **Deleting a section** returns its items to the available pool; it does not discard them.
+- **Sections reorder** by dragging the card, through the same `reorder` function on a different axis.
+
+**Autosave, debounced ~1s.** A drag flurry coalesces into one `update` on one record. There is no
+unsaved state to design, warn about, or lose.
+
+**First open.** A user with no layout record sees one seeded section, "All Items", holding every tab
+they can reach. It is **computed, not written** — no record exists until the user's first actual
+change. Otherwise every user who opens the tab once generates a row, including those who never
+customise, to store something derivable from the platform. The seeded card is long (174 items in a
+bare org), which is precisely what All Items looks like today.
+
+### Keyboard access
+
+Salesforce's own `salesforce-ux/dnd-a11y-patterns` is adopted, and it is adopted whole because the
+two halves differ:
+
+- **Within a section:** Space to grab, arrows to move, Space to drop, Escape to cancel. An
+  `aria-live="assertive"` region announces grab, each move, drop and cancel; an `aria-describedby`
+  instruction node is attached **only while grabbed**; Tab is `preventDefault`ed during drag mode.
+- **Between sections:** arrow keys deliberately do **not** cross containers. The item's **Move to…**
+  menu is the cross-section mechanism, and it is the same menu a mouse user gets.
+- `aria-grabbed` / `aria-dropeffect` are **not** used — deprecated in ARIA 1.1+, and the first-party
+  reference implementation does not use them either.
+
+Without this, two Outcomes would be mouse-only.
+
+### Styling
+
+Compose from base components (`lightning-card`, `lightning-button-menu`, `lightning-modal`) wherever
+one exists — they adopt SLDS 2 automatically, and the only documented way to break that is our own
+CSS overriding their internals, which we do not do.
+
+**Dark mode requires no code.** Under Cosmos the colour hooks are authored as CSS `light-dark()` —
+`--slds-g-color-surface-1` is `light-dark(#fff, #242424)` — and the platform sets the colour-scheme
+class at the root. Two prohibitions follow, both of which would look like diligence: **no
+`prefers-color-scheme` media query** (the user's setting is Light / Dark / **System**, and a
+hand-rolled query overrides an explicit "Light" choice on a dark OS) and **no JS colour-mode logic**.
+
+**Use semantic hooks only.** 38 colour hooks have no `light-dark()` and stay fixed in dark mode — the
+`--slds-g-color-palette-*` ramps, every `*-base-50`/`*-base-100`, `--slds-g-color-accent-container-1`,
+the `disabled` family. They pass a "uses a hook" check and behave like a hard-coded colour.
+`--slds-c-*` component hooks are unsupported under SLDS 2 **and the linter does not catch them**, so
+that one is on review. Our own custom properties are prefixed `--rstk-nav-`.
+
+**Column count is a computed class**, `cols-1` … `cols-6`, each a CSS Grid
+`repeat(N, minmax(0, 1fr))`. Not `lightning-layout`, which cannot express 5 columns; and not an
+inline style, which the linter would flag — it validates `width` but not `grid-template-columns`.
+
+Focus rings use `--slds-g-shadow-outline-focus-1` and its siblings rather than a hand-rolled outline,
+which would fail contrast in one mode.
+
+### Making Outcome 9 verifiable
+
+Outcome 9 is currently unverifiable in this repo: `npm run lint` globs only `**/{aura,lwc}/**/*.js`,
+so no CSS or HTML is linted at all. This spec closes that:
+
+1. Add `sldsCssPlugin()` from `@salesforce-ux/eslint-plugin-slds` to the existing flat
+   `eslint.config.js`, scoped to `**/lwc/**/*.{css,html}`.
+2. Add one `pr-checks.yml` job running `eslint --max-warnings 0`, matching the house style of one
+   independent job per entry with the `draft == false` guard.
+
+**`--max-warnings 0` is the load-bearing part.** The linter defaults hard-coded colour values to
+severity *warning*, and warnings exit 0 — so the obvious `slds-linter lint` job goes green on a
+component made entirely of hex codes.
+
+Two house-rule corrections ship with it, because a rule that fails the lint it encodes will mislead
+every future spec:
+
+- `rstk-lwc-standards.md` — "Follow SLDS design tokens" names the deprecated `--lwc-*` mechanism, and
+  `lwc-token-to-slds-hook` is an **error**-severity rule. Change to SLDS 2 global styling hooks.
+- `rstk-slds2-ux-standards.md` — its examples use bare `var(--hook)`; the linter requires a fallback.
+  Adopt the fallback form. Also: `--slds-g-color-border-info-1` does not exist, and the four
+  focus-ring hooks are missing from the shadow list.
+
+### What an administrator must do
+
+Neither of these can ship as source, and both are now in `## Out of scope` as admin steps:
+
+1. **Place the tab in an app.** Setup → App Manager → Edit → Navigation Items. `CustomApplication`
+   deploys as a **full replace** of an app's nav list — there is no append verb — so shipping one
+   would clobber the customer admin's own navigation.
+2. **Assign the permission set.** `PermissionSetAssignment` is data, not metadata. The only
+   no-admin-action route is profile tab visibility, which this repo's `.forceignore` blocks.
+
+What *does* ship: the `CustomTab` (`<lwcComponent>` pointing straight at the bundle — no Aura
+wrapper, so the house ban holds; `<label>` and `<motif>` both required), the `js-meta.xml` with
+`<isExposed>true</isExposed>` and all three targets, and a decomposed permission set whose tab
+settings land at `permissionsets/<Name>/objectSettings/<TabName>.objectSettings-meta.xml` with
+visibility `Visible` (`DefaultOn` is Profile-only and is rejected outright).
+
+### Test entry points
+
+Two, because there are two genuinely different paths.
+
+1. **`c-salesforce-navigator`** — the component, driven through jest with the `lightning/navigation`
+   mock and `getNavItems` as an LDS test wire adapter. One test proves Outcomes 5 and 6 together: set
+   a rename, assert the rendered text is the custom label **and** that the emitted `pageReference` is
+   unchanged.
+2. **`navigatorLayoutModel`** — the pure module, for placement maths, seeding, access intersection
+   and payload round-tripping. Both the mouse path and the keyboard path call the same `reorder`.
+
+`NavigatorLayoutController` is driven directly by Apex tests under `System.runAs`.
+
+**One-time repo change this requires:** the lwc-recipes `lightning/navigation` mock plus a
+`moduleNameMapper` entry, placed at repo-root `test/jest-mocks/` and **not** under `force-app/`, per
+this repo's own `.forceignore` convention that the jest harness must never reach a packaged org.
+Without it `lightning/navigation` resolves to the built-in stub, whose `Navigate` is a no-op that
+records nothing — the repo cannot assert navigation today.
+
+**The honest ceiling.** jsdom has no `DragEvent` and no `DataTransfer`; `getBoundingClientRect()`
+returns zeros and `elementFromPoint` throws. The drag *gesture* is not unit-testable. The handlers
+and the resulting model are, via a hand-rolled `CustomEvent` with a fake `dataTransfer`. Anything
+claiming to test the gesture itself needs a browser driver against a real org, which is not in this
+spec.
+
+### Known unverified
+
+- **No API is documented as the backing source of the All Items list.** All Items ≡ *tabs whose tab
+  setting is not Hidden for this user* is inferred from a Help article, not stated. Whether
+  `getNavItems` matches that predicate exactly should be confirmed empirically against a
+  non-administrator before Outcome 1 is called done.
+- **Dark mode is itself documented as Beta**, and is not supported in Setup. SLDS 2 is not available
+  on Experience Cloud at all — if this component is ever pointed at a site, Outcome 9 is unachievable
+  there.
+- **`dataTransfer.setDragImage()` was broken under Locker** and it is unconfirmed whether LWS fixed
+  it. Only matters if the design later wants to suppress the browser's default drag ghost.
+
+### Next act on the surface
+
+A cheap HTML sketch was agreed for the section header, the item overflow menu, the picker and the
+empty-section state — the "what should this do" questions. `dev-path:sketch`, pointed at this slug,
+in a parallel session. It does not block the gate, and it is deliberately *not* a facsimile of
+Lightning: density and native feel are not in dispute, and a facsimile would only collect feedback on
+its own inaccuracies.
 
 ## Evidence
 
@@ -420,3 +735,17 @@ Engineer (jstephans@rootstock.com), typed at `dev-path:initiate`, 2026-08-24:
 > that users start from is a separate design with its own admin surface, permission gating and
 > publish lifecycle; it is a second spec, reached by running dev-path:initiate again. There is no
 > upstream entry on this spec to carry across to it."
+
+Engineer (jstephans@rootstock.com), at `dev-path:technical-design`, 2026-08-24, to round 1 (Q1–Q13:
+the isolation Outcome's rewording, the admin-step split, first-open seeding, global layout scope,
+render-time access resolution, `getNavItems` behind an adapter, the JSON payload shape, the API
+version bump, the namespace altitude stop, text-only items, the accessibility pattern, the SLDS lint
+gap, and the test entry points):
+
+> "Agree with your recommendation on all of these."
+
+Engineer (jstephans@rootstock.com), at `dev-path:technical-design`, 2026-08-24, to round 2 (Q14–Q22:
+no edit mode, the layout switcher, the item picker, the column range, section operations, autosave,
+compute-don't-write on first open, one Apex controller, and the sketch detour):
+
+> "Agree with your recommendation on all of these."
