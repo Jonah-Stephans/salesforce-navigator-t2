@@ -573,5 +573,128 @@ still there tomorrow.
       one, and that the cost stayed at `dmlUsed <= 2` / `queriesUsed <= 3`. `activatingOneUsersLayoutDoesNotDisturbAnother`
       covers the cross-user half. Zero-active is reachable only via `makeActive: false`, which the
       LWC never sends, and `adoptActiveLayout` falls back to `layouts[0]` regardless.
+- [ ] **The client half of the unreadable-row handling has no test at all, and losing it empties the
+      user's Navigator silently.** Re-opens finding 4, whose fix box claims "The client half matches:
+      `adoptActiveLayout` chooses the active layout from the readable rows only, and an unreadable row
+      raises the same alert and the same autosave suppression as a failed read". The Apex half got two
+      new tests; the client half got none, and both of its two lines can be deleted with the whole
+      suite staying green. Mutation-checked, twice, in
+      `salesforceNavigator.js` `adoptActiveLayout`:
+      deleting the `layouts.some((row) => row.isReadable === false)` block that sets
+      `layoutLoadErrorMessage` gives **98 passed, 98 total**; replacing
+      `const readable = layouts.filter((row) => row.isReadable !== false)` with
+      `const readable = layouts` also gives **98 passed, 98 total**. The second is not a cosmetic
+      regression: with a `getLayouts` returning one readable row plus one unreadable **active** row
+      (`isReadable: false`, `layoutJson: null`, as `unreadableDto` builds it), the unreadable row is
+      then adopted, `deserializeLayout(null)` returns `{sections: []}`, and the rendered section list
+      goes from `["Daily work"]` to `[]` — every tab the user has vanishes from the Navigator, with
+      the alert gone too if the first mutation went with it. Current behaviour is correct and was
+      verified against a real two-row payload: alert raised, *New section* hidden, `createLayout` and
+      `updateLayout` both at 0 calls, and the readable row adopted rather than the unreadable active
+      one. It is the assertion that is missing, not the code. Add a `salesforceNavigator` jest test
+      that mocks `getLayouts` with one readable row and one unreadable active row and asserts all
+      four: the readable row's sections render, the `[role="alert"]` is present, no save is made
+      after a change, and the section list is not empty.
+- [ ] **`adoptActiveLayout`'s refusal to reassign over an already-set `storedLayout` is not held down
+      by any test.** Re-opens finding 1, whose fix box claims "`adoptActiveLayout` also refuses to
+      assign over a `storedLayout` that is already set, so it is safe on its own rather than by
+      depending on the template". Mutation-checked: deleting
+      `if (this.storedLayout !== undefined) { return; }` from `adoptActiveLayout` leaves
+      **98 passed, 98 total**. This is the same shape of gap the previous critic raised as finding 8
+      and this pass accepted and fixed — a defence-in-depth pair where only one half is asserted, so
+      the pair can be quietly reduced to one. The template gate (`isLoading` including
+      `!hasLoadedLayout`) is the half that is tested, by `offers nothing to change until the stored
+      layout has arrived`; the guard inside `adoptActiveLayout` is the half that is not. Hold it the
+      way finding 8 was held — create the condition the guard exists for rather than relying on the
+      template: call `adoptActiveLayout` against a component whose `storedLayout` is already set (or
+      set `storedLayout` before settling a held-open `getLayouts`) and assert the already-set layout
+      survives.
+- [ ] **The layout-load alert tells the user to reload the page, which cannot help on the
+      unreadable-row path, and the reason the controller took trouble to produce is discarded.**
+      Re-opens the messaging half of findings 2 and 4. `LAYOUT_LOAD_ERROR_MESSAGE` is a single fixed
+      string, "We could not load your saved layout, so this is the default arrangement. Reload the
+      page before changing anything - changes are not being saved.", and `adoptActiveLayout` raises
+      that same string for an unreadable row. Verified by rendering the two-row payload above: that
+      is the exact text on screen. For the failed-read path the advice is right, because the failure
+      is transient. For the unreadable-row path it is wrong in a way that costs the user real time:
+      the row is at a schema version this package cannot read, or was hand-edited, so every reload
+      reproduces the identical alert forever, and the user is told to keep doing the one thing that
+      cannot work. Meanwhile `LayoutDTO.unreadableReason` — which carries "This layout was saved at
+      schema version 99, which this version of the Navigator cannot read." — is read by nothing on
+      the client; `adoptActiveLayout` never touches the field. Distinguish the two conditions: keep
+      the reload wording for the rejected promise, and on the unreadable-row path say that a specific
+      saved layout cannot be read by this version and surface `unreadableReason`, so the user has
+      something to give an administrator instead of a reload loop.
+- [x] false positive — that gating on `hasItems` hides the Navigator from a user who genuinely has
+      no accessible tabs. Rendered a component whose wire emits `{ navItems: [] }`: the
+      `lwc:elseif={isEmpty}` branch renders "You do not have access to any tabs yet.", with no
+      spinner left spinning. Only the editing affordances are withheld, which is correct — there is
+      nothing to arrange. `isEmpty` and `hasItems` are complementary over the same
+      `!isLoading && !hasError` prefix, so no ordering leaves both false once loading is done.
+- [x] false positive — that the loading window can still be entered under some other ordering.
+      Drove four orderings against the real component. Layout resolves before any tab page: spinner
+      shown, no *New section* button, button appears only once the final page lands. Tabs error and
+      `getLayouts` rejects together: the tab-error alert renders and the spinner is gone, because
+      `isLoading` is `!hasError && (...)`. Tab wire errors *after* the layout landed: same, error
+      alert and no spinner. Layout in flight while tabs complete: covered by the shipped test, and
+      mutation-checked — dropping `!this.hasLoadedLayout` out of `isLoading` turns exactly
+      `offers nothing to change until the stored layout has arrived` red.
+- [x] false positive — that `adoptActiveLayout`'s refusal to reassign could break a legitimate
+      re-emission from the LDS cache. There is no such re-emission to break: `getLayouts` is an
+      imperative Apex call made once from `connectedCallback` and deliberately not wired — the
+      comment on that call says so — so the guard can only ever see the one resolution. The wire
+      that *can* re-emit is `getNavItems`, which never touches `storedLayout`.
+- [x] false positive — that suppressing every save while an unreadable row exists is too broad a
+      rule. Judged the call the fix pass recorded rejecting, and it holds for this slice: every write
+      this component makes passes `makeActive: true`, and `deactivations` clears `Is_Active__c` on
+      **every** other row the owner has, so any save deactivates the unreadable row whichever row was
+      being saved — and with no switcher shipped, deactivating it puts it out of reach. The cost is
+      real (one bad row means this user saves nothing until it is removed) but it is the smaller loss,
+      and the narrower rule the fix pass describes would not actually avoid it. The wording shown to
+      the user is a separate matter and is a finding above.
+- [x] false positive — that the new alert misses SLDS semantic hooks. It reuses the existing
+      `rstk-nav-error` / `rstk-nav-error__text` rules, which are `--slds-g-color-error-container-1`,
+      `--slds-g-color-on-error-1`, `--slds-g-spacing-4`, `--slds-g-radius-border-2` and
+      `--slds-g-font-scale-1`, every one a semantic hook in `var(--hook, fallback)` form. No
+      `--slds-c-*`, `--sds-*`, `--lwc-*`, no `prefers-color-scheme`, none of the 38 non-`light-dark()`
+      colour hooks. `npm run lint` (`--max-warnings 0`), `npm run lint:slds-gate` (six `ok:`) and
+      `npm run prettier:verify` all clean.
+- [x] false positive — that the fix traded away any of the coverage the previous critic established.
+      Re-ran all seven of that critic's mutations against the fixed tree; every one is still caught.
+      `save()` serialising the resolved layout: 1 red. `persist` always creating: 3 red. `persist`
+      always updating: 15 red. Leading-edge debounce: 5 red. Serialiser spreading the item through:
+      1 red. `resolveLayout` pruning in place: 4 red. `setSectionColumns` mutating its input: 2 red —
+      the two new purity deep-compares, which is what finding 7 asked for.
+- [x] false positive — that one of the three new LWC tests is decoration. Each was mutation-checked
+      individually and each bites, named by the runner. Dropping `hasLoadedLayout` out of `isLoading`
+      reds `offers nothing to change until the stored layout has arrived, so the fetch cannot discard
+      a change`. Removing the `hasLayoutLoadError` guard from `scheduleSave`, and separately not
+      setting `layoutLoadErrorMessage` in the `.catch`, each red `tells the user when their stored
+      layout could not be read, and saves nothing until it can`. Ungating the *New section* button in
+      the template reds 3, including `offers no New section button until every page of tabs has
+      arrived`. (The gap is not in these three — it is in the untested client half of finding 4,
+      above.)
+- [x] false positive — that finding 8's new Apex test does not genuinely bite. Deleted the
+      `WHERE OwnerId = :UserInfo.getUserId()` line from `ownLayouts()` and deployed it to the org.
+      `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack` failed with `Assertion Failed: A layout
+      shared with the running user is still not theirs - sharing must never decide whose layouts this
+      class returns: Expected: 0, Actual: 1`, and it was the only failure in the run. Predicate
+      restored and redeployed; `sf project deploy start --dry-run` reports "No changes to deploy" and
+      the suite is back to 22 ran / 100% pass.
+- [x] false positive — that findings 4, 5 and 9 are unheld on the Apex side. Deployed three further
+      mutations together. Removing the per-row `try` from `getLayouts` reds both
+      `anUnreadableFutureSchemaVersionIsReportedOnItsOwnRowRatherThanGuessedAt` and
+      `aStoredPayloadThatIsNotJsonIsReportedOnItsOwnRowRatherThanFailingTheRead`, each with the
+      `AuraHandledException` escaping the call. `columnsOf` falling back to `MIN_COLUMNS` reds
+      `aSectionWithNoColumnCountAtAllIsStoredAtTheContractDefault` with `Expected: 3, Actual: 1`.
+      `nextSortOrder` returning `existing.size() + 1` reds
+      `aNewLayoutGoesAfterTheHighestSortOrderEvenAfterADelete` with `Expected: 3, Actual: 2`. All
+      restored and redeployed.
+- [x] false positive — that `nextSortOrder` misbehaves on an empty list, a single row, or rows with
+      null or duplicate sort orders. Deployed a temporary probe test to the org rather than reasoning
+      about it. Empty list gives 1; a row carrying a **null** `Sort_Order__c` alongside a row at 1
+      gives 2, the null being skipped rather than counted; two rows both at 7 give 8. `highest`
+      starts at 0 and only non-null values raise it, so no ordering of nulls or duplicates can hand
+      back a value already in use. Probe removed.
 
-fix_cycles: 0
+fix_cycles: 1
