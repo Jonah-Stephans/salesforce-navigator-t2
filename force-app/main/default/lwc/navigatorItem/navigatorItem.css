@@ -1,0 +1,29 @@
+/* An item is a real, permanently-interactive link — SLDS 2 removes borders
+   from cards, but this is not a card. It is styled as an interactive
+   element, so a border-2 (functional/interactive) is correct here, not a
+   decorative border-1. */
+.rstk-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--slds-g-spacing-3, 0.75rem);
+  padding: var(--slds-g-spacing-3, 0.75rem) var(--slds-g-spacing-4, 1rem);
+  border: var(--slds-g-sizing-border-1, 1px) solid
+    var(--slds-g-color-border-2, #747474);
+  border-radius: var(--slds-g-radius-border-1, 0.25rem);
+  background-color: var(--slds-g-color-surface-container-1, #ffffff);
+  text-decoration: none;
+}
+
+.rstk-nav-item:hover {
+  background-color: var(--slds-g-color-surface-container-2, #f3f3f3);
+}
+
+.rstk-nav-item:focus-visible {
+  box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
+}
+
+.rstk-nav-item__label {
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+  font-weight: var(--slds-g-font-weight-4, 400);
+  color: var(--slds-g-color-on-surface-2, #2e2e2e);
+}

@@ -1,0 +1,12 @@
+/* The error state is a genuine feedback message, so the error family is the
+   correct semantic pairing here — not decoration. */
+.rstk-nav-error {
+  padding: var(--slds-g-spacing-4, 1rem);
+  border-radius: var(--slds-g-radius-border-2, 0.5rem);
+  background-color: var(--slds-g-color-error-container-1, #fe9339);
+}
+
+.rstk-nav-error__text {
+  color: var(--slds-g-color-on-error-1, #181818);
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+}
