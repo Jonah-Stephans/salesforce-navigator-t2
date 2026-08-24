@@ -121,9 +121,28 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
       : "rstk-nav-item";
   }
 
-  /** The idref, and the id itself, exist only while the item is grabbed. */
+  /** The instruction node's id exists only while the item is grabbed. */
   get instructionsId() {
     return this.grabbed ? `rstk-nav-drag-${this.tabId}` : undefined;
+  }
+
+  /**
+   * The resting hint's id, which is the mirror image: it exists only while
+   * the item is *not* grabbed. The two nodes are alternatives, never
+   * co-present, so that the anchor is never described by both at once.
+   */
+  get hintId() {
+    return this.grabbed ? undefined : `rstk-nav-hint-${this.tabId}`;
+  }
+
+  /**
+   * Which of the two the anchor points at. A single idref rather than a pair,
+   * because while a drag is under way the instructions are the only thing the
+   * user needs and reading the teaser ahead of them on every arrow press
+   * would be noise.
+   */
+  get describedById() {
+    return this.grabbed ? this.instructionsId : this.hintId;
   }
 
   /**

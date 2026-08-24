@@ -503,10 +503,15 @@ describe("c-navigator-item", () => {
     it("attaches the instruction text only while grabbed, never permanently", async () => {
       const element = await settled(createNavigatorItem({ index: 0 }));
 
-      expect(anchorOf(element).hasAttribute("aria-describedby")).toBe(false);
+      // The anchor is described at rest — by the four-word hint, tested
+      // below — so the criterion is about *this* node: the instruction text
+      // is not in the document and nothing points at it.
       expect(
         element.shadowRoot.querySelector(".rstk-nav-item__instructions")
       ).toBeNull();
+      expect(anchorOf(element).getAttribute("aria-describedby")).not.toMatch(
+        /rstk-nav-drag-/
+      );
 
       element.grabbed = true;
       await settled(element);
@@ -519,6 +524,64 @@ describe("c-navigator-item", () => {
       expect(instructions.textContent).toMatch(/space/i);
       expect(instructions.textContent).toMatch(/escape/i);
       // Associated, not merely present: the idref must resolve to that node.
+      const instructionsId = instructions.getAttribute("id");
+      expect(anchorOf(element).getAttribute("aria-describedby")).toBe(
+        instructionsId
+      );
+
+      element.grabbed = false;
+      await settled(element);
+
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-item__instructions")
+      ).toBeNull();
+      expect(anchorOf(element).getAttribute("aria-describedby")).not.toBe(
+        instructionsId
+      );
+    });
+
+    it("tells a keyboard user the move gesture exists before they have guessed it", async () => {
+      // A sighted mouse user infers draggability from the grab cursor. A
+      // keyboard user has nothing until they have already pressed Space, so
+      // the full instructions — which are correctly attached only while
+      // grabbed — arrive too late to be the thing that teaches the gesture.
+      // A terse, permanent hint is what closes that. Terse deliberately: it
+      // is read on every focus, and a bare org shows ~174 items.
+      const element = await settled(createNavigatorItem({ index: 0 }));
+
+      const hint = element.shadowRoot.querySelector(".rstk-nav-item__hint");
+      expect(hint).not.toBeNull();
+      expect(hint.classList.contains("slds-assistive-text")).toBe(true);
+      expect(hint.textContent).toMatch(/space/i);
+      // Not a sentence, and not the item's own label again — the accessible
+      // name already carries that, and repeating it doubles every focus.
+      expect(hint.textContent.trim().split(/\s+/).length).toBeLessThanOrEqual(
+        6
+      );
+      expect(hint.textContent).not.toMatch(/our site/i);
+      // Associated, not merely present: an idref that does not resolve is an
+      // association that only looks present.
+      expect(anchorOf(element).getAttribute("aria-describedby")).toBe(
+        hint.getAttribute("id")
+      );
+    });
+
+    it("swaps the hint for the full instructions while grabbed, never both at once", async () => {
+      // The grabbed state must win outright. Two description nodes on one
+      // anchor would have a screen reader read the teaser and the
+      // instructions back to back on every arrow press.
+      const element = await settled(createNavigatorItem({ index: 0 }));
+
+      element.grabbed = true;
+      await settled(element);
+
+      const instructions = element.shadowRoot.querySelector(
+        ".rstk-nav-item__instructions"
+      );
+      expect(instructions).not.toBeNull();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-item__hint")
+      ).toBeNull();
       expect(anchorOf(element).getAttribute("aria-describedby")).toBe(
         instructions.getAttribute("id")
       );
@@ -526,10 +589,14 @@ describe("c-navigator-item", () => {
       element.grabbed = false;
       await settled(element);
 
-      expect(anchorOf(element).hasAttribute("aria-describedby")).toBe(false);
+      const hint = element.shadowRoot.querySelector(".rstk-nav-item__hint");
+      expect(hint).not.toBeNull();
       expect(
         element.shadowRoot.querySelector(".rstk-nav-item__instructions")
       ).toBeNull();
+      expect(anchorOf(element).getAttribute("aria-describedby")).toBe(
+        hint.getAttribute("id")
+      );
     });
 
     it.each([false, true])(

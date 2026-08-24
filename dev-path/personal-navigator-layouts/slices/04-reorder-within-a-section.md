@@ -145,7 +145,11 @@ gesture on this markup at all — which is unreachable here and belongs to a bro
       form is both safer than the one that was blocked — it writes nowhere the working tree can see —
       and unblocked. A later pass hitting the same wall should reach for it rather than stopping.
 
-- [ ] **How a keyboard user discovers the grab gesture is a *what*, not a *how*, so this fix pass did
+- [x] fixed — the engineer decided it: a persistent SR-only hint on each item, terse, replaced by
+      the fuller instructions while grabbed. Built and pinned; see the matching `## Critique
+      findings` entry ("A keyboard user has no route to discover the grab gesture") for exactly what
+      shipped, the two assertion failures watched first, and the two mutations that catch it.
+      **How a keyboard user discovers the grab gesture is a *what*, not a *how*, so this fix pass did
       not decide it.** The critique finding below flags it for a human decision explicitly, and the
       obvious remedy — a permanent `aria-describedby` — is the thing criterion 3 forbids. The
       candidates the critic names that do not violate it are `aria-roledescription` on the card and
@@ -153,6 +157,19 @@ gesture on this markup at all — which is unreachable here and belongs to a bro
       reader user hears on every tab through the Navigator, which is a product decision rather than
       an implementation one. Nothing was added and nothing was removed; the finding's box is left
       open with the critic's text intact.
+
+### A qualifying note on criterion 3
+
+Criterion 3 reads *"the instruction text is associated with the item only while it is grabbed, not
+permanently"*, and that remains exactly true of the instruction text: the
+`rstk-nav-item__instructions` node and its id exist only while `grabbed`, and its test still asserts
+both that the node is absent at rest and that nothing points at it. What has changed is that the
+anchor is no longer *undescribed* at rest — it is described by a separate four-word hint node, added
+by the engineer's decision above so a keyboard user has any route to the gesture at all. So the
+criterion should be read as being about the instruction text specifically and not as "the anchor
+carries no `aria-describedby` unless grabbed", which is what its test previously asserted. That one
+assertion was rewritten to say the narrower, true thing; the mutation it exists to catch (the
+instruction node and its idref attached permanently) still fails it.
 
 ### Decisions taken during the build
 
@@ -391,7 +408,25 @@ correct forever would still pass.** That is a code-review matter, not a testable
       `moveSection` has a payload round-trip test in the model — but the sentence should either be
       narrowed or a keyboard-driven remount added. Either resolution is fine; the claim as written is
       not.
-- [ ] **A keyboard user has no route to discover the grab gesture.** Criterion 3's "only while
+- [x] fixed — per the engineer's decision, each item now carries a persistent screen-reader-only
+      hint, `Press Space to move.`, in a `slds-assistive-text` span with its own id
+      (`rstk-nav-hint-<tabId>`), and the anchor's `aria-describedby` is now a computed
+      `describedById` that points at the hint at rest and at the instruction node while grabbed.
+      The two nodes are `lwc:if` / `lwc:else` alternatives, so the grabbed state wins outright and
+      the anchor is never described by both at once. Four words on purpose — it is spoken on every
+      focus and a bare org shows ~174 items — and it does not repeat the label, which `aria-label`
+      already carries. No `aria-grabbed` or `aria-dropeffect` was introduced; the repo is still
+      clean of both. Two tests written first and watched red: `tells a keyboard user the move
+      gesture exists before they have guessed it` failed with `expect(received).not.toBeNull() —
+      Received: null` on the hint node, and `swaps the hint for the full instructions while
+      grabbed, never both at once` failed the same way. Both mutations of the shipped fix are
+      caught: deleting the `lwc:else` block fails **2** tests, and making the hint persist into the
+      grabbed state (rendering the span unconditionally and dropping `hintId`'s guard) fails **1**,
+      with `expect(received).toBeNull() — Received: <span class="slds-assistive-text
+      rstk-nav-item__hint" id="rstk-nav-hint-standard-OurSite-0">Press Space to move.</span>`.
+      Criterion 3 stays true of the instruction node and its own test still pins it — see the
+      qualifying note under `## Deviations`. Suite is 211 and green.
+      **A keyboard user has no route to discover the grab gesture.** Criterion 3's "only while
       grabbed" is correctly implemented and correctly ticked, but nothing takes over the job the
       permanent instruction would have done. The section card is a bare `<article tabindex="0">` with
       no accessible name, no `role`, and no `aria-roledescription`; the item is a plain link. Neither
