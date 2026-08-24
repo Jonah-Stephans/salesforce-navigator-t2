@@ -1,5 +1,6 @@
 ---
 done: true
+fix_cycles: 0
 depends_on:
   - dev-path/personal-navigator-layouts/slices/01-slds-lint-gate.md
 touches:
@@ -108,3 +109,142 @@ label, and clicks one to arrive at it.
   `/services/data/v67.0/connect/app-launcher/panel` as the standard user returned `NOT_FOUND`, and no
   other plausible endpoint was found. This is a genuine "cannot be verified here," not a failure —
   left unticked.
+
+### Slice pass (review after build)
+
+- [ ] The pagination test does not test pagination. `salesforceNavigator.test.js`'s "requests more
+      than one page so more than 100 accessible tabs are all listed" emits both pages itself and
+      then asserts only the rendered count, so it asserts what the test sent rather than what the
+      component did with it. Proved by mutation: replacing the handler body in
+      `salesforceNavigator.js` with `this.items = this.items.concat(data.navItems);` and dropping
+      the `this.page += 1` entirely leaves all 5 navigator tests green (verified —
+      `npx sfdx-lwc-jest -- force-app/main/default/lwc/salesforceNavigator` printed 5 passed).
+      That mutant never advances the wire config, so in a real org it would request page 0 forever
+      and the admin would see 100 of 175 tabs — precisely the failure criterion 4 exists to
+      prevent. The missing assertion is that the component asked for page 1: the LDS test wire
+      adapter exposes `getNavItems.getLastConfig()` (confirmed available — after emitting page 0
+      with a `nextPageUrl` it returns
+      `{"formFactor":"Large","navItemType":"Standard,Custom,LightningComponent,LightningPage,AllPages","scope":"visible","pageSize":100,"page":1}`).
+      Assert `getLastConfig().page` is 1 after the first emission, and that it stops advancing once
+      `nextPageUrl` is null. Criterion 4 would not survive deletion of its test because its test is
+      not currently holding it up.
+
+- [ ] Wire re-emission after pagination completes duplicates items without bound.
+      `salesforceNavigator.js` resets nothing: `this.page` keeps its final value forever, and the
+      merge branch is keyed on `this.page === 0`, so every subsequent emission for the *same* final
+      page config takes the `concat` branch and appends the last page again. `getNavItems` is a UI
+      API / LDS adapter, so a cache refresh re-delivering the current page is a normal event, not a
+      contrived one. Verified with a scratch probe against the committed component: emit page 0
+      (2 items, `nextPageUrl` set), emit page 1 (1 item, `nextPageUrl: null`) — 3 items rendered;
+      re-emit that same final page — 4; re-emit again — 5. Each re-emission also logs
+      `[LWC error]: Duplicated "key" attribute value in "<c-salesforce-navigator>" ... A key with
+      value "8:T_2" appears more than once in the iteration`, because `salesforceNavigator.html`
+      keys the iteration on `item.developerName`. A fresh delivery of page 0 needs to restart the
+      accumulation rather than append to it — the current `page`-based discriminator cannot tell
+      "next page" from "same page, redelivered".
+
+- [ ] An item is not a real link until `GenerateUrl` resolves, and never becomes one if it rejects.
+      `navigatorItem.js` sets `url` only in `connectedCallback`'s `.then`, and its `.catch` sets
+      `this.url = undefined` silently. With `url` undefined the template renders `<a>` with no
+      `href` at all (verified with a probe substituting a `GenerateUrl` that never resolves:
+      `hasHref: false`, `href: null`). An anchor without `href` is not a link — it is not in the
+      tab order, exposes no link role, and has no native middle-click or "open in new tab". That
+      is the whole mechanism criterion 6 relies on, and the Build worker's middle-click argument
+      above ("nothing is bound to `auxclick`, so the browser's native behavior is structurally
+      unreachable") holds only while an `href` is present. Note the mouse path still works in this
+      window because `handleClick` navigates independently of `url`, which is what makes the gap
+      easy to miss. `jsdom` reports `tabIndex: 0` for a bare `<a>` and so will not catch this;
+      any test must assert on the `href` attribute itself.
+
+- [ ] SLDS fallback values were invented rather than taken from the linter, and two of them land in
+      the wrong feedback family. `rstk-slds2-ux-standards.md` states "The linter tells you the right
+      fallback in the message it prints — take the value from there rather than inventing one."
+      Verified by temporarily stripping the fallbacks and running `npx eslint` on each file, then
+      restoring: for `salesforceNavigator.css` the linter asks for
+      `var(--slds-g-color-error-container-1, #ba0517)` and `var(--slds-g-color-on-error-1, #ffffff)`,
+      but the committed code uses `#fe9339` and `#181818` — an orange background with near-black
+      text, which is the warning palette, not the error palette. In exactly the environment the
+      fallback exists to serve (styling hooks unavailable) the error panel renders as a warning.
+      Two lesser divergences from the same run: `--slds-g-radius-border-2` is committed as `0.5rem`
+      against a suggested `0.25rem` (`salesforceNavigator.css`) and `--slds-g-radius-border-1` as
+      `0.25rem` against a suggested `0.125rem` (`navigatorItem.css`). The lint gate does not catch
+      any of these — it only checks that *a* fallback is present.
+
+- [ ] `navigatorTabSource` is not yet the single seam criterion 8 describes. The nav-item *shape*
+      lives outside it: `salesforceNavigator.js` unwraps `data.navItems`, and
+      `salesforceNavigator.html` reads `item.developerName` (twice — as the iteration key and as
+      `tab-id`), `item.label` and `item.pageReference`. Swapping the source therefore touches three
+      files, not one. The `getNavItems` import in the component is a separate matter and is
+      legitimately forced by `no-unexpected-wire-adapter-usages`, as the module header documents —
+      that carve-out is accepted here. What is not forced is the response-shape knowledge: a
+      normaliser exported from `navigatorTabSource` (response -> a stable `{ id, label,
+      pageReference }[]`) would put the envelope field and the item field names back behind the one
+      module, and would also give slices 03-08 a shape that does not move when the source does.
+
+- [ ] `navigatorItem.test.js`'s "exposes NavigationMixin.Navigate as a symbol so the anchor's target
+      is never string-derived" asserts a constant against itself. Its two expectations read
+      `NavigationMixin.Navigate` and `NavigationMixin.GenerateUrl` from the jest mock at
+      `test/jest-mocks/lightning/navigation.js`, where they are defined as `Symbol(...)` literals —
+      it exercises no production code and would pass with `navigatorItem.js` deleted. Its stated
+      purpose is already served, and served properly, by the sibling test: verified by mutating
+      `handleClick` to hand-derive `{ type: 'standard__navItemPage', attributes: { apiName:
+      this.tabId } }` from the tab name — "navigates using the stored pageReference, unmodified, on
+      a plain click" failed, while the symbol test stayed green. Delete it or replace it with an
+      assertion about the component.
+
+- [x] false positive — that something branches on `pageReference.type`, or reconstructs a reference
+      from a tab name or `developerName`. `grep` over `force-app/` finds no `switch` and no `if` on
+      `type` anywhere; `navigatorItem.js` passes `this.pageReference` straight to both
+      `GenerateUrl` and `Navigate`, and `salesforceNavigator.html` passes `item.pageReference`
+      straight through. Confirmed live by mutation: hand-deriving the target from `this.tabId`
+      turns "navigates using the stored pageReference, unmodified" red, so the verbatim path is
+      genuinely load-bearing and genuinely guarded.
+
+- [x] false positive — that the modifier-key guard is incomplete with respect to middle-click.
+      `navigatorItem.html` binds only `onclick`; there is no `onauxclick` and no `onmousedown`, so
+      a middle-click never reaches this component's JS and `evt.button` has nothing to test. The
+      Build worker's reasoning above is correct as stated. The dependency on `href` being present
+      is a separate finding, recorded above.
+
+- [x] false positive — `--slds-c-*` / `--slds-s-*` / `--lwc-*` / `--sds-*` authoring, a
+      `prefers-color-scheme` query, or JS colour-mode logic. `grep` for all six patterns across
+      `force-app/` returns nothing. The linter does not catch `--slds-c-*`, so this was checked by
+      hand rather than trusted to the gate.
+
+- [x] false positive — that any of the CSS uses one of the 38 colour hooks that carry no
+      `light-dark()` and so freeze in dark mode. Checked every colour hook in both stylesheets
+      against `@salesforce-ux/sds-metadata`'s `globalStylingHooksMetadata.global`: all four —
+      `error-container-1`, `on-error-1`, `border-2`, `surface-container-1`, `surface-container-2`,
+      `on-surface-2` — resolve to a `light-dark(...)` value under Cosmos (e.g.
+      `--slds-g-color-surface-container-1` is `light-dark(#fff, #242424)`). None is a
+      `palette-*`, a `*-base-50`/`*-base-100`, `accent-container-1`, a `disabled` or an
+      `accent-light-*`/`accent-dark-*`. Note this is orthogonal to the wrong-fallback finding
+      above: the hooks are right, the fallbacks behind two of them are not.
+
+- [x] false positive — that the jest mock or its `moduleNameMapper` entry could reach a packaged
+      org. `sfdx-project.json` declares exactly one package directory, `force-app`, and the mock
+      lives at repo-root `test/jest-mocks/lightning/navigation.js`, outside it; `.forceignore`
+      additionally excludes `**/jest.config.js` and `**/__tests__/**`. The mapper resolves
+      correctly — the navigation assertions only pass because the recording mock, not the built-in
+      no-op stub, is in use.
+
+- [x] false positive — that the shipped metadata diverges from what the spec verified. Read in
+      full: `salesforceNavigator.js-meta.xml` has `<apiVersion>67.0</apiVersion>`,
+      `<isExposed>true</isExposed>` and all three targets, with `<supportedFormFactors>` confined
+      to a `targetConfig` for `lightning__AppPage,lightning__HomePage` and no `targetConfig` and no
+      `<property>` for `lightning__Tab` — matching the spec's "server-enforced, confirmed by a
+      failed validation deploy". The `CustomTab` carries `<label>`, `<motif>` and `<lwcComponent>`
+      with no Aura wrapper. The decomposed permission set puts tab settings at
+      `permissionsets/Salesforce_Navigator_User/objectSettings/Salesforce_Navigator.objectSettings-meta.xml`
+      with a root `<PermissionSet>` carrying no `xmlns` and `<visibility>Visible</visibility>`,
+      exactly the path and value the spec's *What an administrator must do* specifies.
+
+- [x] false positive — that leaving criterion 3 wholly unticked is the wrong call. Agreed with the
+      Build worker's reasoning, and the first half is genuinely established: the component renders
+      `data.navItems` verbatim with no client-side filtering of its own, and the request is pinned
+      to `scope: "visible"` in `NAV_ITEMS_CONFIG`, so the rendered set is by construction whatever
+      the platform already scoped to the running user — corroborated by the live 111 -> 112 delta.
+      The second half names the App Launcher's All Items list as the ceiling, and the spec's own
+      *Known unverified* records that no API is documented as its backing source. A criterion is
+      met or it is not; half-established is not met, and ticking it would assert the unverifiable
+      half. Left unticked, as instructed and as deserved.
