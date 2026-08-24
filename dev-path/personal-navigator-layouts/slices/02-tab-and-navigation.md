@@ -1,6 +1,6 @@
 ---
 done: true
-fix_cycles: 0
+fix_cycles: 1
 depends_on:
   - dev-path/personal-navigator-layouts/slices/01-slds-lint-gate.md
 touches:
@@ -322,3 +322,121 @@ label, and clicks one to arrive at it.
       *Known unverified* records that no API is documented as its backing source. A criterion is
       met or it is not; half-established is not met, and ticking it would assert the unverifiable
       half. Left unticked, as instructed and as deserved.
+
+### Slice pass (re-review of the fix, commit `da92b06`)
+
+- [ ] The `url = "#"` default silently destroyed the only coverage of the resolved `GenerateUrl` URL
+      ever reaching the anchor. This re-opens part of finding 3 above: the fix is behaviourally
+      reasonable but it cost a real assertion. `test/jest-mocks/lightning/navigation.js` line 19
+      defines `const GenerateUrl = jest.fn(() => Promise.resolve("#"));` — the mock resolves the
+      exact same string the production default is now set to. So
+      `navigatorItem.test.js`'s "renders a real anchor whose href comes from
+      NavigationMixin.GenerateUrl", which asserts
+      `expect(anchor.getAttribute("href")).toBe("#")`, can no longer tell "the component applied
+      the URL GenerateUrl resolved" apart from "the component never applied anything and the `#`
+      placeholder is still sitting there". Proved by mutation: replacing the body of the `.then`
+      in `navigatorItem.js` (`this.url = url;` becomes a no-op) leaves the whole suite green —
+      `npx sfdx-lwc-jest -- --silent` printed `Tests: 19 passed, 19 total`. That mutant ships a
+      Navigator in which *every* item's `href` is `#`, so every middle-click and every cmd-click
+      opens a copy of the current page instead of the tab, which is exactly what criterion 6
+      exists to prevent. This mutation *was* caught before the fix: reverting `navigatorItem.js`
+      to the pre-fix `url;` (no default) together with the same no-op `.then` turns that test red
+      (`3 failed, 4 passed` on the `navigatorItem` suite), so the coverage existed and the `"#"`
+      default is what removed it. **Fix**: make the mock's default resolution a value that cannot
+      be confused with the placeholder — e.g. `jest.fn(() =>
+      Promise.resolve("/lightning/o/Account/home"))` — and assert the anchor's `href` equals that
+      resolved value rather than `"#"`. Re-run the no-op-`.then` mutation and confirm it goes red
+      before calling this closed. (Note the two new tests added by the fix pass, "still has a real
+      href while ... is pending" and "... rejects", are load-bearing and should stay: deleting the
+      `url = "#"` default turns both red.)
+
+- [ ] On the `GenerateUrl` rejection path the anchor now points at the wrong destination,
+      permanently and silently, and the new test blesses that state. This re-opens part of
+      finding 3 above. `navigatorItem.js`'s `.catch` leaves `url` at `"#"` forever, and
+      `handleClick` returns early without `preventDefault()` whenever `metaKey`, `ctrlKey` or
+      `shiftKey` is held (lines 46-48), and nothing at all is bound to `auxclick`. So for an item
+      whose `GenerateUrl` rejected, a cmd-click, a ctrl-click, a shift-click or a middle-click
+      hands `href="#"` to the browser and it opens a duplicate of the *current* page in a new tab
+      or window — not the tab the user aimed at, with no error shown. Criterion 6 asks that these
+      gestures "open it in a new browser tab"; opening the wrong page is a different failure from
+      being swallowed, and arguably a worse one, because the pre-fix behaviour (no `href`, so the
+      browser ignored the gesture entirely) at least failed visibly. The new test "still has a
+      real href, rather than losing it, when NavigationMixin.GenerateUrl rejects" asserts only
+      `anchor.hasAttribute("href")`, which is satisfied by a wrong destination, so it records this
+      as intended. The same wrong-destination window exists between first render and a successful
+      `GenerateUrl` resolving, but that window is a microtask or two and is not the substance of
+      this finding — the rejection path, which never ends, is. Note the plain-click path is
+      unaffected and correct: `handleClick` calls `preventDefault()` and navigates from
+      `this.pageReference`, independent of `url`. **Fix**: decide what an item whose URL could not
+      be generated should do for the new-tab gestures and make it do that visibly rather than
+      pointing at `#` — for example keep the anchor a link but mark it `aria-disabled` and
+      intercept `auxclick`, or surface the failure — and change the rejection test to assert the
+      chosen behaviour rather than the mere presence of an `href`.
+
+- [x] false positive — that the pagination assertion still does not bite. Re-ran the previous
+      critic's exact mutation (deleted `this.page += 1;` from `wiredNavItems`) and the suite went
+      red: `Tests: 2 failed, 17 passed, 19 total`. `getNavItems.getLastConfig().page` is genuinely
+      load-bearing now, and the second assertion (still `1` after the final emission) also bites —
+      a component that kept advancing past the last page would report `2`. Finding 1 is closed.
+
+- [x] false positive — that the duplication fix does not hold. Re-emitted the final page a third
+      time in the committed test and the count stays at 174; reverting the merge to the old
+      `this.page === 0 ? ... : this.items.concat(...)` discriminator turns the suite red
+      (`Tests: 1 failed, 18 passed, 19 total`). The `key` collision is gone too:
+      `salesforceNavigator.html` now keys on `item.id`, and `this.pages[this.page] =
+      normalizeNavItems(data)` overwrites the redelivered page's slot rather than appending, so no
+      duplicate `key` warning is logged. Indexing by `this.page` is sound here because the wire
+      config is what selects which page the adapter delivers, so a redelivery is always a
+      redelivery of the page currently requested. Finding 2 is closed.
+
+- [x] false positive — that the four SLDS fallback values are still wrong, or that something else
+      in either stylesheet regressed. Re-ran the linter's own probe rather than trusting the fix
+      report: replaced every `var(--hook, fallback)` with a bare `var(--hook)` in both stylesheets,
+      ran `npx eslint` on them, and read the 17 `no-slds-var-without-fallback` messages. All four
+      corrected values match the linter exactly — `--slds-g-radius-border-2, 0.25rem`,
+      `--slds-g-color-error-container-1, #ba0517`, `--slds-g-color-on-error-1, #ffffff`,
+      `--slds-g-radius-border-1, 0.125rem`. Every other fallback in both files also matches its
+      suggested value (`spacing-3, 0.75rem`; `spacing-4, 1rem`; `color-border-2, #747474`;
+      `sizing-border-1, 1px`; `surface-container-1, #ffffff`; `surface-container-2, #f3f3f3`;
+      `shadow-outline-focus-1, 0 0 0 2px #0b5cab`; `font-scale-1, 0.875rem`; `font-weight-4, 400`;
+      `on-surface-2, #2e2e2e`), so nothing regressed. Both files restored; `npm run lint`
+      (`--max-warnings 0`) and `npm run prettier:verify` are clean. Finding 4 is closed.
+
+- [x] false positive — that `navigatorTabSource` is still not the single seam. `grep` for
+      `navItems`, `developerName` and `pageReference` across `force-app/` finds `navItems` and
+      `developerName` only inside `navigatorTabSource.js` itself and inside test fixtures that
+      deliberately model the raw platform response. `salesforceNavigator.html` and
+      `navigatorItem.js` read only `id`, `label` and `pageReference` — the normalized names
+      `navigatorTabSource` itself defines, which is the contract, not leaked source knowledge.
+      Confirmed load-bearing by mutation: making `normalizeNavItems` reconstruct `pageReference`
+      from `developerName` instead of passing it through turns three tests red. Swapping the
+      source now touches `navigatorTabSource.js` alone. Finding 5 is closed.
+
+- [x] false positive — that deleting the symbol test lost coverage. Re-ran the mutation it claimed
+      to guard: changed `handleClick` to hand-derive `{ type: "standard__navItemPage", attributes:
+      { apiName: this.tabId }, state: {} }` instead of passing `this.pageReference`, and the suite
+      went red (`Tests: 2 failed, 17 passed, 19 total`) — "navigates using the stored pageReference,
+      unmodified, on a plain click" in `navigatorItem.test.js` and "navigates to the
+      platform-supplied pageReference, unmodified, when an item is clicked" in
+      `salesforceNavigator.test.js`. The sibling coverage is real, so the deletion cost nothing.
+      Finding 6 is closed.
+
+- [x] false positive — that exporting `GenerateUrl` from the jest mock weakened it or broke sharing
+      across mixin instances. The export adds no new behaviour to the mock: `GenerateUrl` was
+      already the single module-level `jest.fn()` that every `NavigationMixin` subclass's
+      symbol-keyed method delegates to, and exporting a reference to it changes nothing about that
+      delegation — the `salesforceNavigator` tests, which drive `navigatorItem` instances created
+      by the parent's template, still record navigation correctly through the same mock. Both new
+      uses drive states the real platform genuinely produces: a promise that has not settled, and a
+      rejected promise. Neither invents platform behaviour. The one sharp edge is that
+      `jest.clearAllMocks()` in `afterEach` clears call records but not a queued
+      `mockReturnValueOnce`/`mockRejectedValueOnce`, so an unconsumed queued value would leak into
+      a later test; both queued values are consumed by the single `GenerateUrl` call their own test
+      makes, so nothing leaks today. Not a defect as committed.
+
+- [x] false positive — that the `"#"` default made things worse on the plain-click path, pushed a
+      history entry, or jumped the page to the top. It does not: `handleClick` calls
+      `event.preventDefault()` unconditionally on the non-modifier path before navigating, and
+      `navigatorItem.test.js` asserts `clickEvent.defaultPrevented` is `true`. The browser never
+      follows `href="#"` on a plain click. The genuine cost of the `"#"` default is the two
+      findings recorded above, not this.
