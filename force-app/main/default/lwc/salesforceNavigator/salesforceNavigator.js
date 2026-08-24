@@ -24,7 +24,8 @@ import {
   reorder,
   moveItemWithinSection,
   moveItemBetweenSections,
-  moveSection
+  moveSection,
+  renameItem
 } from "c/navigatorLayoutModel";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
 import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
@@ -527,6 +528,35 @@ export default class SalesforceNavigator extends LightningElement {
     // The menu names a section and not a slot, so no destination index is
     // passed and the item goes to the end of that section.
     this.moveItemBetween(fromSection, fromIndex, toSection, undefined);
+  }
+
+  /**
+   * The one call site for a change of an item's wording, and it is a change of
+   * *wording* only: `renameItem` writes `rename` and never `id`, so nothing
+   * here can reach the `pageReference` the item navigates to. The rename is
+   * also local to this user's own layout row — the store is per-user and the
+   * controller filters on `OwnerId` — and nothing on this path writes tab
+   * metadata, so no other user's view of the tab and no org label changes.
+   *
+   * `index` is a position on screen, so `this.items` travels with the layout,
+   * exactly as it does for the two move axes — see `moveItemWithin`.
+   *
+   * Announced from here rather than from the section, and for one reason the
+   * section could not work around: when a rename is *cleared*, the wording the
+   * item goes back to is the platform's, which is not a thing the section
+   * knows until after the parent has applied the change. Reading the resolved
+   * label on either side of `applyLayout` names both.
+   */
+  handleItemRename(event) {
+    const { sectionIndex, index, rename } = event.detail;
+    const before = this.itemLabelAt(sectionIndex, index);
+
+    this.applyLayout(
+      renameItem(this.layout, this.items, sectionIndex, index, rename)
+    );
+    this.announce(
+      `${before} renamed to ${this.itemLabelAt(sectionIndex, index)}.`
+    );
   }
 
   itemLabelAt(sectionIndex, itemIndex) {

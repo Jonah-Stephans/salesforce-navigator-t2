@@ -26,6 +26,17 @@ const ARROW_DELTAS = {
 const MOVE_TO_PREFIX = "move-to-";
 
 /**
+ * The overflow menu's other entry: the user's own wording for this tab.
+ *
+ * A bare value rather than a prefixed one because, unlike a destination, it
+ * carries no argument — and it is the same spelling `navigatorSection` uses
+ * for the same action on a section name, which is deliberate: this is that
+ * component's interaction applied to an item, not a second one invented for
+ * the same job.
+ */
+const RENAME = "rename";
+
+/**
  * One tab: a real anchor, navigated with `NavigationMixin` against the
  * stored `pageReference` verbatim — no branching, no derivation. That is
  * what makes a rename (added by a later slice) structurally unable to
@@ -71,6 +82,15 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   // it back to `undefined` rather than leaving "#" in place — see the
   // comment there for why.
   url = "#";
+
+  /**
+   * The in-progress rename. Transient UI and nothing else — it is not a
+   * layout, it is not saved, and it exists only between the menu entry being
+   * chosen and the input being committed or abandoned. The same two fields
+   * `navigatorSection` holds for a section name, for the same reason.
+   */
+  isRenaming = false;
+  draftName = "";
 
   connectedCallback() {
     this[NavigationMixin.GenerateUrl](this.pageReference)
@@ -209,6 +229,10 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
 
   handleMenuSelect(event) {
     const value = event.detail.value;
+    if (value === RENAME) {
+      this.startRename();
+      return;
+    }
     if (!value || !value.startsWith(MOVE_TO_PREFIX)) {
       return;
     }
@@ -216,6 +240,75 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
       index: this.index,
       toSection: Number(value.slice(MOVE_TO_PREFIX.length))
     });
+  }
+
+  // -------------------------------------------------------------------
+  // The rename. This component reports the wording the user typed and its own
+  // position; what the item is *called* afterwards still arrives as `label`
+  // from the model, so there is no second copy of "what is this item called"
+  // anywhere in the chain.
+  // -------------------------------------------------------------------
+
+  /**
+   * The box opens on the wording the item is shown under — the user's own
+   * rename if they have one, the platform label if they have not — so
+   * correcting a typo in a rename does not mean retyping it, and emptying the
+   * box is a visible route back to the Salesforce label.
+   */
+  startRename() {
+    this.draftName = this.label;
+    this.isRenaming = true;
+  }
+
+  handleRenameChange(event) {
+    // Tracked but not dispatched: a rename per keystroke would re-render the
+    // row under the user's caret and put half-typed wording into the layout
+    // the autosave is about to write.
+    this.draftName = event.detail.value;
+  }
+
+  /**
+   * Enter or blur. An empty box is **not** refused, which is the one place
+   * this parts company with the section rename it otherwise follows — and the
+   * difference is in the job rather than in the interaction. A section with no
+   * name has no header text and no way back to the menu that could fix it; an
+   * item with no rename has the label Salesforce gives it, which is where it
+   * started. So emptying the box is how a user clears a rename, and it travels
+   * as the empty string for the model to drop.
+   *
+   * Wording that has not changed reports nothing at all. Opening the menu and
+   * pressing Enter is not an edit, and treating it as one would schedule a
+   * write — and on an item with no rename would freeze the platform label into
+   * the payload, so a later org relabelling stopped reaching it.
+   */
+  handleRenameCommit() {
+    const rename = (this.draftName || "").trim();
+    this.isRenaming = false;
+
+    if (rename === this.label) {
+      return;
+    }
+    this.dispatch("itemrename", { index: this.index, rename });
+  }
+
+  handleRenameKeydown(event) {
+    if (event.key === "Escape") {
+      this.isRenaming = false;
+      this.draftName = "";
+    }
+  }
+
+  renderedCallback() {
+    // Focus follows the rename, or the gesture is mouse-only: the menu entry
+    // that opened the input is gone from the DOM by the time it renders, so a
+    // keyboard user would otherwise be left with focus on nothing.
+    if (!this.isRenaming) {
+      return;
+    }
+    const input = this.template.querySelector("lightning-input");
+    if (input && this.template.activeElement !== input) {
+      input.focus();
+    }
   }
 
   /**

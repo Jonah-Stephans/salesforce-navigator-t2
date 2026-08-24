@@ -463,6 +463,58 @@ export function moveItemBetweenSections(
   return { sections };
 }
 
+/**
+ * Sets, or clears, one item's rename — the user's own wording for a tab.
+ *
+ * **It writes `rename` and it does not write `id`.** The label rendered is
+ * `rename ?? platformLabel` and the navigation target is resolved from the
+ * live tab source by `id`, so the two are different fields and a rename cannot
+ * reach the target. That is the whole of the criterion, and it is structural
+ * rather than a rule anyone has to remember: the one place a stored item is
+ * built is `storedItem`, which this calls, and it takes the id it was already
+ * holding.
+ *
+ * **Clearing is the absence of the key, not an empty string.** A rename of ""
+ * — or of nothing but whitespace — puts the item back under its Salesforce
+ * label, and `storedItem` emits no `rename` at all for it. An empty string
+ * left in the payload would be a value that means nothing sitting where one
+ * that means something goes, and the serialiser is asserted against an exact
+ * key set.
+ *
+ * `itemIndex` is a position in the list the user is looking at, and `tabs` is
+ * what turns it into a position in the stored list — see the note on the seam
+ * above `moveItemWithinSection`. Nothing else about the section is touched, so
+ * an id the running user cannot reach keeps its stored position through a
+ * rename of one of its neighbours.
+ */
+export function renameItem(layout, tabs, sectionIndex, itemIndex, rename) {
+  const sections = sectionsOf(layout);
+  const unchanged = { sections: sections.map(copySection) };
+  if (!isPresent(sections, sectionIndex)) {
+    return unchanged;
+  }
+
+  const positions = renderedPositions(
+    itemsOf(sections[sectionIndex]),
+    accessibleIdsOf(tabs)
+  );
+  const storedAt = storedSource(positions, itemIndex);
+  if (storedAt === undefined) {
+    return unchanged;
+  }
+
+  const wording = textOf(rename).trim();
+  return replaceSection(layout, sectionIndex, (section) => {
+    const copy = copySection(section);
+    return {
+      ...copy,
+      items: copy.items.map((item, at) => {
+        return at === storedAt ? storedItem(item.id, wording) : item;
+      })
+    };
+  });
+}
+
 /** Reorders the sections themselves — the same `reorder`, a different axis. */
 export function moveSection(layout, from, to) {
   return { sections: reorder(sectionsOf(layout).map(copySection), from, to) };

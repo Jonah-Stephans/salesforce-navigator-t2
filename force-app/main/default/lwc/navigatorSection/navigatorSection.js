@@ -429,6 +429,25 @@ export default class NavigatorSection extends LightningElement {
     });
   }
 
+  /**
+   * An item's own rename, on its way to the parent. This adds the one fact
+   * neither the item nor the parent's listener could supply — which section it
+   * is in — and nothing else: an empty rename is forwarded exactly as a set
+   * one is, because emptying the box is how a user asks for their Salesforce
+   * label back, and a section that swallowed it would make that impossible.
+   *
+   * Nothing about a rename touches the grab, the order or the drag state. It
+   * is a display field; the item stays where it is and keeps pointing where it
+   * did.
+   */
+  handleItemRename(event) {
+    this.dispatch("itemrename", {
+      sectionIndex: this.sectionIndex,
+      index: event.detail.index,
+      rename: event.detail.rename
+    });
+  }
+
   // -------------------------------------------------------------------
   // Reordering this section's items from the keyboard — Salesforce's own
   // dnd-a11y-patterns. Arrow keys deliberately do not cross containers.

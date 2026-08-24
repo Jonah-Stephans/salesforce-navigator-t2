@@ -5,40 +5,65 @@
        siblings, and this row is what keeps them beside each other rather than
        stacked. -->
   <div class="rstk-nav-item__row">
-    <a
-      href={url}
-      class={anchorClass}
-      data-tab-id={tabId}
-      draggable="true"
-      aria-label={label}
-      aria-describedby={describedById}
-      tabindex={fallbackTabIndex}
-      role={fallbackRole}
-      onclick={handleClick}
-      onkeydown={handleKeydown}
-      ondragstart={handleDragStart}
-      ondragover={handleDragOver}
-      ondrop={handleDrop}
-      ondragend={handleDragEnd}
-    >
-      <span class="rstk-nav-item__label">{label}</span>
-    </a>
-
-    <!-- The cross-section move, and the only route to it that does not need a
-         mouse: arrow keys deliberately do not cross a section boundary, which
-         is the pattern rather than a gap in it. `lightning-button-menu` is
-         keyboard-operable in its own right, so this is the same menu and the
-         same gesture for both kinds of user. Absent when the layout has only
-         one section, so nobody is handed a menu that opens onto nothing. -->
-    <template lwc:if={hasMoveTargets}>
-      <lightning-button-menu
-        class="rstk-nav-item__menu"
-        alternative-text={menuLabel}
-        icon-size="x-small"
-        menu-alignment="auto"
-        variant="border-filled"
-        onselect={handleMenuSelect}
+    <!-- The rename takes the anchor's place rather than sitting beside it.
+         Everything the anchor carries — navigation, the drag source, Space to
+         grab — is exactly what must not happen while the user is typing a
+         name into a box, and the surest way to keep a Space out of the drag
+         pattern is for the thing that reads it not to be on screen. -->
+    <template lwc:if={isRenaming}>
+      <lightning-input
+        class="rstk-nav-item__rename"
+        label="Item label"
+        variant="label-hidden"
+        value={draftName}
+        onchange={handleRenameChange}
+        oncommit={handleRenameCommit}
+        onkeydown={handleRenameKeydown}
+      ></lightning-input>
+    </template>
+    <template lwc:else>
+      <a
+        href={url}
+        class={anchorClass}
+        data-tab-id={tabId}
+        draggable="true"
+        aria-label={label}
+        aria-describedby={describedById}
+        tabindex={fallbackTabIndex}
+        role={fallbackRole}
+        onclick={handleClick}
+        onkeydown={handleKeydown}
+        ondragstart={handleDragStart}
+        ondragover={handleDragOver}
+        ondrop={handleDrop}
+        ondragend={handleDragEnd}
       >
+        <span class="rstk-nav-item__label">{label}</span>
+      </a>
+    </template>
+
+    <!-- This item's own actions. `lightning-button-menu` is keyboard-operable
+         in its own right, so this is the same menu and the same gesture for
+         both kinds of user — which for the cross-section move is the whole
+         mechanism, since arrow keys deliberately do not cross a section
+         boundary.
+
+         The menu is always here, because Rename… is always available: the
+         seeded layout is a single section, so a menu withheld when there is
+         nowhere to move to would put renaming out of reach of exactly the user
+         who has never customised anything. The *destinations* are what come
+         and go, so nobody is offered a list that opens onto nothing. -->
+    <lightning-button-menu
+      class="rstk-nav-item__menu"
+      alternative-text={menuLabel}
+      icon-size="x-small"
+      menu-alignment="auto"
+      variant="border-filled"
+      onselect={handleMenuSelect}
+    >
+      <lightning-menu-item value="rename" label="Rename…"></lightning-menu-item>
+      <template lwc:if={hasMoveTargets}>
+        <lightning-menu-divider></lightning-menu-divider>
         <lightning-menu-subheader label="Move to…"></lightning-menu-subheader>
         <template for:each={moveMenuItems} for:item="target">
           <lightning-menu-item
@@ -47,8 +72,8 @@
             label={target.label}
           ></lightning-menu-item>
         </template>
-      </lightning-button-menu>
-    </template>
+      </template>
+    </lightning-button-menu>
   </div>
 
   <!-- Exactly one description node is present at a time, and the anchor's

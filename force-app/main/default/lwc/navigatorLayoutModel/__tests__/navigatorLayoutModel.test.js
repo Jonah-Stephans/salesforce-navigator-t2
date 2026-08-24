@@ -15,7 +15,8 @@ import {
   reorder,
   moveItemWithinSection,
   moveItemBetweenSections,
-  moveSection
+  moveSection,
+  renameItem
 } from "c/navigatorLayoutModel";
 
 // Three tabs in the shape navigatorTabSource normalises the platform into.
@@ -1064,5 +1065,138 @@ describe("moveSection", () => {
 
   it("leaves the layout alone when it names a section that is not there", () => {
     expect(moveSection(base, 7, 0)).toEqual(base);
+  });
+});
+
+/**
+ * The rename, which is a display field and nothing else.
+ *
+ * Two things are under test here and they are not the same thing. One is that
+ * the user's wording lands on the item they picked — which, exactly as on the
+ * move axes, means a *rendered* position translated into a *stored* one, so
+ * the fixture that matters stores an id the running user cannot reach. The
+ * other is that `id` is never written: the label and the navigation target are
+ * different fields, and that is what makes a rename structurally unable to
+ * change where an item goes rather than carefully unable to.
+ */
+describe("renameItem", () => {
+  const base = {
+    sections: [
+      {
+        name: "First",
+        columns: 2,
+        items: [{ id: "Account" }, { id: "Contact", rename: "People" }]
+      },
+      {
+        name: "Second",
+        columns: 3,
+        items: [{ id: "standard-OurSite" }]
+      }
+    ]
+  };
+
+  const REACHABLE = tabsFor("Account", "Contact", "standard-OurSite");
+
+  function frozenCopy() {
+    return JSON.parse(JSON.stringify(base));
+  }
+
+  function payloadItem(layout, sectionIndex, itemIndex) {
+    return JSON.parse(serializeLayout(layout)).sections[sectionIndex].items[
+      itemIndex
+    ];
+  }
+
+  it("stores the user's own wording against the item they picked", () => {
+    const before = frozenCopy();
+
+    const next = renameItem(base, REACHABLE, 0, 0, "Clients");
+
+    expect(next.sections[0].items).toEqual([
+      { id: "Account", rename: "Clients" },
+      { id: "Contact", rename: "People" }
+    ]);
+    // The other section is not somewhere a rename can reach.
+    expect(next.sections[1].items).toEqual([{ id: "standard-OurSite" }]);
+    expect(base).toEqual(before);
+  });
+
+  it("writes the rename and never the id, so the item still points where it did", () => {
+    // Criterion 7 in one assertion: `id` is what the navigation target is
+    // resolved from, and it is not the field a rename writes.
+    const next = renameItem(base, REACHABLE, 0, 1, "Contacts of mine");
+
+    expect(next.sections[0].items[1].id).toBe("Contact");
+    expect(resolveLayout(next, ALL_TABS)[0].items[1]).toEqual({
+      id: "Contact",
+      label: "Contacts of mine",
+      pageReference: CONTACT.pageReference
+    });
+  });
+
+  it("clears the rename, leaving no key behind in the payload at all", () => {
+    // Cleared means *absent*, not an empty string: the serialiser is asserted
+    // against an exact key set, and an empty rename in the payload would be a
+    // value that means nothing sitting where one that means something goes.
+    const next = renameItem(base, REACHABLE, 0, 1, "");
+
+    expect(next.sections[0].items[1]).toEqual({ id: "Contact" });
+    expect(payloadItem(next, 0, 1)).toEqual({ id: "Contact" });
+    expect(Object.keys(payloadItem(next, 0, 1))).toEqual(["id"]);
+  });
+
+  it("treats an all-whitespace rename as a clearing, and trims the rest", () => {
+    expect(
+      renameItem(base, REACHABLE, 0, 1, "   ").sections[0].items[1]
+    ).toEqual({ id: "Contact" });
+    expect(
+      renameItem(base, REACHABLE, 0, 0, "  Clients  ").sections[0].items[0]
+    ).toEqual({ id: "Account", rename: "Clients" });
+  });
+
+  it("renames the item the user picked when an earlier one is out of reach", () => {
+    // The resolved-versus-stored seam. `Account` is stored first and is not
+    // accessible, so the first item *on screen* is `Contact` — and a rename
+    // that ran the rendered index into the stored list would label an item the
+    // user cannot see and leave the one they picked alone.
+    const reachable = tabsFor("Contact", "standard-OurSite");
+
+    const next = renameItem(base, reachable, 0, 0, "Clients");
+
+    expect(next.sections[0].items).toEqual([
+      { id: "Account" },
+      { id: "Contact", rename: "Clients" }
+    ]);
+  });
+
+  it("hands back copies, not the caller's own section and item objects", () => {
+    const next = renameItem(base, REACHABLE, 0, 0, "Clients");
+
+    next.sections.forEach((section, at) => {
+      expect(section).not.toBe(base.sections[at]);
+      expect(section.items).not.toBe(base.sections[at].items);
+      section.items.forEach((item, index) => {
+        expect(item).not.toBe(base.sections[at].items[index]);
+      });
+    });
+  });
+
+  it("survives a round trip through the payload, so the wording is what reloads", () => {
+    const renamed = renameItem(base, REACHABLE, 0, 0, "Clients");
+
+    expect(
+      deserializeLayout(serializeLayout(renamed)).sections[0].items
+    ).toEqual([
+      { id: "Account", rename: "Clients" },
+      { id: "Contact", rename: "People" }
+    ]);
+  });
+
+  it("leaves the layout alone when it names a section or an item that is not there", () => {
+    expect(renameItem(base, REACHABLE, 7, 0, "Clients")).toEqual(base);
+    expect(renameItem(base, REACHABLE, 0, 9, "Clients")).toEqual(base);
+    expect(renameItem(base, REACHABLE, 0, -1, "Clients")).toEqual(base);
+    // Nothing is reachable, so no rendered position names anything.
+    expect(renameItem(base, [], 0, 0, "Clients")).toEqual(base);
   });
 });

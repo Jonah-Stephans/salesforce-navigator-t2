@@ -1679,12 +1679,18 @@ describe("c-salesforce-navigator", () => {
         ].shadowRoot.querySelector("lightning-button-menu");
       }
 
+      /**
+       * The destinations on one item's menu. Filtered rather than taken whole,
+       * because the overflow menu carries this item's other actions too —
+       * Rename… since slice 06 — so every `lightning-menu-item` in it is no
+       * longer a place to move to.
+       */
       function menuEntries(element, sectionIndex, itemIndex) {
         return Array.from(
           itemsIn(element, sectionIndex)[itemIndex].shadowRoot.querySelectorAll(
             "lightning-menu-item"
           )
-        );
+        ).filter((entry) => entry.value.startsWith("move-to-"));
       }
 
       function savedIds(apexMock, sectionIndex) {
@@ -2035,8 +2041,11 @@ describe("c-salesforce-navigator", () => {
         ]);
       });
 
-      it("shows no menu at all when the layout has only one section", async () => {
-        // Nowhere to move to, so nothing that offers to.
+      it("offers no destination at all when the layout has only one section", async () => {
+        // Nowhere to move to, so nothing that offers to. The menu itself stays
+        // — it carries Rename… as well, and the seeded layout is a single
+        // section, so withholding the whole menu here would put renaming out
+        // of reach of every user who has never made a second one.
         getLayouts.mockResolvedValue([]);
         const element = createNavigator();
         getNavItems.emit({ navItems: THREE });
@@ -2046,7 +2055,12 @@ describe("c-salesforce-navigator", () => {
         queryItems(element).forEach((item) => {
           expect(
             item.shadowRoot.querySelector("lightning-button-menu")
-          ).toBeNull();
+          ).not.toBeNull();
+          expect(
+            Array.from(
+              item.shadowRoot.querySelectorAll("lightning-menu-item")
+            ).filter((entry) => entry.value.startsWith("move-to-"))
+          ).toEqual([]);
         });
       });
 
@@ -2141,6 +2155,339 @@ describe("c-salesforce-navigator", () => {
           querySections(element).map((section) => section.itemDragActive)
         ).toEqual([false, false]);
       });
+    });
+  });
+
+  /**
+   * Calling a tab what you call it.
+   *
+   * The whole of this is ordinary DOM and ordinary events — a menu entry, an
+   * input, a commit — so unlike the drag axis there is no gesture ceiling here
+   * and every criterion is driven end to end: item handler, section, parent,
+   * model, payload, and a remount on the payload that was actually written.
+   *
+   * The load-bearing one is the first test below, which is the pairing the
+   * design named: a rename changes the wording on screen and does not change
+   * where the item goes, asserted in one go. It can be asserted at all because
+   * this repo carries the lwc-recipes `lightning/navigation` mock, whose
+   * `getNavigateCalledWith()` records what the component actually navigated to.
+   */
+  describe("renaming an item", () => {
+    const THREE = [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM];
+
+    function storedLayout(sections) {
+      return {
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "My Navigator",
+        isActive: true,
+        layoutJson: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          sections
+        })
+      };
+    }
+
+    /** One section, `Account` under the user's own wording. */
+    const RENAMED = storedLayout([
+      {
+        name: "Daily work",
+        columns: 3,
+        items: [{ id: "Account", rename: "Clients" }, { id: "Contact" }]
+      }
+    ]);
+
+    async function navigatorOn(layout, navItems = THREE) {
+      getLayouts.mockResolvedValue(layout ? [layout] : []);
+      const element = createNavigator();
+      getNavItems.emit({ navItems });
+      await flush();
+      return element;
+    }
+
+    function itemsIn(element, sectionIndex) {
+      return Array.from(
+        querySections(element)[sectionIndex].shadowRoot.querySelectorAll(
+          "c-navigator-item"
+        )
+      );
+    }
+
+    function itemAt(element, sectionIndex, itemIndex) {
+      return itemsIn(element, sectionIndex)[itemIndex];
+    }
+
+    /** What is actually painted, not what the property says. */
+    function renderedLabel(element, sectionIndex, itemIndex) {
+      return itemAt(element, sectionIndex, itemIndex)
+        .shadowRoot.querySelector("a")
+        .textContent.trim();
+    }
+
+    async function openRename(element, sectionIndex, itemIndex) {
+      itemAt(element, sectionIndex, itemIndex)
+        .shadowRoot.querySelector("lightning-button-menu")
+        .dispatchEvent(
+          new CustomEvent("select", { detail: { value: "rename" } })
+        );
+      await flush();
+      return itemAt(element, sectionIndex, itemIndex).shadowRoot.querySelector(
+        "lightning-input"
+      );
+    }
+
+    /** The whole gesture, exactly as a user performs it. */
+    async function renameTo(element, sectionIndex, itemIndex, wording) {
+      const input = await openRename(element, sectionIndex, itemIndex);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: wording } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+    }
+
+    function savedItems(apexMock, sectionIndex = 0) {
+      return lastSavedLayout(apexMock).sections[sectionIndex].items;
+    }
+
+    it("shows the user's own wording and still navigates to exactly the same tab", async () => {
+      // The two criteria the design said one test should prove together. The
+      // rename and the navigation target are different fields of the stored
+      // item, so this is a structural fact rather than a lucky one — and it is
+      // asserted against the platform's own pageReference, which is the same
+      // object an item with no rename would navigate to.
+      const element = await navigatorOn(RENAMED);
+
+      expect(renderedLabel(element, 0, 0)).toBe("Clients");
+      expect(renderedLabel(element, 0, 0)).not.toBe(ACCOUNT_ITEM.label);
+
+      itemAt(element, 0, 0)
+        .shadowRoot.querySelector("a")
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      expect(getNavigateCalledWith().pageReference).toEqual(
+        ACCOUNT_ITEM.pageReference
+      );
+    });
+
+    it("navigates to the same tab it did before a rename made in this session", async () => {
+      // The live half of the same pairing: not a rename that arrived in a
+      // payload, but one the user has just typed.
+      const element = await navigatorOn(RENAMED);
+      const anchor = () => itemAt(element, 0, 1).shadowRoot.querySelector("a");
+
+      anchor().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const before = getNavigateCalledWith().pageReference;
+
+      await renameTo(element, 0, 1, "People I know");
+      expect(renderedLabel(element, 0, 1)).toBe("People I know");
+      anchor().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      expect(getNavigateCalledWith().pageReference).toEqual(before);
+      expect(getNavigateCalledWith().pageReference).toEqual(
+        CONTACT_ITEM.pageReference
+      );
+    });
+
+    it("renames an item from its overflow menu, in place of the Salesforce label", async () => {
+      // From the seeded layout, which is the state every user starts in — one
+      // section, so this also pins that the menu is reachable there at all.
+      const element = await navigatorOn(undefined, [ACCOUNT_ITEM]);
+
+      expect(sectionNames(element)).toEqual(["All Items"]);
+      // The entry has to be *there*: every step below drives the menu's own
+      // `select`, which a menu with nothing in it would emit just as happily.
+      expect(
+        Array.from(
+          itemAt(element, 0, 0).shadowRoot.querySelectorAll(
+            "lightning-menu-item"
+          )
+        ).map((entry) => entry.value)
+      ).toContain("rename");
+
+      await renameTo(element, 0, 0, "Clients");
+
+      expect(renderedLabel(element, 0, 0)).toBe("Clients");
+    });
+
+    it("writes the rename beside the id, and nothing else about the item", async () => {
+      const element = await navigatorOn(RENAMED);
+
+      await renameTo(element, 0, 1, "People");
+      await settleAutosave();
+
+      expect(savedItems(updateLayout)).toEqual([
+        { id: "Account", rename: "Clients" },
+        { id: "Contact", rename: "People" }
+      ]);
+      // No label, no pageReference, no icon — the payload stores nothing the
+      // platform can be asked for, which is what makes an org relabelling
+      // free.
+      expect(Object.keys(savedItems(updateLayout)[1]).sort()).toEqual([
+        "id",
+        "rename"
+      ]);
+    });
+
+    it("still shows the rename after a reload", async () => {
+      // A remount on the payload that was actually written is what a reload
+      // is, since nothing else survives one — and the store is per-user and
+      // owner-filtered, so a fresh login reads back this same row.
+      const element = await navigatorOn(RENAMED);
+      await renameTo(element, 0, 1, "People");
+      await settleAutosave();
+
+      const written = updateLayout.mock.calls[0][0].layoutJson;
+      document.body.removeChild(element);
+      jest.clearAllMocks();
+
+      const reloaded = await navigatorOn({ ...RENAMED, layoutJson: written });
+
+      expect(itemsIn(reloaded, 0).map((item) => item.label)).toEqual([
+        "Clients",
+        "People"
+      ]);
+    });
+
+    it("returns the item to its Salesforce label when the rename is cleared", async () => {
+      const element = await navigatorOn(RENAMED);
+
+      await renameTo(element, 0, 0, "");
+
+      expect(renderedLabel(element, 0, 0)).toBe("Accounts");
+      await settleAutosave();
+      // Cleared is the key's absence, not an empty string sitting in the
+      // payload — asserted as an exact key set, because `toEqual` alone would
+      // not tell `{id}` from `{id, rename: ""}` if the value were undefined.
+      expect(savedItems(updateLayout)[0]).toEqual({ id: "Account" });
+      expect(Object.keys(savedItems(updateLayout)[0])).toEqual(["id"]);
+    });
+
+    it("keeps the cleared item under its Salesforce label after a reload", async () => {
+      const element = await navigatorOn(RENAMED);
+      await renameTo(element, 0, 0, "");
+      await settleAutosave();
+
+      const written = updateLayout.mock.calls[0][0].layoutJson;
+      document.body.removeChild(element);
+      jest.clearAllMocks();
+
+      const reloaded = await navigatorOn({ ...RENAMED, layoutJson: written });
+
+      expect(itemsIn(reloaded, 0).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Contacts"
+      ]);
+    });
+
+    it("picks up a change to the org's own tab label, with no write at all", async () => {
+      // The payload stores no labels, so this costs nothing: the item is
+      // resolved against the live tab source on every render.
+      const element = await navigatorOn(RENAMED);
+      expect(renderedLabel(element, 0, 1)).toBe("Contacts");
+
+      getNavItems.emit({
+        navItems: [
+          ACCOUNT_ITEM,
+          { ...CONTACT_ITEM, label: "People" },
+          ACTION_HUB_ITEM
+        ],
+        nextPageUrl: null
+      });
+      await flush();
+
+      expect(renderedLabel(element, 0, 1)).toBe("People");
+      // And the renamed item is not disturbed by the relabelling of another.
+      expect(renderedLabel(element, 0, 0)).toBe("Clients");
+
+      await settleAutosave();
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("leaves the org's tab label alone for anyone without this layout", async () => {
+      // The rename is the user's own wording, held in their own layout row.
+      // A Navigator that reads no layout — which is what any other user's
+      // first open is — shows the platform's label for the same tab.
+      const element = await navigatorOn(RENAMED);
+      expect(renderedLabel(element, 0, 0)).toBe("Clients");
+      document.body.removeChild(element);
+      jest.clearAllMocks();
+
+      const somebodyElse = await navigatorOn(undefined);
+
+      expect(renderedLabel(somebodyElse, 0, 0)).toBe("Accounts");
+    });
+
+    it("renames the item the user picked when an earlier one is out of reach", async () => {
+      // The resolved-versus-stored seam. `Account` is stored first and is not
+      // in the accessible set, so the first item on screen is `Action Plans` —
+      // and a rename that ran the rendered index into the stored list would
+      // label a tab the user cannot see and leave theirs alone.
+      const element = await navigatorOn(
+        storedLayout([
+          {
+            name: "Daily work",
+            columns: 3,
+            items: [
+              { id: "Account" },
+              { id: "standard-ActionHub" },
+              { id: "Contact" }
+            ]
+          }
+        ]),
+        [ACTION_HUB_ITEM, CONTACT_ITEM]
+      );
+
+      await renameTo(element, 0, 0, "Plans");
+
+      expect(itemsIn(element, 0).map((item) => item.label)).toEqual([
+        "Plans",
+        "Contacts"
+      ]);
+      await settleAutosave();
+      expect(savedItems(updateLayout)).toEqual([
+        { id: "Account" },
+        { id: "standard-ActionHub", rename: "Plans" },
+        { id: "Contact" }
+      ]);
+    });
+
+    it("renames an item in the second section as readily as in the first", async () => {
+      // Every other fixture here would make "this section" and "section 0" the
+      // same number, and a chain that reported a constant would be invisible.
+      const element = await navigatorOn(
+        storedLayout([
+          { name: "Selling", columns: 3, items: [{ id: "Account" }] },
+          { name: "Support", columns: 3, items: [{ id: "Contact" }] }
+        ])
+      );
+
+      await renameTo(element, 1, 0, "People");
+
+      expect(itemLabelsBySection(element)).toEqual([["Accounts"], ["People"]]);
+      await settleAutosave();
+      expect(savedItems(updateLayout, 0)).toEqual([{ id: "Account" }]);
+      expect(savedItems(updateLayout, 1)).toEqual([
+        { id: "Contact", rename: "People" }
+      ]);
+    });
+
+    it("announces the rename to a screen reader, naming both wordings", async () => {
+      const element = await navigatorOn(RENAMED);
+
+      await renameTo(element, 0, 1, "People");
+
+      const region = element.shadowRoot.querySelector(".rstk-nav-announcer");
+      expect(spoken(region.textContent)).toBe("Contacts renamed to People.");
+    });
+
+    it("announces a cleared rename by the label the item goes back to", async () => {
+      const element = await navigatorOn(RENAMED);
+
+      await renameTo(element, 0, 0, "");
+
+      const region = element.shadowRoot.querySelector(".rstk-nav-announcer");
+      expect(spoken(region.textContent)).toBe("Clients renamed to Accounts.");
     });
   });
 

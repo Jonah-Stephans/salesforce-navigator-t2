@@ -976,6 +976,56 @@ describe("c-navigator-section", () => {
       });
     });
 
+    it("forwards an item rename upward with its own section index", () => {
+      // The same shape as the destination test above, and here for the same
+      // reason: not the section at index 0, because a card that reported a
+      // constant would rename an item in the wrong section and no
+      // single-section fixture could tell.
+      const second = resolveLayout(
+        {
+          sections: [
+            { name: "First", columns: 3, items: [{ id: "Account" }] },
+            {
+              name: "Second",
+              columns: 3,
+              items: [{ id: "Account" }, { id: "Contact" }]
+            }
+          ]
+        },
+        TABS
+      )[1];
+      const element = createSection(second);
+      const handler = jest.fn();
+      element.addEventListener("itemrename", handler);
+
+      fire(itemsOf(element)[1], "itemrename", { index: 1, rename: "People" });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        sectionIndex: 1,
+        index: 1,
+        rename: "People"
+      });
+    });
+
+    it("forwards a cleared rename as readily as a set one", () => {
+      // The empty string is the whole of "put this back under its Salesforce
+      // label", so a section that treated it as nothing to report would make
+      // clearing a rename impossible.
+      const element = createSection();
+      const handler = jest.fn();
+      element.addEventListener("itemrename", handler);
+
+      fire(itemsOf(element)[0], "itemrename", { index: 0, rename: "" });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        sectionIndex: 0,
+        index: 0,
+        rename: ""
+      });
+    });
+
     it("names the position an item was dropped at when it forwards a foreign drop", () => {
       // A drop from another section has no `dragFromIndex` here, so it is
       // forwarded to the parent — and it has to carry *where* in this section

@@ -15,6 +15,13 @@
   flex: 0 0 auto;
 }
 
+/* The rename box stands where the anchor stood, so the row does not resize
+   under the user as they open and close it. */
+.rstk-nav-item__rename {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* An item is a real, permanently-interactive link — SLDS 2 removes borders
    from cards, but this is not a card. It is styled as an interactive
    element, so a border-2 (functional/interactive) is correct here, not a

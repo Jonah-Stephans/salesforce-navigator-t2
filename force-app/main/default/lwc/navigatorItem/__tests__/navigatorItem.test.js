@@ -651,25 +651,43 @@ describe("c-navigator-item", () => {
       );
     }
 
+    /**
+     * Only the destinations. The overflow menu carries this item's other
+     * actions too — Rename… since slice 06 — so a bare `lightning-menu-item`
+     * query is no longer a list of places to move to.
+     */
+    function destinationsOf(element) {
+      return menuItemsOf(element).filter((item) =>
+        item.value.startsWith("move-to-")
+      );
+    }
+
     it("lists every destination it was given, under the label that section has", async () => {
       const element = await settled(
         createNavigatorItem({ index: 0, moveTargets: TARGETS })
       );
 
-      expect(menuItemsOf(element).map((item) => item.label)).toEqual([
+      expect(destinationsOf(element).map((item) => item.label)).toEqual([
         "Selling",
         "Support"
       ]);
     });
 
-    it("offers no menu at all when there is nowhere to move to", async () => {
-      // A layout with one section would otherwise show every item a menu that
-      // opens onto nothing.
+    it("offers nowhere to move to when there is nowhere to move to", async () => {
+      // A layout with one section would otherwise show every item a
+      // destination list that opens onto nothing. The menu itself stays —
+      // Rename… lives in it, and the seeded layout is a single section, so a
+      // menu withheld here would make renaming unreachable for exactly the
+      // user who has never customised anything.
       const element = await settled(
         createNavigatorItem({ index: 0, moveTargets: [] })
       );
 
-      expect(menuOf(element)).toBeNull();
+      expect(destinationsOf(element)).toEqual([]);
+      expect(
+        element.shadowRoot.querySelector("lightning-menu-subheader")
+      ).toBeNull();
+      expect(menuOf(element)).not.toBeNull();
     });
 
     it("reports the chosen destination upward, with its own position", async () => {
@@ -679,7 +697,7 @@ describe("c-navigator-item", () => {
       const handler = jest.fn();
       element.addEventListener("itemmoveto", handler);
 
-      const chosen = menuItemsOf(element)[1];
+      const chosen = destinationsOf(element)[1];
       menuOf(element).dispatchEvent(
         new CustomEvent("select", { detail: { value: chosen.value } })
       );
@@ -738,6 +756,207 @@ describe("c-navigator-item", () => {
       );
 
       expect(menuOf(element).alternativeText).toContain("Our Site");
+    });
+  });
+
+  /**
+   * Renaming an item, from the same overflow menu the cross-section move is
+   * in. The interaction is the one `navigatorSection` already uses for a
+   * section name — an inline input, committed on Enter or blur, abandoned on
+   * Escape — rather than a second gesture invented for the same job.
+   *
+   * Nothing here writes anything. This component reports the wording the user
+   * typed and its own position; the label it renders next is the one the model
+   * resolved and handed back down, which is why an assertion about what a
+   * rename *does* belongs in the parent's suite and not this one.
+   */
+  describe("the Rename… entry", () => {
+    const TARGETS = [{ value: "1", label: "Selling" }];
+
+    function menuOf(element) {
+      return element.shadowRoot.querySelector("lightning-button-menu");
+    }
+
+    function selectMenuItem(element, value) {
+      menuOf(element).dispatchEvent(
+        new CustomEvent("select", { detail: { value } })
+      );
+    }
+
+    function inputOf(element) {
+      return element.shadowRoot.querySelector("lightning-input");
+    }
+
+    async function startRenaming(element) {
+      selectMenuItem(element, "rename");
+      await Promise.resolve();
+      return inputOf(element);
+    }
+
+    function type(input, value) {
+      input.dispatchEvent(new CustomEvent("change", { detail: { value } }));
+    }
+
+    it("offers Rename… whether or not there is anywhere to move to", async () => {
+      // The seeded layout is a single section, so an item's only action there
+      // is the rename — a menu gated on having a destination would put this
+      // out of reach of every user who has never made a section.
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: [] })
+      );
+
+      const values = Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).map((item) => item.value);
+      expect(values).toContain("rename");
+    });
+
+    it("opens an input on the wording the item is currently shown under", async () => {
+      const element = await settled(
+        createNavigatorItem({
+          index: 0,
+          label: "Clients",
+          moveTargets: TARGETS
+        })
+      );
+
+      const input = await startRenaming(element);
+
+      expect(input).not.toBeNull();
+      // The wording on screen, so a user correcting a typo in their own rename
+      // is not made to retype it from the platform label.
+      expect(input.value).toBe("Clients");
+      expect(anchorOf(element)).toBeNull();
+    });
+
+    it("reports the wording upward with its own position, on commit", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 2, moveTargets: TARGETS })
+      );
+      const handler = jest.fn();
+      element.addEventListener("itemrename", handler);
+
+      const input = await startRenaming(element);
+      type(input, "  My site  ");
+      input.dispatchEvent(new CustomEvent("commit"));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      // Its own index, not a constant: an item that reported 0 would rename
+      // whatever sits at the top of the section.
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        index: 2,
+        rename: "My site"
+      });
+    });
+
+    it("puts the item back under its anchor once the rename is committed", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+      );
+
+      const input = await startRenaming(element);
+      type(input, "My site");
+      input.dispatchEvent(new CustomEvent("commit"));
+      await Promise.resolve();
+
+      expect(inputOf(element)).toBeNull();
+      expect(anchorOf(element)).not.toBeNull();
+    });
+
+    it("does not fire a rename while the user is still typing", async () => {
+      // A rename per keystroke would re-render the row under the caret and put
+      // half-typed wording into the layout the autosave is about to write.
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+      );
+      const handler = jest.fn();
+      element.addEventListener("itemrename", handler);
+
+      const input = await startRenaming(element);
+      type(input, "M");
+      type(input, "My");
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("keeps the wording it had when a rename is abandoned with Escape", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+      );
+      const handler = jest.fn();
+      element.addEventListener("itemrename", handler);
+
+      const input = await startRenaming(element);
+      type(input, "Nope");
+      input.dispatchEvent(keydown("Escape"));
+      await Promise.resolve();
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(inputOf(element)).toBeNull();
+      expect(anchorOf(element).textContent.trim()).toBe("Our Site");
+    });
+
+    it.each(["", "   "])(
+      "asks for the rename to be cleared when the input is committed as %p",
+      async (emptied) => {
+        // How a user gets their Salesforce label back: empty the box. The
+        // wording travels as the empty string and the model drops the key.
+        const element = await settled(
+          createNavigatorItem({
+            index: 1,
+            label: "Clients",
+            moveTargets: TARGETS
+          })
+        );
+        const handler = jest.fn();
+        element.addEventListener("itemrename", handler);
+
+        const input = await startRenaming(element);
+        type(input, emptied);
+        input.dispatchEvent(new CustomEvent("commit"));
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(handler.mock.calls[0][0].detail).toEqual({
+          index: 1,
+          rename: ""
+        });
+      }
+    );
+
+    it("says nothing at all when the wording is committed unchanged", async () => {
+      // Opening the menu and pressing Enter is not a change, and reporting it
+      // would schedule a write — and, on an item with no rename, freeze the
+      // platform label into the payload so a later org relabelling stopped
+      // reaching it.
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+      );
+      const handler = jest.fn();
+      element.addEventListener("itemrename", handler);
+
+      const input = await startRenaming(element);
+      input.dispatchEvent(new CustomEvent("commit"));
+      await Promise.resolve();
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(inputOf(element)).toBeNull();
+    });
+
+    it("does not navigate, grab or drag while the wording is being edited", async () => {
+      // The anchor is what carries every one of those, and it is not on screen
+      // during a rename — so a Space typed into the box cannot also pick the
+      // item up.
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+      );
+      const grabbed = jest.fn();
+      element.addEventListener("itemgrab", grabbed);
+
+      const input = await startRenaming(element);
+      input.dispatchEvent(keydown(" "));
+
+      expect(grabbed).not.toHaveBeenCalled();
+      expect(getNavigateCalledWith()).toBeUndefined();
     });
   });
 });
