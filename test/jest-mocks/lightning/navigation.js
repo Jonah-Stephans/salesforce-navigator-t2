@@ -16,7 +16,13 @@
  * test can assert on it via `getNavigateCalledWith()`.
  */
 const Navigate = jest.fn();
-const GenerateUrl = jest.fn(() => Promise.resolve("#"));
+// Resolves to a value that cannot be confused with the "#" default a
+// consuming component may render with before this promise settles — if
+// the default and the resolved value were the same string, no test could
+// tell "the component applied the resolved URL" apart from "the
+// component never applied anything and the default is still sitting
+// there".
+const GenerateUrl = jest.fn(() => Promise.resolve("/lightning/o/Account/home"));
 
 const NavigationMixin = (Base) => {
   return class extends Base {

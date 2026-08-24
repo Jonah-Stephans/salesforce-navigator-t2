@@ -15,9 +15,12 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   // Defaults to a real, non-empty href so the anchor is always a genuine
   // link — in tab order, exposing a link role, and supporting native
   // middle-click / "open in new tab" — from first render, before
-  // `GenerateUrl` has settled at all. `connectedCallback` below only ever
-  // upgrades this value on success; it must never be cleared back to
-  // `undefined`, or the anchor stops being a link.
+  // `GenerateUrl` has settled at all. `connectedCallback` below upgrades
+  // this value to the resolved URL on success. That "#" window is brief
+  // (a microtask or two) and tolerated for that reason. It is not
+  // tolerated forever: on a permanent rejection, the `.catch` below clears
+  // it back to `undefined` rather than leaving "#" in place — see the
+  // comment there for why.
   url = "#";
 
   connectedCallback() {
@@ -26,13 +29,19 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
         this.url = url;
       })
       .catch(() => {
-        // Leave `url` at its current value (the "#" default, since
-        // GenerateUrl never resolved) rather than blanking it out. A
-        // rejected GenerateUrl must not turn a real link into a bare `<a>`
-        // with no `href` — that would drop it from the tab order, remove
-        // its link role, and lose native middle-click/"open in new tab",
-        // which is the entire mechanism the "real link" criterion relies
-        // on.
+        // GenerateUrl failed to produce a target, and unlike the brief
+        // pending window above, this failure never resolves. Leaving
+        // `url` at "#" would hand every future middle-click and
+        // cmd/ctrl/shift-click on this anchor a real `href` that silently
+        // opens a duplicate of the *current* page — a wrong destination,
+        // not a visible failure, and exactly what criterion 6 exists to
+        // prevent. Clearing `url` removes the anchor's `href` instead, so
+        // those native new-tab gestures become inert rather than
+        // misleading. The plain-click path is unaffected: `handleClick`
+        // below navigates via `NavigationMixin.Navigate` from
+        // `this.pageReference` independent of `url`, so a plain click
+        // still works even when `GenerateUrl` has failed.
+        this.url = undefined;
       });
   }
 

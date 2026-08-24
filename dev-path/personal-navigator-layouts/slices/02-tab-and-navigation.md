@@ -325,7 +325,7 @@ label, and clicks one to arrive at it.
 
 ### Slice pass (re-review of the fix, commit `da92b06`)
 
-- [ ] The `url = "#"` default silently destroyed the only coverage of the resolved `GenerateUrl` URL
+- [x] fixed — The `url = "#"` default silently destroyed the only coverage of the resolved `GenerateUrl` URL
       ever reaching the anchor. This re-opens part of finding 3 above: the fix is behaviourally
       reasonable but it cost a real assertion. `test/jest-mocks/lightning/navigation.js` line 19
       defines `const GenerateUrl = jest.fn(() => Promise.resolve("#"));` — the mock resolves the
@@ -349,8 +349,20 @@ label, and clicks one to arrive at it.
       before calling this closed. (Note the two new tests added by the fix pass, "still has a real
       href while ... is pending" and "... rejects", are load-bearing and should stay: deleting the
       `url = "#"` default turns both red.)
+      **Fix applied**: changed `test/jest-mocks/lightning/navigation.js`'s `GenerateUrl` mock to
+      resolve `"/lightning/o/Account/home"` instead of `"#"`, and changed the assertion in
+      `navigatorItem.test.js`'s "renders a real anchor whose href comes from
+      NavigationMixin.GenerateUrl" to `expect(anchor.getAttribute("href")).toBe(
+      "/lightning/o/Account/home")`. Watched it go red first, before touching the assertion:
+      with the mock changed but the assertion still reading `toBe("#")`,
+      `npx sfdx-lwc-jest -- force-app/main/default/lwc/navigatorItem -t "renders a real anchor"`
+      printed `Expected: "#", Received: "/lightning/o/Account/home"`. Updated the assertion — passed.
+      Then re-applied this finding's exact mutation (the `.then` body replaced with a no-op) and
+      reran the same targeted test: `Expected: "/lightning/o/Account/home", Received: "#"` — red
+      again, confirming the assertion is now load-bearing. Restored the `.then` body. The two
+      pending/rejects tests noted above were not touched and remain green throughout.
 
-- [ ] On the `GenerateUrl` rejection path the anchor now points at the wrong destination,
+- [x] fixed — On the `GenerateUrl` rejection path the anchor now points at the wrong destination,
       permanently and silently, and the new test blesses that state. This re-opens part of
       finding 3 above. `navigatorItem.js`'s `.catch` leaves `url` at `"#"` forever, and
       `handleClick` returns early without `preventDefault()` whenever `metaKey`, `ctrlKey` or
@@ -372,6 +384,24 @@ label, and clicks one to arrive at it.
       pointing at `#` — for example keep the anchor a link but mark it `aria-disabled` and
       intercept `auxclick`, or surface the failure — and change the rejection test to assert the
       chosen behaviour rather than the mere presence of an `href`.
+      **Fix applied**: chose to remove the `href` on a permanent rejection rather than mark the
+      anchor `aria-disabled` or intercept `auxclick` — the smaller change, and the one the critique's
+      own reasoning already sanctions ("the pre-fix behaviour, no `href`... at least failed
+      [safely]" as a comparison point against a wrong destination). `navigatorItem.js`'s `.catch`
+      now sets `this.url = undefined;` instead of leaving `url` at its `"#"` default; the class-field
+      comment on `url` and the `.catch` comment were both updated (not deleted) to explain why the
+      brief pending-state "#" is tolerated but the permanent rejection-state one is not. The
+      modifier-key guard in `handleClick` (lines 46-48) and the unconditional `preventDefault()` on
+      the plain-click path were not touched. Rewrote the rejection test — now "removes href when
+      NavigationMixin.GenerateUrl rejects, rather than leaving new-tab gestures pointed at a stale
+      destination" — to assert `anchor.hasAttribute("href")` is `false` and
+      `anchor.getAttribute("href")` is `null`, i.e. that no destination (right or wrong) is exposed
+      to native new-tab gestures, rather than merely that some `href` is present. Watched it go red
+      first against the unfixed `.catch`:
+      `npx sfdx-lwc-jest -- force-app/main/default/lwc/navigatorItem -t "removes href when
+      NavigationMixin.GenerateUrl rejects"` printed `Expected: false, Received: true` on
+      `hasAttribute("href")`. Applied the fix above; reran — passes, full `navigatorItem` suite
+      passes (7/7).
 
 - [x] false positive — that the pagination assertion still does not bite. Re-ran the previous
       critic's exact mutation (deleted `this.page += 1;` from `wiredNavItems`) and the suite went

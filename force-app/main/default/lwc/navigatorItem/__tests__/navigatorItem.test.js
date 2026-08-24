@@ -42,7 +42,12 @@ describe("c-navigator-item", () => {
 
     const anchor = element.shadowRoot.querySelector("a");
     expect(anchor).not.toBeNull();
-    expect(anchor.getAttribute("href")).toBe("#");
+    // Asserts the resolved value itself, not "#" — the jest mock now
+    // resolves to a distinct URL so this assertion can tell "the
+    // component applied the URL GenerateUrl resolved" apart from "the
+    // component never applied anything and the '#' default is still
+    // sitting there".
+    expect(anchor.getAttribute("href")).toBe("/lightning/o/Account/home");
     expect(getGenerateUrlCalledWith()).toEqual(STORED_PAGE_REFERENCE);
   });
 
@@ -109,7 +114,15 @@ describe("c-navigator-item", () => {
     expect(anchor.hasAttribute("href")).toBe(true);
   });
 
-  it("still has a real href, rather than losing it, when NavigationMixin.GenerateUrl rejects", async () => {
+  it("removes href when NavigationMixin.GenerateUrl rejects, rather than leaving new-tab gestures pointed at a stale destination", async () => {
+    // A rejected GenerateUrl must not leave `url` at the pending-state "#"
+    // default forever: a cmd/ctrl/shift-click or a middle-click on that
+    // anchor would hand the browser `href="#"`, which silently opens a
+    // duplicate of the *current* page — a wrong destination, not a
+    // visible failure. Removing the href instead makes those gestures
+    // inert rather than misleading; the plain-click path is unaffected
+    // because `handleClick` navigates via `NavigationMixin.Navigate`
+    // from `this.pageReference`, independent of `url`.
     GenerateUrl.mockRejectedValueOnce(new Error("GenerateUrl failed"));
 
     const element = createNavigatorItem();
@@ -118,6 +131,7 @@ describe("c-navigator-item", () => {
     await Promise.resolve();
 
     const anchor = element.shadowRoot.querySelector("a");
-    expect(anchor.hasAttribute("href")).toBe(true);
+    expect(anchor.hasAttribute("href")).toBe(false);
+    expect(anchor.getAttribute("href")).toBeNull();
   });
 });
