@@ -243,6 +243,65 @@ private with sharing class NavigatorLayoutControllerTest {
     );
   }
 
+  /**
+   * The claim in the class header is that `WITH USER_MODE` and the explicit
+   * `OwnerId = :UserInfo.getUserId()` predicate are a *pair* — sharing is
+   * defence in depth, never the filter. With the object at OWD Private,
+   * `WITH USER_MODE` alone already hides a peer's rows, so
+   * `peerCannotReadAnotherUsersLayouts` stays green with the predicate
+   * deleted and the claim is unheld.
+   *
+   * This holds it: the peer's row is explicitly shared with the owner, which
+   * is exactly the "future sharing rule" the pair exists to survive. Sharing
+   * now grants read, `WITH USER_MODE` lets it through, and only the OwnerId
+   * predicate keeps it out.
+   */
+  @IsTest
+  static void sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack() {
+    User owner = userWith(OWNER_ALIAS);
+    User peer = userWith(PEER_ALIAS);
+
+    Navigator_Layout__c peerRow = seed('Peer only', true, 1);
+    System.runAs(peer) {
+      insert peerRow;
+    }
+    insert new Navigator_Layout__Share(
+      ParentId = peerRow.Id,
+      UserOrGroupId = owner.Id,
+      AccessLevel = 'Read',
+      RowCause = Schema.Navigator_Layout__Share.RowCause.Manual
+    );
+
+    // The control. Without it this test could pass because the share never
+    // took, which would prove nothing at all about the predicate.
+    Integer reachableBySharing;
+    System.runAs(owner) {
+      reachableBySharing = [
+        SELECT COUNT()
+        FROM Navigator_Layout__c
+        WHERE Id = :peerRow.Id
+      ];
+    }
+    Assert.areEqual(
+      1,
+      reachableBySharing,
+      'The share must genuinely grant the owner read access, or this test proves nothing about the predicate'
+    );
+
+    List<NavigatorLayoutController.LayoutDTO> ownerLayouts;
+    Test.startTest();
+    System.runAs(owner) {
+      ownerLayouts = NavigatorLayoutController.getLayouts();
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      0,
+      ownerLayouts.size(),
+      'A layout shared with the running user is still not theirs — sharing must never decide whose layouts this class returns'
+    );
+  }
+
   // ---------------------------------------------------------------------
   // The schema version, and the deserialiser that dispatches on it
   // ---------------------------------------------------------------------
@@ -300,43 +359,116 @@ private with sharing class NavigatorLayoutControllerTest {
     );
   }
 
+  /**
+   * A row this class cannot read is refused *on its own row* rather than by
+   * failing the whole call. The refusal itself is the point — a payload at an
+   * unknown version must never be read as though it were current — but taking
+   * the user's other, perfectly readable layouts down with it is a second
+   * failure on top of the first, and the one that costs them the Navigator.
+   */
   @IsTest
-  static void anUnreadableFutureSchemaVersionIsRefusedRatherThanGuessedAt() {
+  static void anUnreadableFutureSchemaVersionIsReportedOnItsOwnRowRatherThanGuessedAt() {
     User owner = userWith(OWNER_ALIAS);
     System.runAs(owner) {
-      insert new Navigator_Layout__c(
-        Name = 'From the future',
-        Is_Active__c = true,
-        Sort_Order__c = 1,
-        Schema_Version__c = 99,
-        Layout_JSON__c = V2_PAYLOAD
-      );
+      insert new List<Navigator_Layout__c>{
+        seed('Readable', true, 1),
+        new Navigator_Layout__c(
+          Name = 'From the future',
+          Is_Active__c = false,
+          Sort_Order__c = 2,
+          Schema_Version__c = 99,
+          Layout_JSON__c = V2_PAYLOAD
+        )
+      };
     }
 
-    Boolean refused = false;
-    String message;
+    List<NavigatorLayoutController.LayoutDTO> layouts;
     Test.startTest();
     System.runAs(owner) {
-      try {
-        NavigatorLayoutController.getLayouts();
-        Assert.fail(
-          'A payload at an unknown schema version must not be read as though it were current'
-        );
-      } catch (AuraHandledException e) {
-        refused = true;
-        message = e.getMessage();
-      }
+      layouts = NavigatorLayoutController.getLayouts();
     }
     Test.stopTest();
 
-    Assert.isTrue(
-      refused,
-      'An unknown schema version should raise, not silently mis-read the payload'
+    Assert.areEqual(
+      2,
+      layouts.size(),
+      'One unreadable row must not take the user\'s other layouts down with it'
+    );
+    Assert.areEqual(
+      'standard-Account',
+      ((Map<String, Object>) itemsOfFirstSection(layouts[0].layoutJson)[0])
+        .get('id'),
+      'The readable layout must still come back with its contents intact'
+    );
+    Assert.areEqual(
+      true,
+      layouts[0].isReadable,
+      'A row this class can read must be flagged readable'
+    );
+    Assert.areEqual(
+      false,
+      layouts[1].isReadable,
+      'A payload at an unknown schema version must not be handed over as though it were current'
+    );
+    Assert.isNull(
+      layouts[1].layoutJson,
+      'An unreadable row must carry no payload at all, so no caller can render a guess at it'
     );
     Assert.isTrue(
-      message.contains('99'),
+      layouts[1].unreadableReason.contains('99'),
       'The refusal should name the version it could not read, so the cause is obvious. Got: ' +
-      message
+      layouts[1].unreadableReason
+    );
+  }
+
+  /**
+   * The read-path twin of `aPayloadThatIsNotJsonIsRefusedRatherThanStored`.
+   * The write path cannot put this in the field, but an administrator can:
+   * the permission set grants `allowEdit` on the object, so `Layout_JSON__c`
+   * is hand-editable in the record UI.
+   */
+  @IsTest
+  static void aStoredPayloadThatIsNotJsonIsReportedOnItsOwnRowRatherThanFailingTheRead() {
+    User owner = userWith(OWNER_ALIAS);
+    System.runAs(owner) {
+      insert new List<Navigator_Layout__c>{
+        seed('Readable', true, 1),
+        new Navigator_Layout__c(
+          Name = 'Hand edited',
+          Is_Active__c = false,
+          Sort_Order__c = 2,
+          Schema_Version__c = NavigatorLayoutController.CURRENT_SCHEMA_VERSION,
+          Layout_JSON__c = 'not json at all'
+        )
+      };
+    }
+
+    List<NavigatorLayoutController.LayoutDTO> layouts;
+    Test.startTest();
+    System.runAs(owner) {
+      layouts = NavigatorLayoutController.getLayouts();
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      2,
+      layouts.size(),
+      'A row an admin edited into nonsense must not make the user\'s other layouts unreadable'
+    );
+    Assert.areEqual(
+      'standard-Account',
+      ((Map<String, Object>) itemsOfFirstSection(layouts[0].layoutJson)[0])
+        .get('id'),
+      'The readable layout must still come back with its contents intact'
+    );
+    Assert.areEqual(
+      false,
+      layouts[1].isReadable,
+      'A payload that is not JSON cannot be read and must say so on its own row'
+    );
+    Assert.isNotNull(
+      layouts[1].unreadableReason,
+      'An unreadable row must carry the reason it could not be read'
     );
   }
 
@@ -444,6 +576,32 @@ private with sharing class NavigatorLayoutControllerTest {
     );
   }
 
+  /**
+   * The two halves of the payload contract have to agree about an absent key,
+   * not only about an out-of-range one. This class and `navigatorLayoutModel`
+   * both document themselves as implementing one contract; a section carrying
+   * no `columns` at all is the key they disagreed on, Apex falling back to 1
+   * and the client to 3.
+   */
+  @IsTest
+  static void aSectionWithNoColumnCountAtAllIsStoredAtTheContractDefault() {
+    User owner = userWith(OWNER_ALIAS);
+    String noColumns =
+      '{"schemaVersion":2,"sections":[' + '{"name":"Unspecified","items":[]}]}';
+
+    Test.startTest();
+    System.runAs(owner) {
+      NavigatorLayoutController.createLayout('Defaults', noColumns, false);
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      3,
+      firstSectionOf(storedLayouts()[0].Layout_JSON__c).get('columns'),
+      'A section carrying no columns key must be stored at the contract default of 3, the same fallback navigatorLayoutModel.clampColumns uses'
+    );
+  }
+
   @IsTest
   static void anEmptyPayloadIsStoredAsALayoutWithNoSections() {
     User owner = userWith(OWNER_ALIAS);
@@ -533,6 +691,47 @@ private with sharing class NavigatorLayoutControllerTest {
       2,
       stored[1].Sort_Order__c,
       'A new layout goes after the ones already there'
+    );
+  }
+
+  /**
+   * `Sort_Order__c = existing.size() + 1` collides after a delete — and the
+   * permission set grants `allowDelete`, so a delete is an ordinary thing for
+   * a user to do. Two layouts sharing a sort order are then ordered
+   * arbitrarily-but-stably by `ORDER BY Sort_Order__c NULLS LAST, CreatedDate`
+   * rather than as the user left them.
+   */
+  @IsTest
+  static void aNewLayoutGoesAfterTheHighestSortOrderEvenAfterADelete() {
+    User owner = userWith(OWNER_ALIAS);
+    System.runAs(owner) {
+      List<Navigator_Layout__c> rows = new List<Navigator_Layout__c>{
+        seed('First', false, 1),
+        seed('Second', true, 2)
+      };
+      insert rows;
+      delete rows[0];
+    }
+
+    Test.startTest();
+    System.runAs(owner) {
+      NavigatorLayoutController.createLayout('Third', V2_PAYLOAD, true);
+    }
+    Test.stopTest();
+
+    Map<String, Decimal> ordersByName = new Map<String, Decimal>();
+    for (Navigator_Layout__c row : storedLayouts()) {
+      ordersByName.put(row.Name, row.Sort_Order__c);
+    }
+    Assert.areEqual(
+      3,
+      ordersByName.get('Third'),
+      'A new layout goes after the highest sort order in use, not after the count of surviving rows'
+    );
+    Assert.areNotEqual(
+      ordersByName.get('Second'),
+      ordersByName.get('Third'),
+      'Two of a user\'s layouts must never share a sort order, or their order stops being the one they left'
     );
   }
 

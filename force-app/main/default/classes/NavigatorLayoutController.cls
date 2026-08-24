@@ -35,6 +35,16 @@ public with sharing class NavigatorLayoutController {
   private static final Integer OLDEST_READABLE_SCHEMA_VERSION = 1;
   private static final Integer MIN_COLUMNS = 1;
   private static final Integer MAX_COLUMNS = 6;
+
+  /**
+   * What a section carrying no `columns` key at all is stored at. It is 3
+   * because `navigatorLayoutModel.DEFAULT_COLUMNS` is 3, and the two files are
+   * the two halves of one payload contract: a fallback that differed would
+   * mean a section written as a 1-column section here and read as a 3-column
+   * section there. Out-of-range values are clamped to MIN/MAX; only an absent
+   * value lands here.
+   */
+  private static final Integer DEFAULT_COLUMNS = 3;
   private static final String EMPTY_PAYLOAD = '{"sections":[]}';
 
   private static final String NULL_ID_MESSAGE =
@@ -59,17 +69,46 @@ public with sharing class NavigatorLayoutController {
     public Integer schemaVersion;
     @AuraEnabled
     public String layoutJson;
+    /**
+     * False when this class could not read the row's payload. The row still
+     * comes back — a user's other layouts must not become unreachable
+     * because one of them is at a version this package does not know, or
+     * because an administrator hand-edited `Layout_JSON__c` into something
+     * that is not a payload. `layoutJson` is null on such a row, so no caller
+     * can render a guess at it.
+     */
+    @AuraEnabled
+    public Boolean isReadable;
+    @AuraEnabled
+    public String unreadableReason;
   }
 
   // ---------------------------------------------------------------------
   // Read
   // ---------------------------------------------------------------------
 
+  /**
+   * Every layout the running user owns. A row whose payload this class cannot
+   * read is flagged rather than raised: it comes back with `isReadable` false,
+   * no `layoutJson` and the reason, and the user's other layouts come back
+   * intact beside it.
+   *
+   * Failing the whole call on the first unreadable row was worse than the
+   * problem it reported. One row at a version from a newer package, or one an
+   * administrator hand-edited (the permission set grants `allowEdit`), made
+   * *every* layout that user owns unreachable — and the client, seeing no
+   * layouts, would then have treated them as a first-time user and created a
+   * rival active layout.
+   */
   @AuraEnabled(cacheable=true)
   public static List<LayoutDTO> getLayouts() {
     List<LayoutDTO> layouts = new List<LayoutDTO>();
     for (Navigator_Layout__c row : ownLayouts()) {
-      layouts.add(toDto(row));
+      try {
+        layouts.add(toDto(row));
+      } catch (Exception e) {
+        layouts.add(unreadableDto(row, e.getMessage()));
+      }
     }
     return layouts;
   }
@@ -90,7 +129,7 @@ public with sharing class NavigatorLayoutController {
       OwnerId = UserInfo.getUserId(),
       Name = name,
       Is_Active__c = makeActive == true,
-      Sort_Order__c = existing.size() + 1,
+      Sort_Order__c = nextSortOrder(existing),
       Schema_Version__c = CURRENT_SCHEMA_VERSION,
       Layout_JSON__c = fromClient(layoutJson)
     );
@@ -163,6 +202,24 @@ public with sharing class NavigatorLayoutController {
   }
 
   /**
+   * Where a new layout goes: after the highest sort order in use, not after
+   * the count of rows. A count collides the moment the user deletes one — the
+   * permission set grants `allowDelete`, so that is ordinary — and two rows
+   * sharing a sort order are then ordered arbitrarily-but-stably by
+   * `ownLayouts`' ORDER BY rather than as the user left them. Computed from
+   * the rows the class has already queried, so it costs no extra SOQL.
+   */
+  private static Decimal nextSortOrder(List<Navigator_Layout__c> existing) {
+    Decimal highest = 0;
+    for (Navigator_Layout__c row : existing) {
+      if (row.Sort_Order__c != null && row.Sort_Order__c > highest) {
+        highest = row.Sort_Order__c;
+      }
+    }
+    return highest + 1;
+  }
+
+  /**
    * `Is_Active__c` is enforced here rather than by the database, because the
    * platform has no "exactly one per owner" constraint. The rows returned are
    * id-and-flag stubs so that activating a layout cannot accidentally rewrite
@@ -203,7 +260,12 @@ public with sharing class NavigatorLayoutController {
     throw raise('That layout no longer exists, or does not belong to you.');
   }
 
-  private static LayoutDTO toDto(Navigator_Layout__c row) {
+  /**
+   * The half of a DTO that needs no payload: who the row is. Shared by the
+   * readable and the unreadable paths so the two cannot drift into describing
+   * the same row differently.
+   */
+  private static LayoutDTO identityDto(Navigator_Layout__c row) {
     LayoutDTO dto = new LayoutDTO();
     dto.layoutId = row.Id;
     dto.name = row.Name;
@@ -211,10 +273,32 @@ public with sharing class NavigatorLayoutController {
     dto.sortOrder = row.Sort_Order__c == null
       ? null
       : row.Sort_Order__c.intValue();
+    return dto;
+  }
+
+  /**
+   * A row whose payload could not be read. It carries no `layoutJson` at all
+   * rather than an empty one, so that a caller cannot mistake "we could not
+   * read this" for "this layout has no sections in it" and save that back.
+   */
+  private static LayoutDTO unreadableDto(
+    Navigator_Layout__c row,
+    String reason
+  ) {
+    LayoutDTO dto = identityDto(row);
+    dto.schemaVersion = storedVersionOf(row);
+    dto.isReadable = false;
+    dto.unreadableReason = reason;
+    return dto;
+  }
+
+  private static LayoutDTO toDto(Navigator_Layout__c row) {
+    LayoutDTO dto = identityDto(row);
     // Always the current version, because `layoutJson` below has been brought
     // up to it. The row itself is left at whatever version it was stored at —
     // reading never writes.
     dto.schemaVersion = CURRENT_SCHEMA_VERSION;
+    dto.isReadable = true;
     dto.layoutJson = fromStored(row.Layout_JSON__c, storedVersionOf(row));
     return dto;
   }
@@ -386,12 +470,13 @@ public with sharing class NavigatorLayoutController {
   /**
    * The column range is part of the contract, not just of the UI, so it is
    * held here too — a v3 reader should never have to cope with a section of
-   * zero columns that a bug once wrote.
+   * zero columns that a bug once wrote. The fallback for an absent count is
+   * DEFAULT_COLUMNS, matching `navigatorLayoutModel.clampColumns` key for key.
    */
   private static Integer columnsOf(Object raw) {
     return Math.max(
       MIN_COLUMNS,
-      Math.min(MAX_COLUMNS, intOf(raw, MIN_COLUMNS))
+      Math.min(MAX_COLUMNS, intOf(raw, DEFAULT_COLUMNS))
     );
   }
 

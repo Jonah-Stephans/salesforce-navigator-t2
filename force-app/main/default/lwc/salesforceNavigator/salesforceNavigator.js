@@ -32,6 +32,20 @@ const SAVE_ERROR_MESSAGE =
   "We could not save your layout. Your last change may not be kept.";
 
 /**
+ * Shown when `getLayouts` fails, or when it reports a row it could not read.
+ * It has to say more than "something went wrong", because the consequence is
+ * specific: the Navigator on screen is the seeded one, and nothing the user
+ * changes now will be written. Suppressing the write is the point — a create
+ * made without a successful read passes `makeActive: true`, and the
+ * controller clears `Is_Active__c` on the user's other layouts, so the real
+ * layout we failed to read would be deactivated and (until the switcher slice)
+ * unreachable.
+ */
+const LAYOUT_LOAD_ERROR_MESSAGE =
+  "We could not load your saved layout, so this is the default arrangement. " +
+  "Reload the page before changing anything — changes are not being saved.";
+
+/**
  * The layout a user gets when they first change something. They have not
  * named a layout at this point — naming and switching between several is a
  * later slice — so the first record needs a name and this is it.
@@ -71,7 +85,15 @@ export default class SalesforceNavigator extends LightningElement {
   items = [];
   errorMessage;
   saveErrorMessage;
-  isLoading = true;
+  layoutLoadErrorMessage;
+
+  // Two separate "still arriving" facts, because they finish independently
+  // and *both* have to be finished before anything is safe to change. Tabs:
+  // a change made mid-pagination seeds `All Items` from the pages received so
+  // far and freezes a partial list into the store. Layout: a change made
+  // before `getLayouts` lands is overwritten when it lands.
+  isLoadingTabs = true;
+  hasLoadedLayout = false;
 
   // Undefined means "this user has never changed anything", which is not the
   // same as an empty layout — one is computed on every render, the other is a
@@ -106,14 +128,28 @@ export default class SalesforceNavigator extends LightningElement {
     getLayouts()
       .then((rows) => {
         this.adoptActiveLayout(rows);
+        this.hasLoadedLayout = true;
       })
       .catch(() => {
         // A layout that cannot be read is not a reason to show the user
-        // nothing: the seeded layout is a complete, usable Navigator. What
-        // must not happen is a save overwriting a stored layout we failed to
-        // read, and it cannot — `layoutId` stays undefined, so the next
-        // change creates a record rather than updating one blindly.
+        // nothing: the seeded layout is a complete, usable Navigator, and it
+        // still navigates. What must not happen is the user's real layout
+        // being *displaced* by what they do next. `layoutId` stays undefined,
+        // so the next change would call `createLayout(makeActive: true)`, and
+        // the controller clears `Is_Active__c` on every other layout the
+        // owner has — leaving the layout we failed to read deactivated and,
+        // with no switcher until a later slice, unreachable. Overwrite was
+        // never the hazard here; displacement is, and it costs the user the
+        // same thing. So the failure is announced and the autosave is
+        // suppressed until a read succeeds.
+        //
+        // The message is fixed rather than reduced from the server's, because
+        // what the user needs told is the consequence — this is not your
+        // layout and nothing is being saved — and that is the same whatever
+        // the cause was.
         this.storedLayout = undefined;
+        this.layoutLoadErrorMessage = LAYOUT_LOAD_ERROR_MESSAGE;
+        this.hasLoadedLayout = true;
       });
   }
 
@@ -136,8 +172,27 @@ export default class SalesforceNavigator extends LightningElement {
    */
   adoptActiveLayout(rows) {
     const layouts = rows || [];
-    const active = layouts.find((row) => row.isActive) || layouts[0];
+
+    // A row the controller could not read comes back flagged rather than
+    // taking the whole call down with it, so the user's *other* layouts are
+    // still usable. It cannot be adopted, and it must not be displaced
+    // either: a save now would pass `makeActive: true` and clear its flag, so
+    // the same suppression the failed-read path uses applies here.
+    if (layouts.some((row) => row.isReadable === false)) {
+      this.layoutLoadErrorMessage = LAYOUT_LOAD_ERROR_MESSAGE;
+    }
+    const readable = layouts.filter((row) => row.isReadable !== false);
+
+    const active = readable.find((row) => row.isActive) || readable[0];
     if (!active) {
+      return;
+    }
+    // Defence in depth against the window this component no longer opens:
+    // nothing is interactive until `hasLoadedLayout`, so there is no change
+    // to clobber by the time this runs. `adoptActiveLayout` should not depend
+    // on the template to be safe, though — assigning `storedLayout` over a
+    // change the user has already made and seen is silent data loss.
+    if (this.storedLayout !== undefined) {
       return;
     }
     this.layoutId = active.layoutId;
@@ -165,10 +220,10 @@ export default class SalesforceNavigator extends LightningElement {
       if (hasMorePages(data)) {
         this.page += 1;
       } else {
-        this.isLoading = false;
+        this.isLoadingTabs = false;
       }
     } else if (error) {
-      this.isLoading = false;
+      this.isLoadingTabs = false;
       this.items = [];
       this.errorMessage = SalesforceNavigator.reduceError(
         error,
@@ -215,6 +270,17 @@ export default class SalesforceNavigator extends LightningElement {
     return resolveLayout(this.layout, this.items);
   }
 
+  /**
+   * Still arriving, and therefore not yet safe to change. Both halves count:
+   * a partially paginated tab list would seed `All Items` short, and a layout
+   * still in flight would land on top of whatever the user did meanwhile.
+   * A wire error outranks it, or a failed tab load would spin forever behind
+   * the spinner instead of saying so.
+   */
+  get isLoading() {
+    return !this.hasError && (this.isLoadingTabs || !this.hasLoadedLayout);
+  }
+
   get hasError() {
     return Boolean(this.errorMessage);
   }
@@ -223,8 +289,22 @@ export default class SalesforceNavigator extends LightningElement {
     return Boolean(this.saveErrorMessage);
   }
 
+  get hasLayoutLoadError() {
+    return Boolean(this.layoutLoadErrorMessage);
+  }
+
   get hasItems() {
     return !this.isLoading && !this.hasError && this.items.length > 0;
+  }
+
+  /**
+   * Whether a change may be made at all. Everything that writes hangs off
+   * this: the tab list is complete, so a seed is the whole list; the stored
+   * layout has arrived, so nothing will land on top of the change; and the
+   * read succeeded, so a save cannot displace a layout we could not read.
+   */
+  get canEdit() {
+    return this.hasItems && !this.hasLayoutLoadError;
   }
 
   get isEmpty() {
@@ -270,6 +350,14 @@ export default class SalesforceNavigator extends LightningElement {
   }
 
   scheduleSave() {
+    // Nothing is written while the stored layout is unknown. The section
+    // menus live in a child component and stay operable, so the change is
+    // still applied and still on screen — but a write here would create a
+    // rival active layout and displace the one we failed to read, and the
+    // alert beside the layout says so.
+    if (this.hasLayoutLoadError) {
+      return;
+    }
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
     }

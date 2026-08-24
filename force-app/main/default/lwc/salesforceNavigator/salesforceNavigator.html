@@ -1,10 +1,16 @@
 <template>
   <lightning-card title="Salesforce Navigator" icon-name="standard:choice">
-    <lightning-button
-      slot="actions"
-      label="New section"
-      onclick={handleAddSection}
-    ></lightning-button>
+    <!-- Gated on the same fact the sections are, and for the same reason: a
+         click before pagination finishes seeds All Items from the pages
+         received so far, and a click before the stored layout arrives is
+         overwritten when it does. -->
+    <template lwc:if={canEdit}>
+      <lightning-button
+        slot="actions"
+        label="New section"
+        onclick={handleAddSection}
+      ></lightning-button>
+    </template>
 
     <template lwc:if={isLoading}>
       <lightning-spinner
@@ -23,6 +29,16 @@
       </div>
     </template>
     <template lwc:elseif={hasItems}>
+      <!-- Beside the layout, not in place of it: the seeded Navigator below
+           is complete and still navigates. The message has to be here rather
+           than nowhere, because the consequence is invisible otherwise —
+           this is not the user's layout, and nothing is being saved. -->
+      <template lwc:if={hasLayoutLoadError}>
+        <div class="rstk-nav-error" role="alert">
+          <p class="rstk-nav-error__text">{layoutLoadErrorMessage}</p>
+        </div>
+      </template>
+
       <!-- Reported beside the layout, never in place of it: the change that
            failed to save is still on screen and still correct. -->
       <template lwc:if={hasSaveError}>

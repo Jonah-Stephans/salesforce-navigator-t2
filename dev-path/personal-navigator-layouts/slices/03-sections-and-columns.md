@@ -155,13 +155,17 @@ still there tomorrow.
       at v2), `anUnreadableFutureSchemaVersionIsRefusedRatherThanGuessedAt` (a v99 row raises and the
       message names the version) and `anEmptyPayloadIsStoredAsALayoutWithNoSections`.
 - [x] met — Apex tests cover the controller under `System.runAs` for a non-administrator, and at the
-      bulk volume the repository's testing rule requires. All 18 methods run under `System.runAs` a
-      user on the genuine **Standard User** profile, not an admin;
+      bulk volume the repository's testing rule requires. All **21** test methods run under
+      `System.runAs` a user on the genuine **Standard User** profile, not an admin;
       `activationStaysOneUpdateAcrossTwoHundredLayouts` is the 200-record bulk test. It is written to
       earn its place rather than to satisfy the hook: it seeds all 200 layouts active so the
       activation clearing does real work, then asserts exactly one survives, that it is the right
       one, and that the cost stayed O(1) — `dmlUsed <= 2` and `queriesUsed <= 3` regardless of
-      volume. 18/18 pass; `NavigatorLayoutController` is at 92% coverage.
+      volume. 21/21 pass; `NavigatorLayoutController` is at 93% coverage. The count was 18 and the
+      class has never had 18 test methods: 18 was the number of `@IsTest` annotations, which
+      includes the class-level one. Counting the annotations rather than the methods is also how
+      `sf apex run test` reports it — the run says "Tests Ran 22" because it counts the `@TestSetup`
+      `makeUsers` alongside the 21 test methods. The number is now the methods.
 
 ## Deviations
 
@@ -303,9 +307,60 @@ still there tomorrow.
       renamed Apex method would pass 95 tests and fail at runtime. The server compiles the bundle and
       resolves those imports, and it accepted them.
 
+- **Acceptance criterion 1 was ticked and was not met, for any org past one page of tabs.** Recorded
+  here rather than un-ticked, per the fix pass's instruction. The criterion says a user opening the
+  Navigator for the first time sees *every* tab they can reach in one section named "All Items", and
+  the test that backed it — `firstOpen › shows every reachable tab in one section named All Items` —
+  emits a single page and so could never see the gap. The *New section* button sat outside the
+  `isLoading`/`hasItems` gate, so a click during pagination seeded `All Items` from the pages
+  received so far and froze that into the store. A bare scratch org returns ~174 tabs across two
+  pages, so this was every real org, not an edge. It is now true: the button is gated on `canEdit`,
+  and `offers no New section button until every page of tabs has arrived` drives 100 tabs on page 1
+  and 2 on page 2 and asserts the stored section carries all 102.
+
+- **Criterion 10's wording changed with the behaviour it describes.** _How_, not _what_ — the
+  criterion's claim is that the payload carries a schema version and the reader dispatches on it,
+  and that is unchanged and still asserted four ways. What changed is the parenthetical describing
+  what a v99 row does: it said "a v99 row raises and the message names the version", and a v99 row
+  now comes back flagged unreadable with the reason naming the version, while the rest of that
+  user's layouts come back readable beside it. Both are refusals; the new one refuses the row rather
+  than the call. The write path still raises outright, and
+  `aPayloadThatIsNotJsonIsRefusedRatherThanStored` is untouched.
+
+- **An unreadable row suppresses the autosave, the same as a failed read does.** _How_, not _what_,
+  and the alternative was considered and rejected. Suppressing only when the row the client *would
+  have adopted* is the unreadable one is narrower, but every write this component makes passes
+  `makeActive: true`, and the controller clears `Is_Active__c` on **every** other row the owner has
+  — so any write deactivates the unreadable row whichever row it was. Since that row is by
+  definition one this package cannot read (a newer package's, or a hand-edited one), deactivating it
+  is not ours to do. One rule: if any row came back unreadable, say so and write nothing.
+
+- **A PostToolUse hook reported an indentation mismatch on an edit it did not actually block.**
+  Copied verbatim as the fix pass requires:
+
+  > BLOCKED: Indentation mismatch — file uses 2-space, replacement uses 4-space. Match the existing
+  > file's indentation style in your replacement text. Use exactly 2 spaces per indent level. 1
+  > level = 2 spaces, 2 levels = 4 spaces, 3 levels = 6 spaces. Use Read(offset, limit) to inspect
+  > the exact whitespace, then retry Edit with matching indentation.
+
+  It fired on `dto.isReadable = true;` inside `toDto`, which is two levels deep in a 2-space file
+  and therefore correctly indented with four spaces — the hook's own third sentence says so. The
+  edit had already applied and the file is consistent; work continued rather than stopping, because
+  nothing was refused. Flagging it because the hook's message says BLOCKED when it did not block.
+
 ## Critique findings
 
-- [ ] **A change made before `getLayouts` resolves is silently discarded.**
+- [x] fixed — nothing is interactive until the stored layout has arrived, so the window the fetch
+      could land in no longer exists. `isLoading` is now a getter over two separate facts —
+      `isLoadingTabs` and `hasLoadedLayout` — and the sections and the *New section* button both hang
+      off it, so `adoptActiveLayout` cannot run against a change the user has already made and seen.
+      `adoptActiveLayout` also refuses to assign over a `storedLayout` that is already set, so it is
+      safe on its own rather than by depending on the template. Test first:
+      `before the Navigator is ready to be changed › offers nothing to change until the stored layout
+      has arrived, so the fetch cannot discard a change` — red against the old code with
+      `expect(received).toBeNull() / Received: <lightning-button slot="actions" />`. Mutation-checked:
+      dropping `hasLoadedLayout` back out of `isLoading` turns exactly that test red again.
+      **A change made before `getLayouts` resolves is silently discarded.**
       `connectedCallback` fires `getLayouts()` without awaiting it, and the `New section` button and
       every section menu are already live while it is in flight. `adoptActiveLayout` then assigns
       `this.storedLayout` **unconditionally**, overwriting whatever the user changed in the meantime.
@@ -316,7 +371,21 @@ still there tomorrow.
       already touched (a "user has changed something" flag set in `applyLayout`, or resolve the
       fetch before the layout is interactive). No test covers the in-flight window at all — every
       existing test lets `getLayouts` settle inside `flush()` before it interacts.
-- [ ] **A failed `getLayouts` tells the user nothing and lets their next change displace their real
+- [x] fixed — the failure is now announced and the autosave is suppressed until a read succeeds.
+      The `.catch` sets `layoutLoadErrorMessage`, which renders as a `[role="alert"]` beside the
+      seeded layout (SLDS semantic hooks, the existing `rstk-nav-error` rule), and `scheduleSave`
+      returns without scheduling while it is set — so no `createLayout({makeActive: true})` can
+      displace the layout we failed to read. The *New section* button is gated on `canEdit`, which
+      is `hasItems && !hasLayoutLoadError`. The seeded Navigator still renders and still navigates,
+      because a failed read is not a reason to show the user nothing. **The `.catch` comment is
+      rewritten**: it named overwrite as the hazard, which was true and beside the point;
+      displacement was the hazard and costs the user the same thing. Test first:
+      `before the Navigator is ready to be changed › tells the user when their stored layout could
+      not be read, and saves nothing until it can` — red against the old code with
+      `expect(received).not.toBeNull() / Received: null` on the `[role="alert"]` query.
+      Mutation-checked: removing the `scheduleSave` guard turns it red on
+      `Expected number of calls: 0 / Received number of calls: 1`.
+      **A failed `getLayouts` tells the user nothing and lets their next change displace their real
       layout.** Reproduced with `getLayouts.mockRejectedValue(...)`: no `[role="alert"]` is rendered
       (`errorMessage` is never set on that path — only the wire's failure sets it), so the user sees
       a seeded Navigator that looks like a first open. Their next change then calls
@@ -328,7 +397,16 @@ still there tomorrow.
       is true of overwrite and false of displacement, which costs the user the same thing. Either
       surface the failure and suppress autosave until a read succeeds, or do not pass
       `makeActive: true` on a create made without a successful read.
-- [ ] **`New section` is live before the tab list is complete, so a click mid-pagination freezes a
+- [x] fixed — the button is wrapped in `<template lwc:if={canEdit}>`, and `canEdit` is
+      `hasItems && !hasLayoutLoadError`, so it is gated on exactly the fact the sections are gated
+      on: pagination complete. Test first: `before the Navigator is ready to be changed › offers no
+      New section button until every page of tabs has arrived` — 100 tabs on page 1 and 2 on page 2,
+      red against the old code with `expect(received).toBeNull() / Received: <lightning-button
+      slot="actions" />`, and its closing assertion is that the layout the click stores carries all
+      102 items rather than 100. Mutation-checked: gating on `hasLoadedLayout` alone rather than
+      `canEdit` turns it red again. See `## Deviations` — this means acceptance criterion 1 was not
+      in fact met for any org past one page.
+      **`New section` is live before the tab list is complete, so a click mid-pagination freezes a
       partial seed into the store.** The button sits in `slot="actions"` and is rendered
       unconditionally — outside the `lwc:if={isLoading}` / `lwc:elseif={hasItems}` chain that gates
       the sections. `this.layout` on a first change is `buildSeededLayout(this.items)`, and
@@ -338,7 +416,26 @@ still there tomorrow.
       this slice, and they never render again. This contradicts the first acceptance criterion
       ("sees every tab they can reach in one section") for any org past one page. Gate the button on
       `hasItems`, or seed only once the tab list is complete.
-- [ ] **One unreadable row makes every layout that user owns unreadable.** `getLayouts` maps `toDto`
+- [x] fixed — `getLayouts` now reads each row inside its own `try`, and a row it cannot read comes
+      back flagged instead of taking the call down: `isReadable` false, `unreadableReason` carrying
+      the message, and **`layoutJson` null** rather than empty, so no caller can mistake "we could
+      not read this" for "this layout has no sections" and save that back. `identityDto` is shared
+      by the readable and unreadable paths so the two cannot describe the same row differently.
+      The client half matches: `adoptActiveLayout` chooses the active layout from the readable rows
+      only, and an unreadable row raises the same alert and the same autosave suppression as a
+      failed read — because a save now would pass `makeActive: true` and displace it. Both suite
+      gaps closed:
+      `anUnreadableFutureSchemaVersionIsRefusedRatherThanGuessedAt` is now
+      `anUnreadableFutureSchemaVersionIsReportedOnItsOwnRowRatherThanGuessedAt` and seeds **two**
+      rows, so it asserts the readable one still comes back with its contents; and
+      `aStoredPayloadThatIsNotJsonIsReportedOnItsOwnRowRatherThanFailingTheRead` is the read-path
+      twin of `aPayloadThatIsNotJsonIsRefusedRatherThanStored`. Both red first, against the real
+      defect: `System.AuraHandledException: This layout was saved at schema version 99, which this
+      version of the Navigator cannot read.` and `System.AuraHandledException: This layout's payload
+      is not valid JSON. (Unrecognized token 'not' ...)`, each thrown out of
+      `getLayouts` → `toDto` → `fromStored`. See `## Deviations` for the criterion-10 wording this
+      changed.
+      **One unreadable row makes every layout that user owns unreadable.** `getLayouts` maps `toDto`
       over the whole result and `normalise` throws on the first row it cannot read, so a single row
       at an unknown `Schema_Version__c`, or with a `Layout_JSON__c` an admin edited by hand (the
       permission set grants `allowEdit` on the object), takes down the read for all of that user's
@@ -348,32 +445,72 @@ still there tomorrow.
       Apex test at all for a stored payload that is not valid JSON on the **read** path
       (`aPayloadThatIsNotJsonIsRefusedRatherThanStored` covers only the write path). Consider
       skipping and reporting the unreadable row rather than failing the whole call.
-- [ ] **The two halves of the payload contract disagree on a missing `columns`.**
+- [x] fixed — **the fallback is 3, `DEFAULT_COLUMNS`**, and Apex now uses it. The client was already
+      right by the slice's own reasoning: `## Deviations` says every uncustomised section opens at
+      three columns because one column makes the seeded card a 174-row strip, and Apex falling back
+      to 1 contradicted that as well as the client. `NavigatorLayoutController.DEFAULT_COLUMNS` is a
+      named constant carrying why it is 3 and naming its opposite number, rather than a literal in
+      `columnsOf`. Out-of-range values still clamp to MIN/MAX; only an absent key lands on the
+      fallback. Test first: `aSectionWithNoColumnCountAtAllIsStoredAtTheContractDefault`, red with
+      `Assertion Failed: A section carrying no columns key must be stored at the contract default of
+      3 ...: Expected: 3, Actual: 1`.
+      **The two halves of the payload contract disagree on a missing `columns`.**
       `NavigatorLayoutController.columnsOf` falls back to `MIN_COLUMNS` (1); `navigatorLayoutModel`'s
       `clampColumns` falls back to `DEFAULT_COLUMNS` (3). A section object carrying no `columns` key
       is therefore stored as a 1-column section by Apex and read as a 3-column section by the
       client. It is latent today only because every read is normalised by Apex before the client
       sees it — but both files document themselves as two halves of one contract that match "by
       construction", and on this key they do not. Pick one fallback and state it in both.
-- [ ] **The last acceptance criterion says "All 18 methods run under `System.runAs`" and "18/18
+- [x] fixed — the criterion now reads "All **21** test methods" and "21/21 pass", and says in one
+      sentence where 18 came from so the next reader does not recount the annotations and get 22.
+      21 rather than 17 because this pass added four: the two read-path robustness tests, the
+      missing-`columns` contract test and the sharing-predicate test. The count is the only thing
+      that changed — the claim it stood on was true and still is. (Verified by listing the method
+      names, not by counting annotations: `grep -A1 "^  @IsTest" ... | grep "static void"` gives 21,
+      and `sf apex run test` reports 22 because `makeUsers`, the `@TestSetup`, is in its list.)
+      **The last acceptance criterion says "All 18 methods run under `System.runAs`" and "18/18
       pass"; `NavigatorLayoutControllerTest` has 17 test methods.** The count of 18 is the number of
       `@IsTest` annotations in the file, which includes the class-level one. The claim itself holds
       — all 17 do run under `System.runAs` a Standard User, and `activationStaysOneUpdateAcrossTwoHundredLayouts`
       is a genuine 200-record bulk test — only the number is wrong.
-- [ ] **`setSectionColumns` is the one section operation with no purity assertion of its own.**
+- [x] fixed — both `setSectionColumns` tests now take a `frozenCopy()` before the call and assert
+      `expect(base).toEqual(before)` after it, the same explicit deep-compare `addSection`,
+      `renameSection` and `deleteSection` have. Mutation-checked: rewriting `setSectionColumns` to
+      write `section.columns` in place before copying turns **both** of them red on the purity
+      assertion, where before the mutation was caught by one test and only by the accident of it
+      reusing `base` across three calls.
+      **`setSectionColumns` is the one section operation with no purity assertion of its own.**
       `addSection`, `renameSection` and `deleteSection` each assert `expect(base).toEqual(before)`
       against a copy taken beforehand; the two `setSectionColumns` tests do not. Mutating it to
       write `section.columns` in place turns exactly one test red, and that test
       (`clamps a column count outside one to six rather than storing it`) only catches it by
       accident, because it happens to reuse `base` across three calls. Add the same explicit
       before/after deep-compare the other three have.
-- [ ] **The explicit `OwnerId = :UserInfo.getUserId()` predicate is not held down by any test.**
+- [x] fixed — `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack` holds it. The critic is right
+      that no test *could* hold it while the only mechanism in play was OWD Private, so the test
+      creates the condition the pair exists to survive: the peer's row is explicitly shared with the
+      owner via `Navigator_Layout__Share` at `Read`/`Manual`. Sharing now grants access,
+      `WITH USER_MODE` lets the row through, and only the `OwnerId` predicate keeps it out. It
+      carries a control assertion — a plain SOQL count under `System.runAs` the owner, asserting the
+      share genuinely took — so it cannot pass because the share silently failed. Mutation-checked
+      by deleting the predicate line from `ownLayouts` and deploying: `Assertion Failed: A layout
+      shared with the running user is still not theirs — sharing must never decide whose layouts
+      this class returns: Expected: 0, Actual: 1`, and it was the only failure in the run.
+      **The explicit `OwnerId = :UserInfo.getUserId()` predicate is not held down by any test.**
       Both the class header and the sixth acceptance criterion rest on the predicate and
       `WITH USER_MODE` being present *together* as defence in depth, but with the object at OWD
       Private, `WITH USER_MODE` alone already hides a peer's rows — so deleting the predicate leaves
       `peerCannotReadAnotherUsersLayouts` and the whole suite green. The code is correct and the
       security rule is satisfied; the claim that the pair cannot be quietly reduced to one is not.
-- [ ] **`Sort_Order__c = existing.size() + 1` collides after a delete.** A user with layouts at sort
+- [x] fixed — `nextSortOrder(existing)` returns the highest `Sort_Order__c` in use plus one,
+      computed from the rows `ownLayouts()` has already queried so it costs no extra SOQL (a
+      `MAX(Sort_Order__c)` aggregate would have been a second query for a number the class is
+      already holding). Test first:
+      `aNewLayoutGoesAfterTheHighestSortOrderEvenAfterADelete` — two layouts, delete the first,
+      create a third — red with `Assertion Failed: A new layout goes after the highest sort order in
+      use, not after the count of surviving rows: Expected: 3, Actual: 2`. It also asserts the two
+      surviving orders differ, which is the consequence the number was standing in for.
+      **`Sort_Order__c = existing.size() + 1` collides after a delete.** A user with layouts at sort
       order 1 and 2 who deletes the first (the permission set grants `allowDelete`) gets 2 again on
       the next create, and `ownLayouts`' `ORDER BY Sort_Order__c NULLS LAST, CreatedDate` then
       orders the pair arbitrarily-but-stably rather than as the user left them. Latent in this

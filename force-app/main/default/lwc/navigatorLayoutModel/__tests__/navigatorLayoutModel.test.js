@@ -397,17 +397,27 @@ describe("the section operations", () => {
   });
 
   it("sets a section's column count anywhere in one to six", () => {
+    const before = frozenCopy();
+
     for (let columns = MIN_COLUMNS; columns <= MAX_COLUMNS; columns += 1) {
       expect(setSectionColumns(base, 0, columns).sections[0].columns).toBe(
         columns
       );
     }
+    // The same explicit before/after deep-compare its three siblings have.
+    // Without it, an in-place `section.columns = …` was caught only by
+    // accident, because the test below happens to reuse `base` across three
+    // calls — an accident is not a guard.
+    expect(base).toEqual(before);
   });
 
   it("clamps a column count outside one to six rather than storing it", () => {
+    const before = frozenCopy();
+
     expect(setSectionColumns(base, 0, 9).sections[0].columns).toBe(MAX_COLUMNS);
     expect(setSectionColumns(base, 0, 0).sections[0].columns).toBe(MIN_COLUMNS);
     expect(setSectionColumns(base, 1, 4).sections[0].columns).toBe(2);
+    expect(base).toEqual(before);
   });
 
   it("leaves the layout alone when an operation names a section that is not there", () => {

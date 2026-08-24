@@ -338,6 +338,126 @@ describe("c-salesforce-navigator", () => {
     });
   });
 
+  describe("before the Navigator is ready to be changed", () => {
+    /** A `getLayouts` the test holds open, so the in-flight window is real. */
+    function heldOpenLayouts() {
+      let settle;
+      const promise = new Promise((resolve) => {
+        settle = resolve;
+      });
+      getLayouts.mockReturnValue(promise);
+      return settle;
+    }
+
+    function sectionNames(element) {
+      return querySections(element).map(
+        (section) => section.shadowRoot.querySelector("h2").textContent
+      );
+    }
+
+    it("offers nothing to change until the stored layout has arrived, so the fetch cannot discard a change", async () => {
+      // The window this closes: `getLayouts` is fired without being awaited,
+      // and `adoptActiveLayout` assigns `storedLayout` unconditionally. A
+      // change made while the fetch was in flight was overwritten by the
+      // fetch landing, and the autosave then wrote the pre-change layout
+      // back — the user's work gone, with no message.
+      const settle = heldOpenLayouts();
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      expect(element.shadowRoot.querySelector("lightning-button")).toBeNull();
+      expect(querySections(element)).toHaveLength(0);
+
+      settle([
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "My Navigator",
+          isActive: true,
+          layoutJson: JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            sections: [{ name: "Daily work", columns: 2, items: [] }]
+          })
+        }
+      ]);
+      await flush();
+
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+      expect(
+        element.shadowRoot.querySelector("lightning-button")
+      ).not.toBeNull();
+
+      // And the fetch landing is not itself a change.
+      await settleAutosave();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("tells the user when their stored layout could not be read, and saves nothing until it can", async () => {
+      // A failed read used to say nothing at all, and the next change called
+      // `createLayout(makeActive: true)` — which clears `Is_Active__c` on the
+      // user's other layouts. Their real layout was deactivated and, with no
+      // switcher in this slice, unreachable.
+      getLayouts.mockRejectedValue({ body: { message: "Read timed out" } });
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const alert = element.shadowRoot.querySelector('[role="alert"]');
+      expect(alert).not.toBeNull();
+      expect(alert.textContent).toContain("could not load your saved layout");
+
+      // The seeded Navigator is still there to look at and navigate from.
+      expect(queryItems(element)).toHaveLength(2);
+      // But nothing may be written: a create here would displace the layout
+      // we failed to read.
+      expect(element.shadowRoot.querySelector("lightning-button")).toBeNull();
+      selectSectionMenuItem(element, 0, "columns-4");
+      await flush();
+      await settleAutosave();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("offers no New section button until every page of tabs has arrived", async () => {
+      // `New section` sat in `slot="actions"`, outside the isLoading/hasItems
+      // gate. Clicking it after page 1 of 2 froze a seed of only the pages
+      // received so far into the store; the rest were in no section, and this
+      // slice ships no picker to get them back.
+      const firstPage = Array.from({ length: MAX_PAGE_SIZE }, (_, i) =>
+        buildItem(i)
+      );
+      const secondPage = [
+        buildItem(MAX_PAGE_SIZE),
+        buildItem(MAX_PAGE_SIZE + 1)
+      ];
+
+      const element = createNavigator();
+      getNavItems.emit({
+        navItems: firstPage,
+        nextPageUrl:
+          "/services/data/v67.0/ui-api/nav-items?formFactor=Large&page=1&pageSize=100"
+      });
+      await flush();
+
+      expect(element.shadowRoot.querySelector("lightning-button")).toBeNull();
+
+      getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
+      await flush();
+
+      element.shadowRoot.querySelector("lightning-button").click();
+      await flush();
+      await settleAutosave();
+
+      // Every reachable tab, not just the pages that had arrived.
+      expect(lastSavedLayout(createLayout).sections[0].items).toHaveLength(
+        firstPage.length + secondPage.length
+      );
+    });
+  });
+
   describe("sections, names and column counts", () => {
     async function navigatorWithTabs() {
       const element = createNavigator();
