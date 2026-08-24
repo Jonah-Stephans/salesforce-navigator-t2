@@ -664,4 +664,73 @@ correct forever would still pass.** That is a code-review matter, not a testable
       shorter than the item's own label in most cases, and the alternative the criterion forbids is
       the full drag protocol on every item.
 
-fix_cycles: 1
+- [x] false positive — that any of the previous pass's five named survivors is still alive after
+      `1501490`. All five were re-applied to shipped code here and every one is caught: dropping
+      `stillListed &&` from `navigatorSection.releaseGrabIfItemGone` (1 failed), setting
+      `handleItemGrab`'s `this.grabbedItemLabel = this.labelAt(index)` to `""` (2 failed), deleting
+      `this.cardFocusIndex = undefined;` from `salesforceNavigator.renderedCallback` (1 failed),
+      changing `ANNOUNCEMENT_NONCE` from U+200B to a visible `" X"` in both files (2 failed), and
+      deleting the `this.dispatch("sectiondrop", ...)` from `navigatorSection.handleItemDrop`'s
+      `from === undefined` branch (1 failed). The suite is 217 across 5 suites and green either side
+      of every row, and `git status` is clean.
+- [x] false positive — that the new section-card naming in `44c62f9` is unpinned in any direction.
+      Four mutations of it, each applied and reverted: deleting `aria-label={cardLabel}` from the
+      `<article>` fails **3**; memoising `cardLabel` behind a `_memoLabel` field so it cannot follow a
+      rename fails **1**; removing the blank fallback so it returns `this.name` fails **1**; and
+      reading a name captured once in `connectedCallback` rather than `this.name` fails **1**. Two
+      further variants of my own — the fallback returning `""` instead of `"Unnamed section"`, and
+      `cardLabel` pinned to a constant `"Section"` — fail **1** and **3**.
+- [x] false positive — that `aria-label` on an `<article>` turns ~6 section cards into six landmarks a
+      screen reader user must now navigate past. `<article>` maps to ARIA role `article`, which is a
+      document-structure role and not one of the landmark roles (banner, complementary, contentinfo,
+      form, main, navigation, region, search); an accessible name promotes `<section>` to the `region`
+      landmark, but it does not promote `article`. The change therefore adds no navigable container:
+      the element carried role `article` before `44c62f9` and carries role `article` after it, and
+      what changed is only that it now has a name instead of none. **What cannot be established here:**
+      how any specific screen reader voices it, because jsdom builds no accessibility tree — that is a
+      real-AT question and belongs with the browser-driver work the three unticked criteria already
+      name. What is establishable by reading is that the replacement is strictly better than a
+      `draggable`, Tab-reachable element announced as nothing at all.
+- [x] false positive — that `aria-label` on the card overrides or competes with what is inside it.
+      `aria-label` names the container; it does not suppress descendant content, and none of the four
+      candidates moved. The `<h2>{name}</h2>` is unchanged and still asserted by
+      `renders the section's name in its header` and by `sectionNames()` throughout
+      `salesforceNavigator.test.js`; the item labels live behind a shadow boundary on
+      `c-navigator-item` and are asserted separately; the live region is a sibling `<span
+      aria-live="assertive" aria-atomic="true">` whose own attributes are still pinned; and the
+      grabbed-only `aria-describedby={instructionsId}` is a *description* on the same element, not a
+      name, and `attaches its own drag instruction text only while the card is grabbed` still pins
+      that it exists only while grabbed. Confirmed by mutation as well: deleting the `aria-label`
+      fails exactly the three naming tests and moves nothing else in the suite.
+- [x] false positive — that the `"Unnamed section"` fallback is dead code. Every assignment to
+      `salesforceNavigator.storedLayout` was traced: `deserializeLayout` (which runs `textOf` on every
+      section name) at line 278, `undefined` at line 223, and `applyLayout` at line 620, whose six
+      callers are `addSection`, `renameSection`, `setSectionColumns`, `deleteSection`,
+      `moveItemWithinSection` and `moveSection` — all of which either `textOf` the name or carry an
+      already-normalised one through `copySection`. `buildSeededLayout` uses a constant, and
+      `handleRenameCommit` refuses an all-whitespace rename. So *this application* never writes a
+      blank name. But `deserializeLayout` preserves `""` rather than rejecting it, and `Layout_JSON__c`
+      is a field anything with write access can put a payload into, so a blank arriving from outside
+      is the boundary case the guard is for — the same reasoning `rstk-preserve-defensive-checks`
+      settles. It is not even unreachable-by-test: `still names a card whose section name is empty`
+      drives it, and both weakenings of it fail that test.
+- [x] false positive — that `cardLabel`'s `this.name.trim()` can throw on a section whose `name` is
+      `undefined`, which would take the whole card's render down inside a getter. Same trace as above:
+      `textOf` maps `null` and `undefined` to `""` on every route into `storedLayout`, and the `name`
+      getter returns `""` when `section` itself is absent, so `this.name` is a string on every path
+      that reaches this component in this repo.
+- [x] false positive — that the accepted asymmetry (items announce `"Press Space to move."` on every
+      focus, cards announce only their name) rests on a wrong premise and should be re-opened.
+      Judged, not raised. The premise the engineer was given — that card dragging stays undiscoverable
+      from the keyboard, as it is today — is accurate as shipped: `navigatorSection.html` carries no
+      hint node, no `aria-roledescription`, and the instruction node is still `lwc:if={grabbed}`, so
+      nothing announces the gesture before the user has already made it. The decision was taken on a
+      correct description of what it costs, which is the only thing a critic owns here.
+
+**No real, unfixed finding remains on this slice.** Every box appended by this pass is a verified
+false positive; nine mutations of the two commits' subject matter and four of my own were applied to
+shipped code and reverted, and all thirteen are caught. `npm test` 217/217 across 5 suites,
+`npm run lint`, `npm run lint:slds-gate` and `npm run prettier:verify` all clean, and `git status`
+shows only this slice file modified.
+
+fix_cycles: 2
