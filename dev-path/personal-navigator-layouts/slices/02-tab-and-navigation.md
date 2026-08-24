@@ -1,6 +1,6 @@
 ---
 done: true
-fix_cycles: 1
+fix_cycles: 2
 depends_on:
   - dev-path/personal-navigator-layouts/slices/01-slds-lint-gate.md
 touches:
@@ -470,3 +470,102 @@ label, and clicks one to arrive at it.
       `navigatorItem.test.js` asserts `clickEvent.defaultPrevented` is `true`. The browser never
       follows `href="#"` on a plain click. The genuine cost of the `"#"` default is the two
       findings recorded above, not this.
+
+### Slice pass (re-review of the fix, commit `51cbd19`)
+
+Mutation table re-run in full against the committed tree; baseline is `Tests: 19 passed, 19 total`.
+All eight are caught, so the two fixes above bought their behaviour without trading away coverage:
+`.then` not assigning `this.url` (1 failed); the `url = "#"` pending default removed (1 failed);
+`this.page += 1` deleted (2 failed); the merge branch reverted to `page === 0 ? ... : concat`
+(1 failed); `handleClick` hand-deriving the target from `this.tabId` (2 failed); the modifier-key
+guard deleted (3 failed); `normalizeNavItems` reconstructing `pageReference` from `developerName`
+(3 failed); `NAV_ITEMS_CONFIG.pageSize` changed to `25` (1 failed). Every file restored afterwards;
+`git status` clean apart from this slice file.
+
+- [ ] An item whose `GenerateUrl` rejected is now reachable by mouse but not by keyboard, and
+      nothing tells the user it failed. This re-opens the second finding of the `da92b06` pass
+      (the one closed by setting `this.url = undefined` in `navigatorItem.js`'s `.catch`). The
+      wrong-destination problem is genuinely gone, but the state that replaced it was not
+      evaluated as shipped code by either previous pass. Verified by probe (a temporary test in
+      `navigatorItem/__tests__/`, since removed): after a rejected `GenerateUrl` the anchor renders
+      as `<a class="rstk-nav-item" data-tab-id="standard-OurSite" aria-label="Our Site">` — no
+      `href`, `anchor.matches(":link")` is `false`, no `aria-disabled`, no textual or visual
+      difference from a working item. In a real browser an `<a>` with no `href` is not in the tab
+      order and exposes no link role, so a keyboard user cannot reach that item at all and a
+      screen-reader user navigating by links will not see it listed. (jsdom reports `tabIndex: 0`
+      for it and so cannot catch this; the finding at line 175 above already records that jsdom
+      lie.) The same probe dispatched a plain click on that anchor and got
+      `defaultPrevented: true` with `Navigate` called with the correct `pageReference`, because
+      `handleClick` works off `this.pageReference` independent of `url`. So the failed item is
+      fully functional for a mouse user, entirely absent for a keyboard or AT user, and silent to
+      both — a divergence in keyboard operability for that item, and the item most likely to hit
+      it is one of the undocumented `pageReference` kinds (`standard__cmsPage`,
+      `standard__directCmpReference`) this slice exists to handle. Both states are bad and the
+      choice between them is a judgement call, which is why this is raised rather than prescribed:
+      a wrong destination is loud and recoverable (the user sees the wrong page and can go back);
+      an unreachable item is silent and, for a keyboard-only user, unrecoverable — they never learn
+      the tab exists. The previous critic asked for the failure to be made "visibly rather than
+      pointing at `#`"; the fix chose the smaller change and made it invisible instead. Decide what
+      the item should do and make it observable — e.g. keep the `href` off but add
+      `tabindex="0"` plus `role="link"` and `aria-disabled="true"` with a visible failed state, or
+      keep it a real link to the correct target by falling back to a `GenerateUrl` retry, or drop
+      the item from the list entirely so nothing misleading is rendered — and assert the chosen
+      behaviour, including keyboard reachability, in the rejection test rather than only the
+      absence of an `href`.
+
+- [ ] Nothing asserts that the component actually sends `NAV_ITEMS_CONFIG`'s values to
+      `getNavItems`, so the single-source-of-truth the `## Deviations` entry above created is held
+      by convention alone. This re-opens the premise on which the first Build-worker note (line 75)
+      was closed — "the constant this test checks is now the same object the component actually
+      wires up" — which is true of the source as written but is not verified by any test.
+      `navigatorTabSource.test.js`'s "caps the page size at the platform's own limit" still only
+      compares `NAV_ITEMS_CONFIG.pageSize` to `MAX_PAGE_SIZE`, both defined in the same module, and
+      `scope`, `formFactor` and `navItemType` have no assertion anywhere at all. Proved by three
+      mutations of `salesforceNavigator.js`'s `@wire` config, each run against the full suite and
+      each restored afterwards: `pageSize: NAV_ITEMS_CONFIG.pageSize` -> `pageSize: 25` left
+      `19 passed, 19 total`; `scope: NAV_ITEMS_CONFIG.scope` -> `scope: "all"` left
+      `19 passed, 19 total`; `formFactor: NAV_ITEMS_CONFIG.formFactor` -> `formFactor: "Small"`
+      left `19 passed, 19 total`. The `scope` one is the one that matters: `scope: "visible"` is
+      the entire mechanism behind the claim that the component cannot render a tab the running
+      user cannot reach, and a mutant that ships `scope: "all"` is invisible to the test suite. The
+      fix is one line in an existing test — `salesforceNavigator.test.js` already calls
+      `getNavItems.getLastConfig()` for `.page`, so assert the whole config object against
+      `NAV_ITEMS_CONFIG` (plus the expected `page`) after the first emission, and watch each of the
+      three mutations above go red before calling it closed.
+
+- [x] false positive — that changing the jest mock's resolved URL from `"#"` to
+      `"/lightning/o/Account/home"` broke another test, a snapshot, or another consumer. `grep` for
+      `"#"` across `force-app/` and `test/` finds no other reference; there are no `__snapshots__`
+      directories anywhere in the repo; the only other file importing `lightning/navigation` is
+      `salesforceNavigator.test.js`, which uses `getNavigateCalledWith()` and never touches `href`.
+      Full suite is `19 passed, 19 total` on the committed tree.
+
+- [x] false positive — that the two fixes traded away coverage elsewhere. Read all 19 tests
+      adversarially looking for a fourth non-biting one and did not find it inside either
+      `navigatorItem.test.js` or `salesforceNavigator.test.js`: every assertion in both is pinned
+      by at least one of the eight mutations above. The `expect(anchor.getAttribute("href"))
+      .toBeNull()` line added to the rejection test is exactly redundant with the
+      `hasAttribute("href")` assertion on the line before it — redundant, not tautological, and
+      not worth changing. The real gap that adversarial read did turn up is the wire-config one
+      recorded above, and it is in `salesforceNavigator.js`, not in these assertions.
+
+- [x] false positive — that the rejection test stopped biting once it flipped from asserting an
+      `href` is present to asserting it is absent. Re-ran the exact mutation the fix pass claims:
+      reverting the `.catch` body to leave `url` at `"#"` turns "removes href when
+      NavigationMixin.GenerateUrl rejects" red. Note the `url = "#"` pending default is now caught
+      by one test rather than two — "still has a real href while ... is pending" alone — because
+      the rejection test's new expectation (no `href`) is also satisfied by a component with no
+      default at all. That is a consequence of the assertion being correct, not a loss: the
+      pending window is what that default exists for, and the pending test is the test that covers
+      it.
+
+- [x] false positive — that the pending-window `"#"` is no longer justified. It is still the right
+      trade as committed: the alternative is no `href` until `GenerateUrl` settles, which is the
+      state the finding at line 175 was raised against. One caveat worth recording rather than
+      fixing: the class-field comment now asserts that window is "(a microtask or two)", and that
+      is measured in jest, where the mock resolves synchronously in a microtask — it is not
+      measured against a real org, where each `navigatorItem` fires its own `GenerateUrl` in its
+      own `connectedCallback` and a 175-item list therefore fires 175 concurrent platform calls.
+      The window is very likely still short enough that a user cannot aim a cmd-click inside it,
+      and no evidence here suggests otherwise, so this is not raised as a finding — but the
+      comment states as fact something this repo has not measured.
