@@ -620,6 +620,41 @@ describe("moveItemWithinSection", () => {
     expect(moveItemWithinSection(base, ALL_TABS, 7, 0, 1)).toEqual(base);
   });
 
+  /**
+   * Criterion 6, asserted where it can still bite.
+   *
+   * The `it.each` above compares against `reorder`'s output, and every
+   * destination it names is one `storedDestination` has already clamped into
+   * range before `reorder` sees it — so `reorder`'s own clamp and its source
+   * guard are pre-empted from this path, and any correct hand-inlined splice
+   * reproduces the whole table exactly. One part of `reorder` is still reached
+   * from here: a destination that is not a number is passed through untouched
+   * for `reorder` to refuse, and `reorder` refuses it by handing the list back
+   * unchanged. A bare `items.splice(NaN, 0, moved)` does not refuse anything —
+   * `splice` reads `NaN` as 0 — so the item jumps to the top of the section
+   * instead of staying where the user left it. That difference is what
+   * distinguishes "calls the shared placement function" from "reproduces its
+   * output on the cases the callers happen to reach".
+   */
+  it("leaves the section as it was when the destination is not a real position", () => {
+    const ids = base.sections[0].items.map((item) => item.id);
+
+    expect(
+      moveItemWithinSection(
+        base,
+        ALL_TABS,
+        0,
+        2,
+        "nowhere"
+      ).sections[0].items.map((item) => item.id)
+    ).toEqual(ids);
+    expect(
+      moveItemWithinSection(base, ALL_TABS, 0, 2, NaN).sections[0].items.map(
+        (item) => item.id
+      )
+    ).toEqual(ids);
+  });
+
   // The seam. `from` and `to` are positions in the list the user is looking
   // at, which is the *resolved* list; the layout being rewritten is the
   // stored one, and the two are different lists the moment `resolveLayout`
@@ -788,6 +823,23 @@ describe("moveItemBetweenSections", () => {
       }
     }
   );
+
+  /**
+   * The same discriminator as the one on `moveItemWithinSection`, on this axis.
+   * `storedDestination` clamps a numeric position into range before `reorder`
+   * runs, so the table above is reproducible by a hand-inlined splice; a
+   * destination that is not a number reaches `reorder`'s own refusal, and the
+   * appended item stays at the end of the destination rather than being
+   * splice-jumped to the top of it.
+   */
+  it("puts the item at the end of the destination when the drop names no real position", () => {
+    expect(
+      idsOf(moveItemBetweenSections(base, REACHABLE, 0, 0, 1, "nowhere"), 1)
+    ).toEqual(["standard-ActionHub", "standard-ShieldHome", "Account"]);
+    expect(
+      idsOf(moveItemBetweenSections(base, REACHABLE, 0, 0, 1, NaN), 1)
+    ).toEqual(["standard-ActionHub", "standard-ShieldHome", "Account"]);
+  });
 
   it("leaves the layout unchanged when the destination is the section it came from", () => {
     // Criterion 7. Structural rather than by care: the function itself

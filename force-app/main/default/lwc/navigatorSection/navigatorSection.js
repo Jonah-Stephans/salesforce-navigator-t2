@@ -45,7 +45,29 @@ const CARD_ARROW_DELTAS = {
  * transient UI and belongs nowhere near the store.
  */
 export default class NavigatorSection extends LightningElement {
-  @api section;
+  /**
+   * The resolved section this card renders.
+   *
+   * An accessor rather than a bare field because the arrival of a new one is a
+   * fact this component has to act on and not merely store: a live keyboard
+   * grab is held on an *item*, and the list it is counted along has just been
+   * replaced. Re-seating the grab here rather than in `renderedCallback` is
+   * what keeps it correct — this runs exactly when the list changes, and only
+   * then, whereas a render also happens for this component's own state changes
+   * and would compare a freshly-set index against a list that had not caught up
+   * with it yet.
+   */
+  @api
+  get section() {
+    return this.resolvedSection;
+  }
+
+  set section(value) {
+    this.resolvedSection = value;
+    this.reseatOrReleaseGrab();
+  }
+
+  resolvedSection;
 
   /**
    * Whether *this card* is currently grabbed for a section reorder. Owned by
@@ -287,10 +309,10 @@ export default class NavigatorSection extends LightningElement {
   }
 
   renderedCallback() {
-    // Before the focus restoration, not after: there is no point putting
-    // focus back on an item that is no longer there, and the grab has to be
-    // gone before anything else reads it.
-    this.releaseGrabIfItemGone();
+    // The grab has already been re-seated or released by the `section` setter,
+    // which runs when the list actually changes — so by the time focus is put
+    // back, `grabbedItemIndex` names the item the user is holding rather than
+    // whatever has slid into that position.
     this.keepFocusOnGrabbedItem();
 
     // Focus follows the rename, or the gesture is mouse-only: the menu item
@@ -503,36 +525,50 @@ export default class NavigatorSection extends LightningElement {
   }
 
   /**
-   * Ends a keyboard drag whose item has stopped rendering.
+   * Keeps a keyboard grab attached to the *item* it was placed on, and ends it
+   * only when that item is genuinely no longer here.
    *
-   * An item can vanish mid-grab, and by a path this spec already models: the
-   * render-time access intersection drops any stored id the running user can
-   * no longer reach, so losing access to a tab while holding it removes it
-   * from the list underneath the drag. Without this the section believes a
-   * drag is in flight forever — nothing carries `grabbed`, the instruction
-   * node is gone, focus is nowhere, `keepFocusOnGrabbedItem` runs on every
-   * later render finding nothing, and the live region is left reading a grab
-   * that ended. Every subsequent gesture is then measured against an origin
-   * that no longer means anything.
+   * `grabbedItemIndex` is a position in the resolved list, and that list is
+   * renumbered under a live grab by three things that have nothing to do with
+   * this drag: the render-time access intersection dropping a stored id the
+   * running user has just lost access to; a *sibling* leaving the section, by
+   * its own Move to… menu or by being dragged out; and an item arriving from
+   * another section above the one being held. A position that is not re-seated
+   * then names a different item, and the user goes on arrowing, dropping and
+   * cancelling something they never picked up — or it falls off the end, which
+   * is indistinguishable from the item being gone, and the card announces the
+   * move cancelled, assertively, about an item still on screen.
    *
-   * The test is the item's *identity*, not its index: an index is still a
-   * number after the list under it has changed, and one that happens to
-   * remain in range would silently transfer the grab to a neighbour.
+   * So identity is what the grab is held by and the index is re-derived from it.
+   * `grabbedItemOrigin` moves by the same shift, because Escape means "back to
+   * the slot it was picked up from" and that slot renumbers with everything
+   * else. Only a grab whose item has actually gone is ended, and that is the
+   * one case that is announced — `grabbedItemLabel` is kept alongside the id
+   * because by then the item is not in the list to be named from it.
    */
-  releaseGrabIfItemGone() {
+  reseatOrReleaseGrab() {
     if (this.grabbedItemIndex === undefined) {
       return;
     }
-    const stillListed = this.items.some(
-      (item) => item.id === this.grabbedItemId
-    );
-    if (stillListed && this.grabbedItemIndex < this.items.length) {
+    const at = this.items.findIndex((item) => item.id === this.grabbedItemId);
+    if (at === -1) {
+      this.announce(
+        `Move cancelled. ${this.grabbedItemLabel} is no longer available.`
+      );
+      this.releaseGrab();
       return;
     }
-    this.announce(
-      `Move cancelled. ${this.grabbedItemLabel} is no longer available.`
-    );
-    this.releaseGrab();
+    if (at === this.grabbedItemIndex) {
+      return;
+    }
+    const shift = at - this.grabbedItemIndex;
+    this.grabbedItemIndex = at;
+    if (this.grabbedItemOrigin !== undefined) {
+      this.grabbedItemOrigin = Math.max(
+        0,
+        Math.min(this.items.length - 1, this.grabbedItemOrigin + shift)
+      );
+    }
   }
 
   /**

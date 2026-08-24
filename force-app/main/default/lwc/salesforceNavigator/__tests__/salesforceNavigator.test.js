@@ -1835,6 +1835,67 @@ describe("c-salesforce-navigator", () => {
         expect(queryItems(element).some((item) => item.grabbed)).toBe(false);
       });
 
+      it("keeps a grab on the item being held when a sibling is moved out from under it", async () => {
+        // Reachable in exactly the way the case above is, and by a *different*
+        // item's menu: nothing blocks a sibling's Move to… menu mid-grab. The
+        // list the grab counts along renumbers underneath it, so a grab held by
+        // position lands on an item the user never picked up — or falls off the
+        // end and is falsely reported as cancelled while it is still on screen,
+        // contradicting the parent's own announcement about a different item.
+        getLayouts.mockResolvedValue([
+          {
+            ...CROSS_SECTION_LAYOUT,
+            layoutJson: JSON.stringify({
+              schemaVersion: SCHEMA_VERSION,
+              sections: [
+                {
+                  name: "Selling",
+                  columns: 2,
+                  items: [
+                    { id: "Account" },
+                    { id: "standard-ActionHub" },
+                    { id: "Contact" }
+                  ]
+                },
+                { name: "Support", columns: 3, items: [] }
+              ]
+            })
+          }
+        ]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        // Hold the last of the three.
+        press(itemsIn(element, 0)[2].shadowRoot.querySelector("a"), " ");
+        await flush();
+
+        // Move the *first* one out, from its own menu.
+        await chooseDestination(element, 0, 0, "Support");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Action Plans", "Contacts"],
+          ["Accounts"]
+        ]);
+        expect(
+          queryItems(element)
+            .filter((item) => item.grabbed)
+            .map((item) => item.label)
+        ).toEqual(["Contacts"]);
+
+        const sectionRegion = querySections(
+          element
+        )[0].shadowRoot.querySelector(".rstk-nav-section__announcer");
+        expect(spoken(sectionRegion.textContent)).toBe(
+          "Contacts grabbed. Position 3 of 3."
+        );
+        expect(
+          spoken(
+            element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+          )
+        ).toBe("Accounts moved to Support.");
+      });
+
       it("leaves one copy of a tab when a hand-edited layout already listed it in the destination", async () => {
         // Not producible by any gesture this Navigator ships, and this is the
         // first operation that could turn a cross-section duplicate into a

@@ -442,7 +442,37 @@ rather than being documentary.
       built at index 1 and the parent-level move out of section 1). Twelve further mutations of my
       own were applied; the survivors are accounted for above.
 
-- [ ] **A keyboard grab is silently transferred to a different item, or falsely cancelled, when
+- [x] fixed — the grab now follows the item rather than the position, by extending the identity
+      `releaseGrabIfItemGone` already tracked rather than by adding a second mechanism. That method
+      is now `reseatOrReleaseGrab`: it finds `grabbedItemId` in the current list, **re-seats**
+      `grabbedItemIndex` onto it when it has moved, and releases only when it is genuinely gone —
+      which is the one case that is still announced. `grabbedItemOrigin` moves by the same shift,
+      because Escape means "back to the slot it was picked up from" and that slot renumbers with
+      everything else. It runs from an `@api set section(...)` rather than from `renderedCallback`,
+      and that is the load-bearing half: the setter fires exactly when the list is replaced, whereas
+      a render also happens for this component's own state changes and would compare a
+      freshly-assigned index against a list that had not caught up with it — re-seating a keyboard
+      move back onto the position it had just left. This covers all three of the critic's outcomes
+      and the destination-section mirror with one rule, and nothing about the departing-item release
+      changed: `releaseGrabForDepartingItem` still releases only the grabbed item's own departure,
+      silently, so the parent stays the only voice on a cross-section move.
+      Four tests written first and watched fail: `keeps a keyboard grab on the item it was placed on
+      when a sibling leaves` (`expect(received).toEqual(expected)` — `Expected: ["Our Site"]`,
+      `Received: ["Shield"]`), `does not report a grab cancelled when it is a sibling that left`
+      (`expect(received).toBe(expected)` — `Expected: "Our Site grabbed. Position 3 of 3."`,
+      `Received: "Move cancelled. Our Site is no longer available."`), `keeps a keyboard grab on its
+      own item when another arrives above it` (`Expected: ["Contacts"]`, `Received: ["Accounts"]`),
+      and `still returns a walked item to where it was picked up after a sibling leaves`
+      (`Expected: {from: 0, sectionIndex: 0, to: 1}`, `Received: ... to: 2`), plus the end-to-end
+      `keeps a grab on the item being held when a sibling is moved out from under it`
+      (`Expected: ["Contacts"]`, `Received: []` — the grab dropped altogether). The critic's
+      unasserted-condition note is closed: replacing `releaseGrabForDepartingItem`'s
+      `grabbedItemIndex === index` with an unconditional `releaseGrab()` now **fails 3**. Dropping
+      the origin shift fails 1.
+
+      The critic's finding, kept verbatim:
+
+      **A keyboard grab is silently transferred to a different item, or falsely cancelled, when
       *another* item leaves the same section.** This re-opens finding 2 above: that fix released the
       grab only when the departing item *is* the grabbed one ("another item leaving is not this
       drag's business"), but another item leaving renumbers the very list `grabbedItemIndex` counts
@@ -474,7 +504,28 @@ rather than being documentary.
       **267 passed**, so whichever way this is resolved it needs a test that discriminates. Not a
       slice 04 regression: before this slice no item could leave a section while another was
       grabbed.
-- [ ] **The criterion 6 guard has been traded away: `reorder` can now be removed from both item-axis
+- [x] fixed — an observable behavioural difference rather than a spy, because there is exactly one
+      part of `reorder` the item axes can still reach and it is a real behaviour: a destination that
+      is **not a number**. `storedDestination` passes a non-finite `wanted` through untouched, on
+      purpose, so `reorder` goes on refusing it by handing the list back unchanged — while a bare
+      `items.splice(NaN, 0, moved)` refuses nothing, because `splice` reads `NaN` as `0` and jumps
+      the item to the top. A spy was rejected: `reorder` is called from inside its own module, so
+      nothing a jest mock can reach sits between the caller and the callee, and mocking
+      `c/navigatorLayoutModel` would mock the functions under test. Two tests, one per item axis:
+      `leaves the section as it was when the destination is not a real position` and `puts the item
+      at the end of the destination when the drop names no real position`. Both pass on shipped
+      code; the build's row 1 mutation — `reorder` hand-inlined as a `splice` pair in **both**
+      `moveItemWithinSection` and `moveItemBetweenSections` — was re-applied and both went red:
+      `expect(received).toEqual(expected)`, `["standard-OurSite","Account","Contact"]` received
+      where `["Account","Contact","standard-OurSite"]` was expected, and
+      `["Account","standard-ActionHub","standard-ShieldHome"]` received where
+      `["standard-ActionHub","standard-ShieldHome","Account"]` was expected. The mutation was then
+      reverted. The `splice` invariant is untouched: production code still holds exactly one
+      `splice` pair, both lines inside `reorder`.
+
+      The critic's finding, kept verbatim:
+
+      **The criterion 6 guard has been traded away: `reorder` can now be removed from both item-axis
       move functions without a single test failing.** The build's own mutation row 1 ("cross-section
       move uses a second placement function (hand-inlined splice, skipping `reorder`'s clamp)")
       recorded *1 failed*; re-applied to `3baba04` it **survives at 267 passed**, and so does the

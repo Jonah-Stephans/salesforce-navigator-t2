@@ -66,6 +66,39 @@ const TABS_3 = TABS.concat([
   }
 ]);
 
+// A fourth tab, so that an item leaving from above a grabbed one leaves a real
+// position on either side of the grab rather than a list short enough that a
+// wrong index would clamp back onto the right item by luck.
+const TABS_4 = TABS_3.concat([
+  {
+    id: "standard-ShieldHome",
+    label: "Shield",
+    pageReference: {
+      type: "standard__navItemPage",
+      attributes: { apiName: "standard-ShieldHome" },
+      state: {}
+    }
+  }
+]);
+
+/**
+ * A resolved section holding exactly `ids`, in that order. The parent hands a
+ * freshly resolved section down on every render, so re-assigning `element.section`
+ * is how a test says "the list this card is showing has changed underneath it" —
+ * which is what a sibling leaving, or an item arriving from elsewhere, actually
+ * looks like from in here.
+ */
+function sectionOf(tabs, ids) {
+  return resolveLayout(
+    {
+      sections: [
+        { name: "Selling", columns: 3, items: ids.map((id) => ({ id })) }
+      ]
+    },
+    tabs
+  )[0];
+}
+
 function createThree() {
   const section = resolveLayout(
     {
@@ -558,6 +591,132 @@ describe("c-navigator-section", () => {
         false,
         false
       ]);
+    });
+
+    /**
+     * A grab is held on an *item*, and `grabbedItemIndex` is only a position in
+     * a list that renumbers for reasons that have nothing to do with this drag.
+     * A sibling can leave the section from its own Move to… menu mid-grab —
+     * `navigatorItem.handleClick` blocks navigation, not focus, and the menu
+     * button is a sibling of the anchor, so nothing stands in the way of it —
+     * and an item can arrive from another section above the one being held.
+     */
+    it("keeps a keyboard grab on the item it was placed on when a sibling leaves", async () => {
+      const ids = TABS_4.map((tab) => tab.id);
+      const element = createSection(sectionOf(TABS_4, ids));
+
+      // The third of four.
+      fire(itemsOf(element)[2], "itemgrab", { index: 2 });
+      await Promise.resolve();
+      expect(itemsOf(element)[2].label).toBe("Our Site");
+
+      // The *first* item leaves, and the list renumbers underneath the grab.
+      fire(itemsOf(element)[0], "itemmoveto", { index: 0, toSection: 1 });
+      element.section = sectionOf(TABS_4, ids.slice(1));
+      await Promise.resolve();
+
+      // Still holding what the user picked up — not the item that has slid into
+      // position 2, and not nothing.
+      expect(
+        itemsOf(element)
+          .filter((item) => item.grabbed)
+          .map((item) => item.label)
+      ).toEqual(["Our Site"]);
+      expect(spoken(announcement(element))).not.toContain("cancelled");
+    });
+
+    it("does not report a grab cancelled when it is a sibling that left", async () => {
+      // The falsely alarming half. With the grab on the *last* item, a sibling
+      // leaving pushes a stale index past the end of the list, and an index that
+      // is out of range is indistinguishable from an item that is gone — so the
+      // card announces the move cancelled, assertively, about an item the user
+      // is still holding and can still see.
+      const ids = TABS_3.map((tab) => tab.id);
+      const element = createSection(sectionOf(TABS_3, ids));
+
+      fire(itemsOf(element)[2], "itemgrab", { index: 2 });
+      await Promise.resolve();
+
+      fire(itemsOf(element)[0], "itemmoveto", { index: 0, toSection: 1 });
+      element.section = sectionOf(TABS_3, ids.slice(1));
+      // Twice: a sentence written during a render only reaches the live region
+      // on the render after it, so one flush would let a false announcement
+      // through unseen.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(spoken(announcement(element))).toBe(
+        "Our Site grabbed. Position 3 of 3."
+      );
+      expect(itemsOf(element).map((item) => item.grabbed)).toEqual([
+        false,
+        true
+      ]);
+    });
+
+    it("still returns a walked item to where it was picked up after a sibling leaves", async () => {
+      // The origin renumbers with everything else. Escape means "back to the
+      // slot it was picked up from", and a slot recorded before a sibling left
+      // names a different one afterwards — so the cancel would put the item
+      // somewhere it has never been.
+      const ids = TABS_4.map((tab) => tab.id);
+      const element = createSection(sectionOf(TABS_4, ids));
+      const handler = jest.fn();
+      element.addEventListener("itemmove", handler);
+
+      // Grab "Our Site", third of four, and walk it one to the left.
+      fire(itemsOf(element)[2], "itemgrab", { index: 2 });
+      fire(itemsOf(element)[2], "itemkeymove", { index: 2, delta: -1 });
+      element.section = sectionOf(TABS_4, [
+        "Account",
+        "standard-OurSite",
+        "Contact",
+        "standard-ShieldHome"
+      ]);
+      await Promise.resolve();
+
+      // "Accounts", above it, leaves the section.
+      fire(itemsOf(element)[0], "itemmoveto", { index: 0, toSection: 1 });
+      element.section = sectionOf(TABS_4, [
+        "standard-OurSite",
+        "Contact",
+        "standard-ShieldHome"
+      ]);
+      await Promise.resolve();
+
+      fire(itemsOf(element)[0], "itemkeycancel", { index: 0 });
+      await Promise.resolve();
+
+      // Back behind "Contacts", which is where it started relative to the items
+      // that are still here — not position 2, which is where it started
+      // relative to a list that no longer exists.
+      expect(
+        handler.mock.calls[handler.mock.calls.length - 1][0].detail
+      ).toEqual({ sectionIndex: 0, from: 0, to: 1 });
+      expect(spoken(announcement(element))).toMatch(/position 2 of 3/i);
+    });
+
+    it("keeps a keyboard grab on its own item when another arrives above it", async () => {
+      // The mirror of the same problem in the *destination* of a cross-section
+      // move: an item dropped in above the grabbed one renumbers the list just
+      // as a departure does.
+      const element = createThree();
+
+      fire(itemsOf(element)[1], "itemgrab", { index: 1 });
+      await Promise.resolve();
+      expect(itemsOf(element)[1].label).toBe("Contacts");
+
+      element.section = sectionOf(
+        TABS_4,
+        ["standard-ShieldHome"].concat(TABS_3.map((tab) => tab.id))
+      );
+      await Promise.resolve();
+
+      expect(
+        itemsOf(element)
+          .filter((item) => item.grabbed)
+          .map((item) => item.label)
+      ).toEqual(["Contacts"]);
     });
 
     it("uses neither aria-grabbed nor aria-dropeffect while an item is grabbed", async () => {
