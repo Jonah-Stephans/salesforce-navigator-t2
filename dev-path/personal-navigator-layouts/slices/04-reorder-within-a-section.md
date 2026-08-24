@@ -485,4 +485,115 @@ correct forever would still pass.** That is a code-review matter, not a testable
       deprecated ARIA attributes, and the single shared placement function all fail a test when
       broken).
 
-fix_cycles: 0
+- [ ] **`releaseGrabIfItemGone` is pinned only by its index half, and the identity half — the
+      thing its own docblock says is the point — is unpinned.** Replacing
+      `navigatorSection.releaseGrabIfItemGone`'s `stillListed && this.grabbedItemIndex <
+      this.items.length` with the bare `this.grabbedItemIndex < this.items.length` leaves the suite
+      at 211/211 green. The one test that drives the hazard (`releases a keyboard grab when the
+      grabbed item stops rendering`) grabs the **last** of three items and then drops it, so the
+      index falls past the end and the weaker check catches it too. Driven in jsdom on the
+      discriminating case instead — grab item **0** of three, then re-emit `getNavItems` without
+      that tab — the shipped code is correct (`GRABBED [false,false]`, region reads `"Move
+      cancelled. Accounts is no longer available."`) and the index-only version silently transfers
+      the grab to the neighbour (`GRABBED [true,false]`, region still reading `"Accounts grabbed.
+      Position 1 of 3."` for an item that is gone) — exactly the failure the docblock names. Fix
+      direction: add a test that loses access to an item held from an index that stays in range,
+      asserting no surviving item carries `grabbed` and the region names the vanished item.
+- [ ] **Nothing pins that the vanish announcement names what vanished.** Setting
+      `navigatorSection.handleItemGrab`'s `this.grabbedItemLabel = this.labelAt(index)` to `""`
+      leaves the suite green: the announcement degrades to `"Move cancelled.  is no longer
+      available."` and the only assertion on it is `toMatch(/no longer available/i)`. The comment on
+      `grabbedItemLabel` says it is kept precisely because `"the move ended" is not something to
+      tell a screen reader user without naming what it was about`, so the half that carries the
+      whole justification is the half no test reaches. Fix direction: assert the label in that
+      announcement, in the same test at `salesforceNavigator.test.js:1605`.
+- [ ] **The one-shot clearing of `cardFocusIndex` is unpinned, and the hazard it guards is real.**
+      Deleting `this.cardFocusIndex = undefined;` from `salesforceNavigator.renderedCallback` leaves
+      the suite at 211/211 green. The field's own comment says it is consumed `whether or not it was
+      used, so it cannot outlive the render it was set for and steal focus from something else
+      later` — and without the clear it never expires: after one section cancel, every later render
+      with no live grab (a `getNavItems` re-emission, a column change, a save-error message) re-runs
+      the hand-off and yanks focus back to that card from wherever the user has since put it. Fix
+      direction: a test that cancels a section move, moves focus elsewhere, forces one more render,
+      and asserts focus was not taken back.
+- [ ] **The item-drop-forwarded-as-a-section-drop path is entirely unpinned, and it is the mechanism
+      that makes a whole card a drop target.** Deleting the `this.dispatch("sectiondrop", ...)` from
+      `navigatorSection.handleItemDrop`'s `from === undefined` branch leaves the suite green.
+      `## Deviations` calls this out as a build decision — *"An item covers most of a card's
+      surface, so without this a section dragged onto another card would land on nothing"* — and the
+      only test that drives the path (`moves no card the user never picked up after an abandoned
+      section drag`, added by fix pass one) asserts the **negative**: that a stale drag moves
+      nothing. The positive — a live section drag, then a drop on another card's *item*, reorders
+      the sections — is asserted nowhere; the two section-drag tests both drop on the `article`
+      itself, which goes through `handleCardDrop` and never touches this branch. Fix direction: a
+      test that fires a card `dragstart` and then an item `drop` inside a different card, asserting
+      the sections reorder.
+- [ ] **Nothing pins that the announcement distinguisher is silent and invisible.** Changing
+      `ANNOUNCEMENT_NONCE` from the U+200B ZERO WIDTH SPACE to a visible, spoken `" X"` leaves the suite green: both
+      re-announcement tests assert only `not.toBe(first)`, which any distinguisher satisfies. The
+      entire justification for the design is that it *"adds nothing a screen reader voices and
+      nothing a sighted user can see"*, and that is the property no test holds. It matters because
+      the nonce is injected into user-facing announcement text on every arrow press. Fix direction:
+      assert in both re-announcement tests that the two announcements are equal once characters in
+      the zero-width range are stripped, so a distinguisher that is actually read aloud fails.
+- [ ] **The section card half of the discoverability finding is still open** — this re-opens
+      `A keyboard user has no route to discover the grab gesture`. That finding named two components:
+      *"The section card is a bare `<article tabindex="0">` with no accessible name, no `role`, and
+      no `aria-roledescription`; the item is a plain link."* Fix pass two shipped a hint on the
+      **item** only. `navigatorSection.html` is unchanged by either commit: the `<article>` still
+      carries `class`, `draggable`, `tabindex="0"` and a grabbed-only `aria-describedby` and nothing
+      else, so a keyboard user tabbing onto a section card is told neither what it is nor that Space
+      moves it — and, having no accessible name at all, is barely told it is there. Confirmed by
+      mutation as well as by reading: adding `aria-label={name}` to the card leaves the suite at
+      211/211 green, so no test looks at the card's naming in either direction. Note this is a
+      *what*, like its parent finding: the engineer decided the item half and the section half was
+      not decided with it.
+- [x] false positive — that any of the previous critique's six survivors is still alive. All eight
+      rows of the fix pass's own table were re-applied to shipped code here and every one is now
+      caught: `focusCard()` emptied (2 failed), `moveItemWithinSection` returning shared refs (1),
+      `moveSection` returning shared refs (1), `anchorClass` pinned to the base class (1),
+      `cardClass` pinned to the base class (1), `handleSectionDragEnd` emptied (1), the section
+      drop's `from === to` short-circuit deleted (1), `aria-atomic="true"` removed (1). The suite is
+      211 and green either side of every row, and `git status` is clean.
+- [x] false positive — that `handleSectionKeyDrop`'s `this.cardFocusIndex = index` is dead code
+      because deleting it leaves the suite green. It is dead only in the sense the code itself
+      states: a drop performs no reorder, so the card the user was holding survives the render and
+      focus never left it. That makes the line unreachable-by-test rather than wrong, and it is a
+      defensive check of exactly the kind `rstk-preserve-defensive-checks` says to keep — the
+      reasoning the earlier `stopPropagation` false positive settled. Deleting the *cancel*-side
+      hand-off, which is the reachable one, fails a test.
+- [x] false positive — that the narrowed criterion 3 assertion lowers the bar. Criterion 3 is about
+      *the instruction text*, and every part of that is still asserted and still mutation-caught:
+      the `.rstk-nav-item__instructions` node is absent at rest, `aria-describedby` does not match
+      `/rstk-nav-drag-/` at rest, it resolves exactly to the instruction node while grabbed, and the
+      node and the idref both go away after. Rendering the hint unconditionally (so both nodes are
+      present) fails a test; making `describedById` return both ids fails two; deleting the hint
+      fails two. The two nodes are `lwc:if`/`lwc:else` alternatives, so "never both at once" is true
+      by construction as well as by test. The narrowing states a true thing where the old assertion
+      stated a thing the fix made false; it does not weaken what the criterion asks for.
+- [x] false positive — that the U+200B nonce reaches somewhere it should not. It is appended in
+      `announce`/`announceSection` only, to `announcement` / `sectionAnnouncement`, which are bound
+      solely to the two `slds-assistive-text` live-region spans. It touches no `aria-label`, no
+      visible label, and nothing on the serialization path: `serializeLayout` reads the layout
+      object, which never sees an announcement, and the payload assertions in
+      `salesforceNavigator.test.js` parse clean JSON. No test does an exact-string compare on an
+      announcement — every one uses `toContain`/`toMatch` — so nothing is silently comparing against
+      a zero-width character either. (The separate, real gap is that nothing *requires* the
+      distinguisher to stay zero-width; see the finding above.)
+- [x] false positive — that `renderedCallback`'s three jobs can interact badly. In
+      `salesforceNavigator`, a live `grabbedSectionIndex` wins over `cardFocusIndex` and the latter
+      is read once, so the two cannot both fire; the target is looked up as `cards[target]` and
+      guarded with `if (grabbed && ...)`, so a hand-off aimed at a card that no longer exists is a
+      no-op rather than a throw. In `navigatorSection`, `releaseGrabIfItemGone` does write reactive
+      state (`announce`) from inside `renderedCallback`, but it clears `grabbedItemIndex` in the
+      same breath, so the render it schedules returns at that function's first line — one extra
+      render, not a loop. The suite runs clean with no LWC rendering-loop warning.
+- [x] false positive — that the persistent hint doubles up with something else the anchor exposes.
+      The anchor carries `aria-label={label}`, which overrides its content, so the accessible name
+      is the label once and the description is `"Press Space to move."` once. The hint's own test
+      pins that it does not repeat the label and is at most six words. Four words on every focus
+      across ~174 items is the right trade against a gesture that is otherwise undiscoverable: it is
+      shorter than the item's own label in most cases, and the alternative the criterion forbids is
+      the full drag protocol on every item.
+
+fix_cycles: 1
