@@ -47,14 +47,36 @@
         </div>
       </template>
 
+      <!-- Assertive rather than polite: a section the user has just moved and
+           is about to move again is not something to queue behind whatever
+           else the page is saying. It lives here rather than in the section
+           because a section reorder rebuilds every card, and an announcement
+           inside one of them would be destroyed as it was made. -->
+      <span
+        class="slds-assistive-text rstk-nav-announcer"
+        aria-live="assertive"
+        aria-atomic="true"
+        >{sectionAnnouncement}</span
+      >
+
       <div class="rstk-nav-sections">
         <template for:each={sections} for:item="section">
           <c-navigator-section
             key={section.key}
             section={section}
+            grabbed={section.isGrabbed}
             onsectionrename={handleSectionRename}
             onsectioncolumns={handleSectionColumns}
             onsectiondelete={handleSectionDelete}
+            onitemmove={handleItemMove}
+            onitemdragstart={handleItemDragStart}
+            onsectiondragstart={handleSectionDragStart}
+            onsectiondrop={handleSectionDrop}
+            onsectiondragend={handleSectionDragEnd}
+            onsectiongrab={handleSectionGrab}
+            onsectionkeymove={handleSectionKeyMove}
+            onsectionkeydrop={handleSectionKeyDrop}
+            onsectionkeycancel={handleSectionKeyCancel}
           ></c-navigator-section>
         </template>
       </div>

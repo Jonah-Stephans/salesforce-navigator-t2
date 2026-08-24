@@ -52,6 +52,52 @@ function createSection(section) {
   return element;
 }
 
+// A third tab, so a reorder has a genuine middle and two ends rather than a
+// single swap that reads the same in either direction.
+const TABS_3 = TABS.concat([
+  {
+    id: "standard-OurSite",
+    label: "Our Site",
+    pageReference: {
+      type: "standard__cmsPage",
+      attributes: { pageName: "our-site-home" },
+      state: {}
+    }
+  }
+]);
+
+function createThree() {
+  const section = resolveLayout(
+    {
+      sections: [
+        {
+          name: "Selling",
+          columns: 3,
+          items: TABS_3.map((tab) => ({ id: tab.id }))
+        }
+      ]
+    },
+    TABS_3
+  )[0];
+  return createSection(section);
+}
+
+function itemsOf(element) {
+  return Array.from(element.shadowRoot.querySelectorAll("c-navigator-item"));
+}
+
+// The item re-emits every gesture as an explicit CustomEvent, so a test never
+// has to fake a DragEvent to drive the section — which is just as well, since
+// jsdom defines none.
+function fire(item, name, detail) {
+  item.dispatchEvent(new CustomEvent(name, { detail }));
+}
+
+function announcement(element) {
+  const region = element.shadowRoot.querySelector("[aria-live]");
+  return region ? region.textContent.trim() : "";
+}
+
 function menuOf(element) {
   return element.shadowRoot.querySelector("lightning-button-menu");
 }
@@ -252,6 +298,326 @@ describe("c-navigator-section", () => {
     expect(handler).not.toHaveBeenCalled();
     expect(element.shadowRoot.querySelector("lightning-input")).toBeNull();
     expect(element.shadowRoot.querySelector("h2").textContent).toBe("Selling");
+  });
+
+  describe("reordering its items", () => {
+    it("tells each item its own position in the list", () => {
+      const element = createThree();
+
+      expect(itemsOf(element).map((item) => item.index)).toEqual([0, 1, 2]);
+    });
+
+    it("asks its parent to move the dragged item to the item it was dropped on", () => {
+      const element = createThree();
+      const handler = jest.fn();
+      element.addEventListener("itemmove", handler);
+      const items = itemsOf(element);
+
+      fire(items[0], "itemdragstart", { index: 0 });
+      fire(items[2], "itemdragover", { index: 2 });
+      fire(items[2], "itemdrop", { index: 2 });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        sectionIndex: 0,
+        from: 0,
+        to: 2
+      });
+    });
+
+    it("keeps the source index in JS rather than reading it back off dataTransfer", () => {
+      // dataTransfer.getData() returns "" during dragover in every browser by
+      // the HTML spec's protected mode. A section that recovered the source
+      // from the drop event would work in no browser at all; this one is
+      // handed the source on dragstart and remembers it.
+      const element = createThree();
+      const handler = jest.fn();
+      element.addEventListener("itemmove", handler);
+      const items = itemsOf(element);
+
+      // A drop with no preceding dragstart has no source, and must not
+      // invent one.
+      fire(items[1], "itemdrop", { index: 1 });
+      expect(handler).not.toHaveBeenCalled();
+
+      fire(items[2], "itemdragstart", { index: 2 });
+      fire(items[0], "itemdrop", { index: 0 });
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        sectionIndex: 0,
+        from: 2,
+        to: 0
+      });
+    });
+
+    it("does not ask for a move when an item is dropped back on itself", () => {
+      const element = createThree();
+      const handler = jest.fn();
+      element.addEventListener("itemmove", handler);
+      const items = itemsOf(element);
+
+      fire(items[1], "itemdragstart", { index: 1 });
+      fire(items[1], "itemdrop", { index: 1 });
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("forgets the drag when it ends without a drop, so the next drop invents nothing", () => {
+      const element = createThree();
+      const handler = jest.fn();
+      element.addEventListener("itemmove", handler);
+      const items = itemsOf(element);
+
+      fire(items[0], "itemdragstart", { index: 0 });
+      fire(items[0], "itemdragend", { index: 0 });
+      fire(items[2], "itemdrop", { index: 2 });
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("reordering its items from the keyboard", () => {
+    it("marks only the grabbed item as grabbed", async () => {
+      const element = createThree();
+
+      fire(itemsOf(element)[1], "itemgrab", { index: 1 });
+      await Promise.resolve();
+
+      expect(itemsOf(element).map((item) => item.grabbed)).toEqual([
+        false,
+        true,
+        false
+      ]);
+    });
+
+    it("announces the grab assertively, naming the item and its position", async () => {
+      const element = createThree();
+
+      fire(itemsOf(element)[1], "itemgrab", { index: 1 });
+      await Promise.resolve();
+
+      const region = element.shadowRoot.querySelector("[aria-live]");
+      expect(region.getAttribute("aria-live")).toBe("assertive");
+      expect(announcement(element)).toContain("Contacts");
+      expect(announcement(element)).toContain("grabbed");
+      expect(announcement(element)).toMatch(/position 2 of 3/i);
+    });
+
+    it("asks its parent for the move an arrow key means, and announces the new position", async () => {
+      const element = createThree();
+      const handler = jest.fn();
+      element.addEventListener("itemmove", handler);
+
+      fire(itemsOf(element)[0], "itemgrab", { index: 0 });
+      fire(itemsOf(element)[0], "itemkeymove", { index: 0, delta: 1 });
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        sectionIndex: 0,
+        from: 0,
+        to: 1
+      });
+      expect(announcement(element)).toContain("Accounts");
+      expect(announcement(element)).toMatch(/position 2 of 3/i);
+    });
+
+    it("stays inside the list at either end rather than losing the item", async () => {
+      const element = createThree();
+      const handler = jest.fn();
+      element.addEventListener("itemmove", handler);
+
+      fire(itemsOf(element)[0], "itemgrab", { index: 0 });
+      fire(itemsOf(element)[0], "itemkeymove", { index: 0, delta: -1 });
+      await Promise.resolve();
+
+      // Announced at the position it is still at — not silence, which would
+      // leave a screen reader user unsure whether the key registered.
+      expect(announcement(element)).toMatch(/position 1 of 3/i);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("announces the drop, at the position the item ended at", async () => {
+      const element = createThree();
+
+      fire(itemsOf(element)[2], "itemgrab", { index: 2 });
+      fire(itemsOf(element)[2], "itemkeydrop", { index: 2 });
+      await Promise.resolve();
+
+      expect(announcement(element)).toContain("dropped");
+      expect(announcement(element)).toMatch(/position 3 of 3/i);
+      expect(itemsOf(element).map((item) => item.grabbed)).toEqual([
+        false,
+        false,
+        false
+      ]);
+    });
+
+    it("puts the item back where it started on Escape, rather than committing the move", async () => {
+      // The whole point of cancel. Each arrow press has already been applied
+      // to the layout, so cancelling is a move back to the origin — through
+      // the same `itemmove` the arrows use, and therefore the same maths.
+      const element = createThree();
+      const handler = jest.fn();
+      element.addEventListener("itemmove", handler);
+
+      fire(itemsOf(element)[0], "itemgrab", { index: 0 });
+      fire(itemsOf(element)[0], "itemkeymove", { index: 0, delta: 1 });
+      fire(itemsOf(element)[1], "itemkeymove", { index: 1, delta: 1 });
+      fire(itemsOf(element)[2], "itemkeycancel", { index: 2 });
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledTimes(3);
+      expect(handler.mock.calls[2][0].detail).toEqual({
+        sectionIndex: 0,
+        from: 2,
+        to: 0
+      });
+      expect(announcement(element)).toContain("cancelled");
+      expect(announcement(element)).toMatch(/position 1 of 3/i);
+      expect(itemsOf(element).map((item) => item.grabbed)).toEqual([
+        false,
+        false,
+        false
+      ]);
+    });
+
+    it("uses neither aria-grabbed nor aria-dropeffect while an item is grabbed", async () => {
+      const element = createThree();
+
+      fire(itemsOf(element)[1], "itemgrab", { index: 1 });
+      await Promise.resolve();
+
+      const attributes = Array.from(
+        element.shadowRoot.querySelectorAll("*")
+      ).flatMap((node) => Array.from(node.attributes).map((at) => at.name));
+
+      expect(attributes).not.toContain("aria-grabbed");
+      expect(attributes).not.toContain("aria-dropeffect");
+      expect(attributes).toContain("aria-live");
+    });
+  });
+
+  describe("as a draggable card of its own", () => {
+    function cardOf(element) {
+      return element.shadowRoot.querySelector("article");
+    }
+
+    it("makes the section card itself draggable and focusable", () => {
+      const card = cardOf(createSection());
+
+      expect(card.draggable).toBe(true);
+      expect(card.getAttribute("tabindex")).toBe("0");
+    });
+
+    it("tells its parent when its own card is picked up and dropped on", () => {
+      const element = createSection();
+      const start = jest.fn();
+      const drop = jest.fn();
+      element.addEventListener("sectiondragstart", start);
+      element.addEventListener("sectiondrop", drop);
+
+      cardOf(element).dispatchEvent(
+        new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+      );
+      const over = new CustomEvent("dragover", {
+        bubbles: true,
+        cancelable: true
+      });
+      cardOf(element).dispatchEvent(over);
+      cardOf(element).dispatchEvent(
+        new CustomEvent("drop", { bubbles: true, cancelable: true })
+      );
+
+      expect(start.mock.calls[0][0].detail).toEqual({ index: 0 });
+      expect(over.defaultPrevented).toBe(true);
+      expect(drop.mock.calls[0][0].detail).toEqual({ index: 0 });
+    });
+
+    it("grabs, moves, drops and cancels its own card from the keyboard", () => {
+      const element = createSection();
+      const grab = jest.fn();
+      const move = jest.fn();
+      const drop = jest.fn();
+      const cancel = jest.fn();
+      element.addEventListener("sectiongrab", grab);
+      element.addEventListener("sectionkeymove", move);
+      element.addEventListener("sectionkeydrop", drop);
+      element.addEventListener("sectionkeycancel", cancel);
+      const card = cardOf(element);
+
+      card.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", cancelable: true })
+      );
+      expect(grab.mock.calls[0][0].detail).toEqual({ index: 0 });
+
+      element.grabbed = true;
+
+      card.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+      );
+      expect(move.mock.calls[0][0].detail).toEqual({ index: 0, delta: 1 });
+
+      const tab = new KeyboardEvent("keydown", {
+        key: "Tab",
+        cancelable: true
+      });
+      card.dispatchEvent(tab);
+      expect(tab.defaultPrevented).toBe(true);
+
+      card.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", cancelable: true })
+      );
+      expect(drop.mock.calls[0][0].detail).toEqual({ index: 0 });
+
+      card.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+      );
+      expect(cancel.mock.calls[0][0].detail).toEqual({ index: 0 });
+    });
+
+    it("does not read a key pressed on one of its items as a gesture on the card", () => {
+      // Keydown bubbles. Without this guard, Space on an item would grab
+      // both the item and the whole section.
+      const element = createSection();
+      const grab = jest.fn();
+      element.addEventListener("sectiongrab", grab);
+
+      element.shadowRoot.querySelector("c-navigator-item").dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: " ",
+          bubbles: true,
+          cancelable: true
+        })
+      );
+
+      expect(grab).not.toHaveBeenCalled();
+    });
+
+    it("attaches its own drag instruction text only while the card is grabbed", async () => {
+      const element = createSection();
+      const card = cardOf(element);
+
+      expect(card.hasAttribute("aria-describedby")).toBe(false);
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-section__instructions")
+      ).toBeNull();
+
+      element.grabbed = true;
+      await Promise.resolve();
+
+      const instructions = element.shadowRoot.querySelector(
+        ".rstk-nav-section__instructions"
+      );
+      expect(instructions).not.toBeNull();
+      expect(cardOf(element).getAttribute("aria-describedby")).toBe(
+        instructions.getAttribute("id")
+      );
+
+      element.grabbed = false;
+      await Promise.resolve();
+
+      expect(cardOf(element).hasAttribute("aria-describedby")).toBe(false);
+    });
   });
 
   it("refuses to rename a section to nothing at all", async () => {

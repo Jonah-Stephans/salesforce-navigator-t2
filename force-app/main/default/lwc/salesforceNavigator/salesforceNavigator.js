@@ -20,7 +20,10 @@ import {
   addSection,
   renameSection,
   deleteSection,
-  setSectionColumns
+  setSectionColumns,
+  reorder,
+  moveItemWithinSection,
+  moveSection
 } from "c/navigatorLayoutModel";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
 import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
@@ -128,6 +131,27 @@ export default class SalesforceNavigator extends LightningElement {
   layoutName = DEFAULT_LAYOUT_NAME;
 
   saveTimer;
+
+  // What kind of drag is in flight, and where it started. Held here rather
+  // than in a section because only this component sees both kinds: a drop
+  // landing on a section card can mean "put this section here" or "put this
+  // item in that section", and the difference is which drag began.
+  //
+  // Not recoverable from the drop event instead: `dataTransfer.getData()`
+  // returns "" during `dragover` in every browser by the HTML spec's
+  // protected mode, so `setData` is a handshake with the browser and never a
+  // channel back to us.
+  dragKind;
+  dragSectionIndex;
+
+  // A keyboard drag of a whole section card. This lives here, and not in the
+  // section, for a mechanical reason: reordering the sections changes every
+  // section's index and therefore its key, so the child components are
+  // rebuilt on each arrow press and any state they held would be gone. The
+  // announcement and the focus restoration have to survive that too.
+  grabbedSectionIndex;
+  grabbedSectionOrigin;
+  sectionAnnouncement = "";
 
   // Saves run one after another rather than in parallel. Without this, two
   // changes a second apart on a user with no record yet would each see a null
@@ -297,7 +321,10 @@ export default class SalesforceNavigator extends LightningElement {
    * by some unrelated change cannot quietly prune it.
    */
   get sections() {
-    return resolveLayout(this.layout, this.items);
+    return resolveLayout(this.layout, this.items).map((section) => ({
+      ...section,
+      isGrabbed: section.index === this.grabbedSectionIndex
+    }));
   }
 
   /**
@@ -365,6 +392,162 @@ export default class SalesforceNavigator extends LightningElement {
 
   handleSectionDelete(event) {
     this.applyLayout(deleteSection(this.layout, event.detail.index));
+  }
+
+  // -------------------------------------------------------------------
+  // Reordering. Every path below — an item dropped by a mouse, an item walked
+  // by arrow keys, a section card dragged, a section card walked — ends at
+  // one of exactly two call sites, `moveItemWithin` and `moveSectionTo`, and
+  // both of those hand the arithmetic to `navigatorLayoutModel`. There is no
+  // placement maths in this file, and no second copy of it anywhere.
+  // -------------------------------------------------------------------
+
+  /** The one call site for a change of item order, whatever asked for it. */
+  moveItemWithin(sectionIndex, from, to) {
+    this.applyLayout(
+      moveItemWithinSection(this.layout, sectionIndex, from, to)
+    );
+  }
+
+  /** The one call site for a change of section order. */
+  moveSectionTo(from, to) {
+    this.applyLayout(moveSection(this.layout, from, to));
+  }
+
+  /**
+   * Both the mouse and the keyboard arrive here — the section works out
+   * *which* item goes *where* and this applies it, so neither input route
+   * has a placement rule of its own to disagree with the other about.
+   */
+  handleItemMove(event) {
+    const { sectionIndex, from, to } = event.detail;
+    this.moveItemWithin(sectionIndex, from, to);
+  }
+
+  handleItemDragStart(event) {
+    this.dragKind = "item";
+    this.dragSectionIndex = event.detail.sectionIndex;
+  }
+
+  handleSectionDragStart(event) {
+    this.dragKind = "section";
+    this.dragSectionIndex = event.detail.index;
+  }
+
+  handleSectionDrop(event) {
+    const from = this.dragSectionIndex;
+    const kind = this.dragKind;
+    this.clearDrag();
+
+    // An *item* dropped onto another section is cross-section movement,
+    // which is a different pattern with its own menu and is not built here.
+    // It has to be ignored rather than approximated: turning it into a
+    // section reorder would move a card the user never picked up.
+    if (kind !== "section" || from === undefined) {
+      return;
+    }
+    const to = event.detail.index;
+    if (from === to) {
+      return;
+    }
+    this.moveSectionTo(from, to);
+  }
+
+  handleSectionDragEnd() {
+    this.clearDrag();
+  }
+
+  clearDrag() {
+    this.dragKind = undefined;
+    this.dragSectionIndex = undefined;
+  }
+
+  // The keyboard equivalent for a whole section card. Same four gestures as
+  // an item — Space, arrows, Space, Escape — and the same rule that each
+  // arrow press is applied as it happens, so Escape is a real move back to
+  // the origin rather than the discarding of an uncommitted preview.
+
+  handleSectionGrab(event) {
+    const index = event.detail.index;
+    this.grabbedSectionIndex = index;
+    this.grabbedSectionOrigin = index;
+    this.sectionAnnouncement = `${this.sectionNameAt(index)} grabbed. ${this.sectionPositionOf(index)}.`;
+  }
+
+  handleSectionKeyMove(event) {
+    const from = event.detail.index;
+    const landed = this.sectionLandingIndex(from, from + event.detail.delta);
+    const name = this.sectionNameAt(from);
+
+    this.grabbedSectionIndex = landed;
+    // Announced even when nothing moved: at either end, silence would leave
+    // a screen reader user unable to tell a key that did not register from
+    // one that had nowhere to go.
+    this.sectionAnnouncement = `${name} moved. ${this.sectionPositionOf(landed)}.`;
+
+    if (landed !== from) {
+      this.moveSectionTo(from, landed);
+    }
+  }
+
+  handleSectionKeyDrop(event) {
+    const index = event.detail.index;
+    this.sectionAnnouncement = `${this.sectionNameAt(index)} dropped. ${this.sectionPositionOf(index)}.`;
+    this.releaseSectionGrab();
+  }
+
+  handleSectionKeyCancel(event) {
+    const from = event.detail.index;
+    const origin = this.grabbedSectionOrigin;
+    const name = this.sectionNameAt(from);
+
+    if (origin !== undefined && origin !== from) {
+      this.moveSectionTo(from, origin);
+    }
+    this.sectionAnnouncement = `Move cancelled. ${name} returned. ${this.sectionPositionOf(origin === undefined ? from : origin)}.`;
+    this.releaseSectionGrab();
+  }
+
+  releaseSectionGrab() {
+    this.grabbedSectionIndex = undefined;
+    this.grabbedSectionOrigin = undefined;
+  }
+
+  /**
+   * Where a section moving from `from` to `to` actually lands, computed by
+   * the same `reorder` that will be applied. Calling the model rather than
+   * repeating its clamp is the point: an announcement that disagreed with the
+   * move would be worse than none, because it would be believed.
+   */
+  sectionLandingIndex(from, to) {
+    const positions = this.sections.map((_section, index) => index);
+    return reorder(positions, from, to).indexOf(from);
+  }
+
+  sectionNameAt(index) {
+    const section = this.sections[index];
+    return section ? section.name : "";
+  }
+
+  sectionPositionOf(index) {
+    return `Position ${index + 1} of ${this.sections.length}`;
+  }
+
+  /**
+   * A section reorder changes every section's key, so LWC rebuilds the cards
+   * and focus goes with the node that was destroyed. A grabbed card whose
+   * focus has gone is one a keyboard user can neither move again, drop, nor
+   * cancel — the drag becomes unfinishable.
+   */
+  renderedCallback() {
+    if (this.grabbedSectionIndex === undefined) {
+      return;
+    }
+    const cards = this.template.querySelectorAll("c-navigator-section");
+    const grabbed = cards[this.grabbedSectionIndex];
+    if (grabbed && this.template.activeElement !== grabbed) {
+      grabbed.focusCard();
+    }
   }
 
   /**

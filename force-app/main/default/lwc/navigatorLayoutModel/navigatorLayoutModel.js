@@ -225,6 +225,64 @@ export function deleteSection(layout, index) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// The placement maths. One function, `reorder`, and two callers that apply it
+// to the two axes a user can rearrange: items inside a section, and the
+// sections themselves.
+//
+// It lives here, in a module with no component in it, on purpose. Both the
+// mouse path and the keyboard path route into `moveItemWithinSection`, so
+// dropping an item at position three and walking it there with three arrow
+// presses cannot disagree about where it lands — they are not two
+// implementations that happen to match, they are one function called twice.
+// It is also the seam the tests can actually reach: jsdom has no `DragEvent`
+// and no `DataTransfer`, so the gesture is untestable, while this is a pure
+// function of its arguments.
+// ---------------------------------------------------------------------------
+
+/**
+ * Moves one entry of a list to a new position, returning a new array. The
+ * input list is never touched.
+ *
+ * A destination past either end is **clamped, not rejected**, because that is
+ * the keyboard path's ordinary edge rather than an error: ArrowUp on the first
+ * item asks for -1 and ArrowDown on the last asks for `length`, and in both
+ * cases the item must stay in the list at the end it is already at. A source
+ * index that is not a real position is a different matter — there is no entry
+ * to move — so the list comes back as it was.
+ */
+export function reorder(list, from, to) {
+  const items = Array.isArray(list) ? list.slice() : [];
+  const destination = Number(to);
+
+  if (
+    !Number.isInteger(from) ||
+    from < 0 ||
+    from >= items.length ||
+    !Number.isFinite(destination)
+  ) {
+    return items;
+  }
+
+  const at = Math.max(0, Math.min(items.length - 1, Math.trunc(destination)));
+  const [moved] = items.splice(from, 1);
+  items.splice(at, 0, moved);
+  return items;
+}
+
+/** Reorders one section's items. The other sections are untouched. */
+export function moveItemWithinSection(layout, sectionIndex, from, to) {
+  return replaceSection(layout, sectionIndex, (section) => {
+    const copy = copySection(section);
+    return { ...copy, items: reorder(copy.items, from, to) };
+  });
+}
+
+/** Reorders the sections themselves — the same `reorder`, a different axis. */
+export function moveSection(layout, from, to) {
+  return { sections: reorder(sectionsOf(layout).map(copySection), from, to) };
+}
+
 function replaceSection(layout, index, replacer) {
   const sections = sectionsOf(layout);
   const target = isPresent(sections, index) ? index : -1;

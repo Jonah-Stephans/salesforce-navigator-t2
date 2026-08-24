@@ -3,7 +3,7 @@ import SalesforceNavigator from "c/salesforceNavigator";
 import { getNavItems } from "lightning/uiAppsApi";
 import { getNavigateCalledWith } from "lightning/navigation";
 import { MAX_PAGE_SIZE, NAV_ITEMS_CONFIG } from "c/navigatorTabSource";
-import { SCHEMA_VERSION } from "c/navigatorLayoutModel";
+import { SCHEMA_VERSION, reorder } from "c/navigatorLayoutModel";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
 import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
 import updateLayout from "@salesforce/apex/NavigatorLayoutController.updateLayout";
@@ -908,6 +908,433 @@ describe("c-salesforce-navigator", () => {
       expect(
         element.shadowRoot.querySelector('[role="alert"]').textContent
       ).toContain("does not belong to you");
+    });
+  });
+
+  describe("reordering", () => {
+    // Three tabs, so a move has a genuine middle and two ends. Driven at the
+    // lowest level a test here can reach — a real KeyboardEvent on the
+    // anchor, or a hand-rolled drag CustomEvent on it — so the whole chain
+    // runs: item handler, section, parent, model, payload.
+    const THREE = [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM];
+    const STORED_IDS = THREE.map((item) => item.developerName);
+
+    async function navigatorWithThree() {
+      const element = createNavigator();
+      getNavItems.emit({ navItems: THREE });
+      await flush();
+      return element;
+    }
+
+    function anchorAt(element, index) {
+      return queryItems(element)[index].shadowRoot.querySelector("a");
+    }
+
+    function grabbedAnchor(element) {
+      const item = queryItems(element).find((each) => each.grabbed === true);
+      return item ? item.shadowRoot.querySelector("a") : undefined;
+    }
+
+    // jsdom 20 defines no DragEvent and no DataTransfer, so nothing here
+    // claims to test the browser's dragstart -> dragover -> drop sequence.
+    // What it does test is that the handlers wired to those events move the
+    // right item to the right place and write the result.
+    function dragEvent(type) {
+      const event = new CustomEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true
+      });
+      Object.defineProperty(event, "dataTransfer", {
+        value: {
+          store: {},
+          setData(format, value) {
+            this.store[format] = String(value);
+          },
+          getData(format) {
+            return this.store[format] || "";
+          }
+        }
+      });
+      return event;
+    }
+
+    function press(anchor, key) {
+      anchor.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
+      );
+    }
+
+    function savedItemIds(apexMock, sectionIndex = 0) {
+      return lastSavedLayout(apexMock).sections[sectionIndex].items.map(
+        (item) => item.id
+      );
+    }
+
+    async function dragItem(element, from, to) {
+      anchorAt(element, from).dispatchEvent(dragEvent("dragstart"));
+      anchorAt(element, to).dispatchEvent(dragEvent("dragover"));
+      anchorAt(element, to).dispatchEvent(dragEvent("drop"));
+      await flush();
+    }
+
+    async function walkItem(element, from, steps) {
+      press(anchorAt(element, from), " ");
+      await flush();
+      for (let step = 0; step < Math.abs(steps); step += 1) {
+        press(grabbedAnchor(element), steps > 0 ? "ArrowRight" : "ArrowLeft");
+        // Sequential on purpose, which is why `no-await-in-loop` does not
+        // apply: each arrow press has to be applied and re-rendered before
+        // the next one can be aimed at the item's new position. Running them
+        // concurrently would press four keys at one position.
+        // eslint-disable-next-line no-await-in-loop
+        await flush();
+      }
+      press(grabbedAnchor(element), " ");
+      await flush();
+    }
+
+    /**
+     * Every source and destination in a three-item section, minus the
+     * no-op moves — an item dropped where it already is changes nothing and
+     * is therefore never written, so there is no payload to compare.
+     */
+    const MOVES = STORED_IDS.flatMap((_id, from) =>
+      STORED_IDS.map((__id, to) => [from, to]).filter(([f, t]) => f !== t)
+    );
+
+    async function freshNavigator() {
+      jest.clearAllMocks();
+      createLayout.mockResolvedValue({ layoutId: CREATED_LAYOUT_ID });
+      getLayouts.mockResolvedValue([]);
+      return navigatorWithThree();
+    }
+
+    it("moves a dragged item to its new position and writes that order", async () => {
+      const element = await navigatorWithThree();
+
+      await dragItem(element, 0, 2);
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Action Plans",
+        "Contacts",
+        "Accounts"
+      ]);
+
+      await settleAutosave();
+      expect(savedItemIds(createLayout)).toEqual([
+        "standard-ActionHub",
+        "Contact",
+        "Account"
+      ]);
+    });
+
+    it.each(MOVES)(
+      "writes the same order for a move from %i to %i whether it was dragged or typed",
+      async (from, to) => {
+        // The criterion behind this is that one function does the placement.
+        // Two paths that agreed on one example could still be two
+        // implementations, so every source and destination in the section is
+        // required to write the same payload by mouse, by keyboard, and by
+        // the model's own `reorder`.
+        const dragged = await freshNavigator();
+        await dragItem(dragged, from, to);
+        await settleAutosave();
+        const byMouse = savedItemIds(createLayout);
+        document.body.removeChild(dragged);
+
+        const typed = await freshNavigator();
+        await walkItem(typed, from, to - from);
+        await settleAutosave();
+        const byKeyboard = savedItemIds(createLayout);
+        document.body.removeChild(typed);
+
+        const byModel = reorder(STORED_IDS, from, to);
+        expect(byMouse).toEqual(byModel);
+        expect(byKeyboard).toEqual(byModel);
+      }
+    );
+
+    it("still shows the moved item in its new position after a reload", async () => {
+      // The criterion is about a page reload and a fresh login, and what
+      // reaches a fresh login is the payload. This drags, takes what was
+      // actually written, and mounts a second Navigator on it — which is what
+      // a reload is, since nothing else survives.
+      const element = await navigatorWithThree();
+      await dragItem(element, 2, 0);
+      await settleAutosave();
+      const written = createLayout.mock.calls[0][0].layoutJson;
+      document.body.removeChild(element);
+      jest.clearAllMocks();
+
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "My Navigator",
+          isActive: true,
+          schemaVersion: SCHEMA_VERSION,
+          layoutJson: written
+        }
+      ]);
+      const reloaded = await navigatorWithThree();
+
+      expect(queryItems(reloaded).map((item) => item.label)).toEqual([
+        "Contacts",
+        "Accounts",
+        "Action Plans"
+      ]);
+    });
+
+    it("puts the item back where it started when the drag is cancelled with Escape", async () => {
+      const element = await navigatorWithThree();
+
+      press(anchorAt(element, 0), " ");
+      await flush();
+      press(grabbedAnchor(element), "ArrowRight");
+      await flush();
+      press(grabbedAnchor(element), "ArrowRight");
+      await flush();
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Action Plans",
+        "Contacts",
+        "Accounts"
+      ]);
+
+      press(grabbedAnchor(element), "Escape");
+      await flush();
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Action Plans",
+        "Contacts"
+      ]);
+      await settleAutosave();
+      expect(savedItemIds(createLayout)).toEqual(STORED_IDS);
+    });
+
+    it("keeps a dropped move, so a second Space is not a cancel", async () => {
+      // The other half of the Escape test. Without it, an implementation
+      // that treated every release as a cancel would pass the one above.
+      const element = await navigatorWithThree();
+
+      await walkItem(element, 0, 2);
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Action Plans",
+        "Contacts",
+        "Accounts"
+      ]);
+      await settleAutosave();
+      expect(savedItemIds(createLayout)).toEqual([
+        "standard-ActionHub",
+        "Contact",
+        "Account"
+      ]);
+    });
+
+    it("holds focus on the grabbed item across a move", async () => {
+      const element = await navigatorWithThree();
+
+      press(anchorAt(element, 0), " ");
+      await flush();
+      press(grabbedAnchor(element), "ArrowRight");
+      await flush();
+
+      const grabbed = queryItems(element).find((item) => item.grabbed === true);
+      expect(grabbed.label).toBe("Accounts");
+      expect(grabbed.shadowRoot.activeElement).not.toBeNull();
+    });
+
+    it("uses neither aria-grabbed nor aria-dropeffect anywhere in the tree", async () => {
+      const element = await navigatorWithThree();
+      press(anchorAt(element, 0), " ");
+      await flush();
+
+      const attributes = [element.shadowRoot]
+        .concat(querySections(element).map((each) => each.shadowRoot))
+        .concat(queryItems(element).map((each) => each.shadowRoot))
+        .flatMap((root) => Array.from(root.querySelectorAll("*")))
+        .flatMap((node) => Array.from(node.attributes).map((at) => at.name));
+
+      expect(attributes).not.toContain("aria-grabbed");
+      expect(attributes).not.toContain("aria-dropeffect");
+      // The assertion is only worth anything if it is looking at real
+      // attributes at all.
+      expect(attributes).toContain("aria-describedby");
+    });
+
+    describe("the sections themselves", () => {
+      const TWO_SECTIONS = {
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "My Navigator",
+        isActive: true,
+        schemaVersion: SCHEMA_VERSION,
+        layoutJson: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          sections: [
+            { name: "First", columns: 2, items: [{ id: "Account" }] },
+            { name: "Second", columns: 3, items: [{ id: "Contact" }] },
+            { name: "Third", columns: 1, items: [] }
+          ]
+        })
+      };
+
+      async function navigatorWithSections() {
+        getLayouts.mockResolvedValue([TWO_SECTIONS]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+        return element;
+      }
+
+      function cardAt(element, index) {
+        return querySections(element)[index].shadowRoot.querySelector(
+          "article"
+        );
+      }
+
+      function savedSectionNames() {
+        return lastSavedLayout(updateLayout).sections.map(
+          (section) => section.name
+        );
+      }
+
+      it("reorders the sections when a section card is dragged onto another", async () => {
+        const element = await navigatorWithSections();
+
+        cardAt(element, 2).dispatchEvent(
+          new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+        );
+        cardAt(element, 0).dispatchEvent(
+          new CustomEvent("drop", { bubbles: true, cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["Third", "First", "Second"]);
+        await settleAutosave();
+        expect(savedSectionNames()).toEqual(["Third", "First", "Second"]);
+      });
+
+      it("still shows the reordered sections after a reload", async () => {
+        const element = await navigatorWithSections();
+        cardAt(element, 2).dispatchEvent(
+          new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+        );
+        cardAt(element, 0).dispatchEvent(
+          new CustomEvent("drop", { bubbles: true, cancelable: true })
+        );
+        await flush();
+        await settleAutosave();
+        const written = updateLayout.mock.calls[0][0].layoutJson;
+        document.body.removeChild(element);
+        jest.clearAllMocks();
+
+        getLayouts.mockResolvedValue([
+          { ...TWO_SECTIONS, layoutJson: written }
+        ]);
+        const reloaded = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        expect(sectionNames(reloaded)).toEqual(["Third", "First", "Second"]);
+      });
+
+      it("reorders the sections from the keyboard, and cancels on Escape", async () => {
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+
+        const announcer = element.shadowRoot.querySelector("[aria-live]");
+        expect(announcer.getAttribute("aria-live")).toBe("assertive");
+        expect(announcer.textContent).toContain("First");
+        expect(announcer.textContent).toMatch(/position 1 of 3/i);
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+        expect(sectionNames(element)).toEqual(["Second", "First", "Third"]);
+        expect(
+          element.shadowRoot.querySelector("[aria-live]").textContent
+        ).toMatch(/position 2 of 3/i);
+
+        cardAt(element, 1).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        expect(
+          element.shadowRoot.querySelector("[aria-live]").textContent
+        ).toMatch(/cancelled/i);
+        await settleAutosave();
+        expect(savedSectionNames()).toEqual(["First", "Second", "Third"]);
+      });
+
+      it("keeps a section drop, so a second Space is not a cancel", async () => {
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 1).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["Second", "First", "Third"]);
+        await settleAutosave();
+        expect(savedSectionNames()).toEqual(["Second", "First", "Third"]);
+      });
+
+      it("attaches the section instruction text only while a card is grabbed", async () => {
+        const element = await navigatorWithSections();
+
+        expect(cardAt(element, 0).hasAttribute("aria-describedby")).toBe(false);
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+
+        expect(cardAt(element, 0).hasAttribute("aria-describedby")).toBe(true);
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+
+        expect(cardAt(element, 0).hasAttribute("aria-describedby")).toBe(false);
+      });
+
+      it("leaves an item dragged into another section alone — that is a later slice", async () => {
+        // Arrow keys deliberately do not cross containers, and neither does
+        // this: cross-section movement is its own pattern, with its own
+        // menu, and is not built here. What matters is that attempting it
+        // changes nothing rather than corrupting either section.
+        const element = await navigatorWithSections();
+        const first = queryItems(element)[0].shadowRoot.querySelector("a");
+        const second = queryItems(element)[1].shadowRoot.querySelector("a");
+
+        first.dispatchEvent(dragEvent("dragstart"));
+        second.dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        expect(queryItems(element).map((item) => item.label)).toEqual([
+          "Accounts",
+          "Contacts"
+        ]);
+        expect(updateLayout).not.toHaveBeenCalled();
+      });
     });
   });
 

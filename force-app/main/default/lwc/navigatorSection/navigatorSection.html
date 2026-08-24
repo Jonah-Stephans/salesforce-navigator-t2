@@ -1,5 +1,19 @@
 <template>
-  <article class="rstk-nav-section">
+  <!-- The card is the drag source for reordering the sections themselves, and
+       `tabindex` is what lets a keyboard user reach it to do the same thing.
+       Items inside stop their own drag and key events, so picking up an item
+       is never read as picking up the whole card. -->
+  <article
+    class={cardClass}
+    draggable="true"
+    tabindex="0"
+    aria-describedby={instructionsId}
+    ondragstart={handleCardDragStart}
+    ondragover={handleCardDragOver}
+    ondrop={handleCardDrop}
+    ondragend={handleCardDragEnd}
+    onkeydown={handleCardKeydown}
+  >
     <header class="rstk-nav-section__header">
       <template lwc:if={isRenaming}>
         <lightning-input
@@ -46,12 +60,22 @@
     </header>
 
     <ul class={gridClass}>
-      <template for:each={items} for:item="item">
+      <template for:each={renderItems} for:item="item">
         <li key={item.id} class="rstk-nav-section__cell">
           <c-navigator-item
             tab-id={item.id}
             label={item.label}
             page-reference={item.pageReference}
+            index={item.index}
+            grabbed={item.isGrabbed}
+            onitemdragstart={handleItemDragStart}
+            onitemdragover={handleItemDragOver}
+            onitemdrop={handleItemDrop}
+            onitemdragend={handleItemDragEnd}
+            onitemgrab={handleItemGrab}
+            onitemkeymove={handleItemKeyMove}
+            onitemkeydrop={handleItemKeyDrop}
+            onitemkeycancel={handleItemKeyCancel}
           ></c-navigator-item>
         </li>
       </template>
@@ -59,6 +83,27 @@
 
     <template lwc:if={isEmpty}>
       <p class="rstk-nav-section__empty">This section has no items yet.</p>
+    </template>
+
+    <!-- Assertive rather than polite: a move the user has just made and is
+         about to make another of is not something to queue behind whatever
+         else the page is saying. -->
+    <span
+      class="slds-assistive-text rstk-nav-section__announcer"
+      aria-live="assertive"
+      aria-atomic="true"
+      >{announcement}</span
+    >
+
+    <!-- Attached only while this card is grabbed, never permanently. -->
+    <template lwc:if={grabbed}>
+      <span
+        id={instructionsId}
+        class="slds-assistive-text rstk-nav-section__instructions"
+      >
+        Use the arrow keys to move this section, Space to drop it, Escape to
+        cancel.
+      </span>
     </template>
   </article>
 </template>

@@ -5,6 +5,23 @@
   border-radius: var(--slds-g-radius-border-2, 0.25rem);
   background-color: var(--slds-g-color-surface-container-1, #ffffff);
   box-shadow: var(--slds-g-shadow-1, 0 2px 2px 0 #e5e5e5);
+  /* The card is permanently draggable, and permanently focusable so a
+     keyboard user can reach the same gesture. */
+  cursor: grab;
+}
+
+/* Focus and grab both use the focus-ring hook rather than a hand-rolled
+   outline, which would pick one colour and fail contrast in one of the two
+   colour modes. SLDS's own drag classes cannot help here: `.slds-is-grabbed`
+   only applies inside a dueling list. */
+.rstk-nav-section:focus-visible {
+  box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
+}
+
+.rstk-nav-section_grabbed {
+  cursor: grabbing;
+  background-color: var(--slds-g-color-surface-container-2, #f3f3f3);
+  box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
 }
 
 .rstk-nav-section__header {

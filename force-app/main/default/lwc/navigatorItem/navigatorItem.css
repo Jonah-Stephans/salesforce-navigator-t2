@@ -12,6 +12,10 @@
   border-radius: var(--slds-g-radius-border-1, 0.125rem);
   background-color: var(--slds-g-color-surface-container-1, #ffffff);
   text-decoration: none;
+  /* Permanently draggable — there is no edit mode, because HTML5
+     drag-and-drop already separates a click from a drag. The cursor is the
+     only affordance saying so. */
+  cursor: grab;
 }
 
 .rstk-nav-item:hover {
@@ -19,6 +23,16 @@
 }
 
 .rstk-nav-item:focus-visible {
+  box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
+}
+
+/* A grabbed item must look grabbed, or a sighted keyboard user is moving
+   something with no indication of what. It borrows the focus-ring hook rather
+   than a hand-rolled outline, which would pick one colour and fail contrast in
+   one of the two modes. */
+.rstk-nav-item_grabbed {
+  cursor: grabbing;
+  background-color: var(--slds-g-color-surface-container-2, #f3f3f3);
   box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
 }
 

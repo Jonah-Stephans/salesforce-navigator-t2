@@ -11,7 +11,10 @@ import {
   addSection,
   renameSection,
   deleteSection,
-  setSectionColumns
+  setSectionColumns,
+  reorder,
+  moveItemWithinSection,
+  moveSection
 } from "c/navigatorLayoutModel";
 
 // Three tabs in the shape navigatorTabSource normalises the platform into.
@@ -424,5 +427,213 @@ describe("the section operations", () => {
     expect(renameSection(base, 7, "Nope")).toEqual(base);
     expect(deleteSection(base, 7)).toEqual(base);
     expect(setSectionColumns(base, 7, 4)).toEqual(base);
+  });
+});
+
+describe("reorder — the one placement function", () => {
+  const list = ["a", "b", "c", "d"];
+
+  it.each([
+    [0, 1, ["b", "a", "c", "d"]],
+    [0, 3, ["b", "c", "d", "a"]],
+    [3, 0, ["d", "a", "b", "c"]],
+    [2, 1, ["a", "c", "b", "d"]],
+    [1, 1, ["a", "b", "c", "d"]]
+  ])("moves the entry at %i to position %i", (from, to, expected) => {
+    expect(reorder(list, from, to)).toEqual(expected);
+  });
+
+  it("never mutates the list it was handed", () => {
+    // The same purity assertion the section operations carry. Deep-compared
+    // against an independent copy taken before the call, so an in-place
+    // splice is caught rather than merely a reassignment.
+    const before = JSON.parse(JSON.stringify(list));
+
+    reorder(list, 0, 3);
+    reorder(list, 3, 0);
+
+    expect(list).toEqual(before);
+  });
+
+  it("returns a new array even when nothing moved", () => {
+    const result = reorder(list, 1, 1);
+
+    expect(result).not.toBe(list);
+    expect(result).toEqual(list);
+  });
+
+  it("clamps a destination past either end rather than dropping the entry", () => {
+    // This is the keyboard path's edge: ArrowUp on the first item asks for
+    // -1, ArrowDown on the last asks for length. Neither may lose the item.
+    expect(reorder(list, 0, -1)).toEqual(["a", "b", "c", "d"]);
+    expect(reorder(list, 3, 9)).toEqual(["a", "b", "c", "d"]);
+    expect(reorder(list, 2, -5)).toEqual(["c", "a", "b", "d"]);
+    expect(reorder(list, 1, 99)).toEqual(["a", "c", "d", "b"]);
+  });
+
+  it("returns the list unchanged when the source index is not a real position", () => {
+    expect(reorder(list, -1, 0)).toEqual(list);
+    expect(reorder(list, 4, 0)).toEqual(list);
+    expect(reorder(list, undefined, 0)).toEqual(list);
+    expect(reorder(list, 1.5, 0)).toEqual(list);
+    expect(reorder(list, 0, undefined)).toEqual(list);
+    expect(reorder(list, 0, "nowhere")).toEqual(list);
+  });
+
+  it("reorders nothing at all from a non-list", () => {
+    expect(reorder(null, 0, 1)).toEqual([]);
+    expect(reorder(undefined, 0, 1)).toEqual([]);
+    expect(reorder([], 0, 1)).toEqual([]);
+  });
+
+  it("is its own inverse, which is what makes Escape able to cancel", () => {
+    // A grabbed item walked from 0 to 3 by three arrow presses sits where
+    // reorder(list, 0, 3) puts it; reorder(that, 3, 0) must give the
+    // original list back exactly, or Escape cannot restore it.
+    const moved = reorder(reorder(reorder(list, 0, 1), 1, 2), 2, 3);
+    expect(moved).toEqual(reorder(list, 0, 3));
+    expect(reorder(moved, 3, 0)).toEqual(list);
+  });
+});
+
+describe("moveItemWithinSection", () => {
+  const base = {
+    sections: [
+      {
+        name: "First",
+        columns: 2,
+        items: [
+          { id: "Account" },
+          { id: "Contact" },
+          { id: "standard-OurSite" }
+        ]
+      },
+      { name: "Second", columns: 3, items: [{ id: "Contact" }] }
+    ]
+  };
+
+  function frozenCopy() {
+    return JSON.parse(JSON.stringify(base));
+  }
+
+  it("moves an item to a new position inside its own section", () => {
+    const before = frozenCopy();
+
+    const next = moveItemWithinSection(base, 0, 0, 2);
+
+    expect(next.sections[0].items.map((item) => item.id)).toEqual([
+      "Contact",
+      "standard-OurSite",
+      "Account"
+    ]);
+    expect(base).toEqual(before);
+  });
+
+  it("carries a renamed item's rename with it", () => {
+    const renamed = {
+      sections: [
+        {
+          name: "First",
+          columns: 2,
+          items: [{ id: "Account", rename: "Clients" }, { id: "Contact" }]
+        }
+      ]
+    };
+
+    const next = moveItemWithinSection(renamed, 0, 0, 1);
+
+    expect(next.sections[0].items).toEqual([
+      { id: "Contact" },
+      { id: "Account", rename: "Clients" }
+    ]);
+  });
+
+  it("leaves every other section, and the section's own name and columns, alone", () => {
+    const next = moveItemWithinSection(base, 0, 2, 0);
+
+    expect(next.sections[0].name).toBe("First");
+    expect(next.sections[0].columns).toBe(2);
+    expect(next.sections[1]).toEqual(base.sections[1]);
+  });
+
+  // Deliberately reaching past both ends. A hand-inlined copy of the splice
+  // that skipped `reorder`'s clamp would agree on every in-range case and
+  // only diverge here — which is precisely the copy this criterion exists to
+  // prevent, so the in-range cases alone would not catch it.
+  const DESTINATIONS = [-2, -1, 0, 1, 2, 3, 9];
+
+  it.each(DESTINATIONS)(
+    "agrees with reorder exactly on a move to %i, because it is the same function underneath",
+    (to) => {
+      const ids = base.sections[0].items.map((item) => item.id);
+
+      for (let from = 0; from < ids.length; from += 1) {
+        expect(
+          moveItemWithinSection(base, 0, from, to).sections[0].items.map(
+            (item) => item.id
+          )
+        ).toEqual(reorder(ids, from, to));
+      }
+    }
+  );
+
+  it("leaves the layout alone when it names a section that is not there", () => {
+    expect(moveItemWithinSection(base, 7, 0, 1)).toEqual(base);
+  });
+});
+
+describe("moveSection", () => {
+  const base = {
+    sections: [
+      { name: "First", columns: 2, items: [{ id: "Account" }] },
+      { name: "Second", columns: 3, items: [{ id: "Contact" }] },
+      { name: "Third", columns: 1, items: [] }
+    ]
+  };
+
+  function frozenCopy() {
+    return JSON.parse(JSON.stringify(base));
+  }
+
+  it("reorders the sections themselves, carrying each one's items and columns", () => {
+    const before = frozenCopy();
+
+    const next = moveSection(base, 2, 0);
+
+    expect(next.sections.map((section) => section.name)).toEqual([
+      "Third",
+      "First",
+      "Second"
+    ]);
+    expect(next.sections[1].items).toEqual([{ id: "Account" }]);
+    expect(next.sections[1].columns).toBe(2);
+    expect(base).toEqual(before);
+  });
+
+  it.each([-2, -1, 0, 1, 2, 3, 9])(
+    "agrees with reorder exactly on a move to %i, because it is the same function underneath",
+    (to) => {
+      const names = base.sections.map((section) => section.name);
+
+      for (let from = 0; from < names.length; from += 1) {
+        expect(
+          moveSection(base, from, to).sections.map((section) => section.name)
+        ).toEqual(reorder(names, from, to));
+      }
+    }
+  );
+
+  it("survives a round trip through the payload, so the order is what reloads", () => {
+    const moved = moveSection(base, 0, 2);
+
+    expect(
+      deserializeLayout(serializeLayout(moved)).sections.map(
+        (section) => section.name
+      )
+    ).toEqual(["Second", "Third", "First"]);
+  });
+
+  it("leaves the layout alone when it names a section that is not there", () => {
+    expect(moveSection(base, 7, 0)).toEqual(base);
   });
 });

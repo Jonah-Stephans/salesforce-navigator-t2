@@ -1,14 +1,38 @@
 <template>
   <a
     href={url}
-    class="rstk-nav-item"
+    class={anchorClass}
     data-tab-id={tabId}
+    draggable="true"
     aria-label={label}
+    aria-describedby={instructionsId}
     tabindex={fallbackTabIndex}
     role={fallbackRole}
     onclick={handleClick}
     onkeydown={handleKeydown}
+    ondragstart={handleDragStart}
+    ondragover={handleDragOver}
+    ondrop={handleDrop}
+    ondragend={handleDragEnd}
   >
     <span class="rstk-nav-item__label">{label}</span>
   </a>
+
+  <!-- Attached only while grabbed, never permanently. A screen reader user
+       who is merely tabbing through their tabs should not be read a drag
+       instruction on every item; the instruction is only true, and only
+       useful, once a drag is under way. -->
+  <template lwc:if={grabbed}>
+    <!-- The id is computed rather than a template literal, and so is the
+         `aria-describedby` above, so that the two are the same string by
+         construction. A static id would be subject to the framework's own
+         id handling while a computed idref would not, and an idref that
+         does not resolve is an association that only looks present. -->
+    <span
+      id={instructionsId}
+      class="slds-assistive-text rstk-nav-item__instructions"
+    >
+      Use the arrow keys to move this item, Space to drop it, Escape to cancel.
+    </span>
+  </template>
 </template>
