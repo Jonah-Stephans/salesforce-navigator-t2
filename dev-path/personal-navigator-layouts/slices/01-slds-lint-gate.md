@@ -1,6 +1,6 @@
 ---
 done: true
-fix_cycles: 0
+fix_cycles: 1
 depends_on:
 touches:
   - eslint.config.js
@@ -360,3 +360,100 @@ place to stay inside a finding's wording would be the wrong trade.
       file's claims that `--slds-c-*` is not caught by the linter, and that
       `--slds-g-color-border-info-1` and `--slds-g-color-neutral-100` do not exist, all check out
       against probes.
+- [ ] `verify-slds-gate.sh` reads the `lint-staged` eslint *command* out of `package.json` but never
+      checks that the entry's *glob* still selects `force-app/**/lwc/**`, so the pre-commit half of
+      the gate can stop covering the shipping path with the gate still green. This re-opens the first
+      `- [x] fixed` box, whose whole point was "the flag it guards is the flag it reads": the flag is
+      now read, but the glob that decides which files the flag is ever applied to is not. Measured,
+      not reasoned: changing `package.json`'s `"**/{aura,lwc}/**/*.{js,css,html}"` key to
+      `"test/**/{aura,lwc}/**/*.{js,css,html}"` and leaving the command
+      `"eslint --no-warn-ignored --max-warnings 0"` untouched, `npm run lint:slds-gate` printed all
+      six `ok:` lines and exited **0**. In that state the hook lints no LWC CSS that ships at all:
+      `micromatch(["force-app/main/default/lwc/foo/foo.css"], "test/**/{aura,lwc}/**/*.{js,css,html}")`
+      returns `[]`, where the current glob returns the path. Assertion A3 cannot see this because it
+      invokes the parsed command directly on the probe path rather than asking whether `lint-staged`
+      would have selected that path. This is the same failure mode as the second `- [x] fixed` box —
+      "the `**/lwc/**` scoping stops matching the path that ships" — on the `package.json` half
+      instead of the `eslint.config.js` half, and the script's own header comment claims item 1
+      covers "the `lint-staged` eslint entry". Fix by having A3 also assert the glob matches the
+      probe path — e.g. resolve the glob key alongside the command in the `node -e` parse and test
+      the probe path against it with the `micromatch` already present in `node_modules`, failing
+      loudly if it does not match.
+- [ ] The `EXIT` trap's failure branch does not fail the run, so the script can leave probe files
+      under `force-app/` and still exit 0. `cleanup()` at `scripts/verify-slds-gate.sh:57-63` ends
+      with `return 1` when `$PROBE_DIR` survives `rm -rf`, and `## Deviations` claims it "fails the
+      run if the removal does not take". Bash discards the return status of an `EXIT` trap unless the
+      trap itself calls `exit`. Verified with a minimal script — `cleanup(){ echo ran; return 1; }` /
+      `trap cleanup EXIT` / body succeeds — which printed `ran` and exited **0** under this repo's
+      bash. So on a read-only or permission-denied `force-app/`, the gate prints
+      `FAIL: could not remove the probe ... The tree is dirty.` and still reports success, leaving an
+      LWC bundle inside the one `packageDirectories` entry `sfdx-project.json` declares. Fix by
+      having the trap `exit` non-zero rather than `return` — taking care to preserve the script's
+      original exit status on the normal path, since an unconditional `exit` in an `EXIT` trap
+      overwrites it.
+- [x] false positive — the four defects the review brief named all go red, and the tree is clean on
+      the failing path. Re-injected each into a working tree and ran `npm run lint:slds-gate`,
+      restoring from a backup copy after each: (a) `"lint": "eslint ."` — exit 1, "`npm run lint`
+      reported hard-coded values at force-app/main/default/lwc/sldsGateProbe and still exited 0";
+      (b) `"eslint --no-warn-ignored"` in the `lint-staged` entry — exit 1, "the lint-staged eslint
+      entry reported hard-coded values and still exited 0", with A1 still green above it;
+      (c) re-scope narrowed to `test/**/lwc/**/` in `eslint.config.js` — exit 1, "did not report
+      no-hardcoded-values-slds2 on force-app/main/default/lwc/sldsGateProbe"; (d) both SLDS entries
+      collapsed onto `files: ["**/lwc/**/*.{css,html}"]` — exit 1, "did not report enforce-bem-usage",
+      with A1 to A3 green because the CSS half is unaffected; (e) `ignores` grown to
+      `"force-app/main/default/lwc/**/*.css"` — exit 1 on A2. After every failing run
+      `git status --short` was empty and `force-app/main/default/lwc/` was empty. Restored, the gate
+      prints all six `ok:` lines and exits 0.
+- [x] false positive — the `EXIT` trap does cover an interrupt. Only the trap's *return status* is
+      lost (see the open box above); the removal itself runs. A script with the same
+      `trap cleanup EXIT` shape, killed with `SIGINT` mid-`sleep`, printed `cleanup ran` and the
+      probe directory was gone; the same under `SIGTERM`, exit 143, directory gone. Only `SIGKILL`
+      leaks the directory, and `SIGKILL` is untrappable by construction, so no script can close that.
+- [x] false positive — the fixed probe path cannot turn a concurrent run into a false pass. Two
+      `npm run lint:slds-gate` runs launched simultaneously both printed all six `ok:` lines and
+      exited 0, and `git status --short` was empty afterwards. Reasoned through the interleavings as
+      well: every cross-run interference is a `rm -rf`/overwrite that *removes* evidence, so the
+      worst outcome is a spurious `FAIL`, never a green run on a broken gate. `pr-checks.yml` runs
+      the gate once, in a `slds-styling` job with its own `actions/checkout`, so CI has no second
+      writer.
+- [x] false positive — writing under `force-app/` at lint time does not expose the probe to
+      `sf project deploy` in any path that matters. The window is real but ~4 seconds: mid-run
+      `git status --short` reports `?? force-app/main/`, and it is empty again the moment the run
+      ends. `pr-checks.yml`'s `deploy-gate` is a separate job with a separate checkout, so it can
+      never observe another job's probe, and the probe bundle carries no `.js-meta.xml`, so a deploy
+      that somehow saw it would error rather than ship it. A collision with a real future bundle
+      would need someone to name one `sldsGateProbe`, and both files carry a header comment saying
+      the script writes and deletes them.
+- [x] false positive — the `node -e` parse of `package.json` fails loudly, it does not silently pass.
+      Deleting the `"**/{aura,lwc}/**/*.{js,css,html}"` entry outright gave exit 1 and
+      "FAIL: package.json has no lint-staged eslint entry globbing lwc CSS. The pre-commit half of
+      the gate is gone."; renaming the key to `"force-app/**/*.{js,css,html}"`, which drops the `lwc`
+      substring the parse looks for, gave the same loud failure even though that rename would have
+      been harmless. The `find` cannot latch onto the wrong entry either: the prettier glob
+      `**/*.{cls,cmp,component,css,html,...}` carries no `lwc` substring and the jest glob `**/lwc/**`
+      carries no `css`. A missing key yields `[].concat(undefined).find(...)` over `[undefined]`,
+      which matches nothing and exits 1.
+- [x] false positive — a broken eslint or a missing dependency cannot read as `ok:` on the probe
+      assertions. A1, A2, A3 and B all require a *rule name* plus, for A, the probe's own filename in
+      the output before they look at an exit code, and a crashed or misconfigured eslint emits
+      neither, so each fails with its own diagnosis. `set -uo pipefail` without `-e` is fine here
+      because every assertion captures its exit code into a variable on the line after the
+      assignment, where `$?` is the command substitution's own status; nothing depends on `-e`.
+      Assertion D still supplies its own flags, but as the earlier false positive records, a total
+      breakage fails D's CLEAN half.
+- [x] false positive — all five hex fallbacks in `rstk-slds2-ux-standards.md` are the linter's own
+      suggestions, including the two changed outside finding 6's scope. Linted a probe of bare
+      `var(--slds-g-color-on-surface-{1,2,3})` and `var(--slds-g-color-border-{1,2})` under
+      `force-app/**/lwc/**` and read `no-slds-var-without-fallback`'s messages: `on-surface-1`
+      `#747474`, `on-surface-2` `#2e2e2e`, `on-surface-3` `#181818`, `border-1` `#e5e5e5`,
+      `border-2` `#747474` — each matching the file exactly, `border-1` and `border-2` included. The
+      same probe confirms the values assertion C's clean probe uses: `surface-container-1` `#ffffff`,
+      `spacing-4` `1rem`, `font-scale-1` `0.875rem`, `radius-border-2` `0.25rem`. Probe deleted;
+      `git status --short` empty.
+- [x] false positive — the corrected severity sentence is accurate and its practical instruction is
+      right. Printed the shipped severities from `@salesforce-ux/eslint-plugin-slds`'s
+      `flat/recommended`: `lwc-token-to-slds-hook` is `"error"`, `enforce-sds-to-slds-hooks` and
+      `no-unsupported-hooks-slds2` are both `"warn"`, exactly as the file now says. `--max-warnings 0`
+      is on `package.json`'s `lint` script, so "either one fails the run" holds, and the closing
+      "do not expect an `--sds-*` hook to announce itself as an error" is the useful half of the
+      correction.
