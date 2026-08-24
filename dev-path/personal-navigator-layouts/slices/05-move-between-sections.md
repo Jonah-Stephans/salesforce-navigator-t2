@@ -442,4 +442,125 @@ rather than being documentary.
       built at index 1 and the parent-level move out of section 1). Twelve further mutations of my
       own were applied; the survivors are accounted for above.
 
-fix_cycles: 0
+- [ ] **A keyboard grab is silently transferred to a different item, or falsely cancelled, when
+      *another* item leaves the same section.** This re-opens finding 2 above: that fix released the
+      grab only when the departing item *is* the grabbed one ("another item leaving is not this
+      drag's business"), but another item leaving renumbers the very list `grabbedItemIndex` counts
+      along, and nothing re-seats it. `navigatorSection.grabbedItemIndex` is a position in the
+      resolved list; `releaseGrabIfItemGone` tests the grabbed item's *identity* but only ever
+      *releases* — it never corrects the index — so an earlier item departing shifts every later
+      position down by one underneath a live grab. Three outcomes, all driven end to end in jsdom
+      against `3baba04` and all three failing:
+      (a) `Selling` = `[Account, Contact, standard-ActionHub, standard-ShieldHome]`, grab
+      `Action Plans` (rendered index 2), then choose `Move to Support` on `Accounts` (rendered index
+      0): the grab lands on **`Shield`** — the user is now holding an item they never picked up, and
+      every subsequent arrow, Space and Escape acts on it.
+      (b) The same with three items, grabbing the last: `stillListed` is true but
+      `grabbedItemIndex < items.length` is now false, so the section announces
+      `"Move cancelled. Action Plans is no longer available."` on an assertive region while
+      `Action Plans` is still on screen — **the exact false sentence finding 2 was raised to remove,
+      reachable again by a different route**, and this time alongside the parent's
+      `"Accounts moved to Support."`, so the two regions again say contradictory things about
+      different items.
+      (c) With two items, grabbing the second: the grab is dropped entirely and silently, stranding
+      the user mid-move with nothing said.
+      Reachability is not theoretical and is the same argument the finding 2 fix itself relies on: a
+      menu button is a sibling of the anchor and `navigatorItem.handleClick` guards only navigation,
+      so a *sibling's* Move to... menu can be clicked mid-grab with nothing blocking it at all. The
+      drag route reaches it identically. The destination section has the mirror of the same problem:
+      an item arriving above a grabbed item shifts that grab too. Note also that the condition the
+      fix added is itself unasserted — replacing `if (this.grabbedItemIndex === index)` in
+      `releaseGrabForDepartingItem` with an unconditional `this.releaseGrab()` leaves the suite at
+      **267 passed**, so whichever way this is resolved it needs a test that discriminates. Not a
+      slice 04 regression: before this slice no item could leave a section while another was
+      grabbed.
+- [ ] **The criterion 6 guard has been traded away: `reorder` can now be removed from both item-axis
+      move functions without a single test failing.** The build's own mutation row 1 ("cross-section
+      move uses a second placement function (hand-inlined splice, skipping `reorder`'s clamp)")
+      recorded *1 failed*; re-applied to `3baba04` it **survives at 267 passed**, and so does the
+      same mutation on `moveItemWithinSection`, and so does both at once. The cause is the fix
+      itself, not a weakened test: `storedSource` and `storedDestination` now clamp and validate on
+      the resolved list *before* `reorder` is called, so `reorder`'s own clamp and its
+      source-validity guard are unreachable from both item paths, and the two `DESTINATIONS`
+      `it.each` blocks — written precisely to catch a hand-inlined splice, because they were the
+      only tests that reached past either end — now compare against a `reorder` output that any
+      correct hand-inlined splice reproduces exactly. `reorder` itself is still pinned (deleting its
+      clamp fails 6, deleting its source guard fails 2), but only through `moveSection` and the two
+      `landingIndex` helpers, which are the section axis and the announcements. So the shipped code
+      does satisfy criterion 6 and the tick is honest — what is gone is any test that would notice
+      the next operation quietly growing a second copy of the maths on the item axis. What is needed
+      is an assertion that bites on the placement being shared rather than merely agreeing: exercise
+      a destination that survives the resolved-list clamp and still reaches `reorder`'s, or assert
+      on `reorder` being the function that ran.
+- [x] false positive — that the claim "there is no exported function left that takes a stored index"
+      is overstated. Checked export by export against the shipped file. `resolveLayout` maps sections
+      one-to-one and filters only *items*, so a section index is the same number stored and resolved
+      and `addSection` / `renameSection` / `setSectionColumns` / `deleteSection` / `moveSection`
+      carry no stored-vs-resolved hazard at all. `moveItemWithinSection` and
+      `moveItemBetweenSections` both take `(layout, tabs, ...)` and read every index as a resolved
+      position. The one export that takes a bare index is `reorder(list, from, to)`, and it is not a
+      counterexample: it takes no layout, so a stored index cannot be handed to it without the
+      stored list being handed to it as well, and both of its two callers outside the module
+      (`navigatorSection.landingIndex`, `salesforceNavigator.sectionLandingIndex`) build a synthetic
+      positions array from a resolved list. The claim stands as stated.
+- [x] false positive — that `resolveLayout` now leaks into stored state, or that the accessible set
+      decides what is written rather than only which entry a position names. Driven directly against
+      the shipped module over an inaccessible id placed first, last, several consecutive, and
+      interleaved non-contiguously (`[X, A, Y, B, Z, C]`): on all three routes — within-section, the
+      menu route with no destination index, and the drag route with one — every inaccessible id is
+      still present in the written payload, still in its original relative order, and the section
+      length is unchanged. Slice 03's `leaves the stored layout completely unaltered when it drops an
+      item` still bites, and the new routes are covered by
+      `leaves an item the user cannot see exactly where it was stored` and
+      `lands the item at that position on screen in the destination, counting past what the user
+      cannot see`. Mutating `renderedPositions` to be built over the stored list fails 7; mutating
+      `storedSource` to return the resolved index untranslated fails 6.
+- [x] false positive — that the translation helpers break at an edge. Every case in the brief was
+      run against the shipped module: an inaccessible id first, last, several consecutive, every item
+      inaccessible (`storedSource` returns `undefined`, the layout comes back unchanged and nothing
+      is dropped), the section empty (same), and a destination index past the end of the resolved
+      list but not the stored one (lands at the end of what is visible, leaving the hidden trailing
+      entries in place). The moved item cannot itself be inaccessible: `storedSource` only ever
+      returns a position drawn from `renderedPositions`, so an unreachable id has no rendered
+      position to name. `tabs` of `null` or `undefined` makes nothing reachable and every move a
+      no-op rather than a crash.
+- [x] false positive — that clamping on the resolved list before translating can produce a stored
+      index that is wrong rather than merely conservative. Exercised over a section whose visible
+      items are non-contiguous in storage (`[X, A, Y, B, Z, C]`, only `A/B/C` reachable): ArrowUp on
+      the first visible item stays at the top of what is visible and does not jump above `X`;
+      ArrowDown on the last stays at the bottom and does not jump below `Z`; and a move of `C` to the
+      top of the visible list lands it before `A` with `X`, `Y`, `Z` all still in their original
+      relative order. Clamping the other way round *is* wrong and is caught: clamping on the stored
+      range after translating fails 4, and an off-by-one at the resolved end (`positions.length - 2`)
+      fails 16.
+- [x] false positive — that the fix traded away a row of the previous mutation table. All the rows
+      that touch the changed code were re-applied to `3baba04` and reverted. Row 13
+      (`fromSection: 0`) still fails **2**; row 12 (`copySection` dropped from
+      `moveItemBetweenSections`) still fails **5**, matching what the build recorded. Also
+      re-confirmed: same-section guard dropped in the parent (1) and in the model (1), announcement
+      omitting the destination (2), announcement naming the source (2), the move dropping the
+      `rename` (4), `dragItemIndex` never recorded (4), the forwarded foreign drop carrying no
+      position (3), and a menu move landing at 0 rather than the end (5). Row 1 is the one exception
+      and it is recorded as its own finding above. Fourteen further mutations of my own were applied;
+      the two survivors are the two open findings.
+- [x] false positive — that finding 3's silent dedupe drops the wrong copy or the wrong `rename`.
+      Driven with the two copies carrying *different* renames: `Selling` holds
+      `{id: Account, rename: "Mine"}` and `Support` holds `{id: Account, rename: "Theirs"}`; after
+      the move `Support` reads `[{id: Account, rename: "Mine"}, {id: B}]`, so the surviving entry is
+      the one the user moved and it carries their own wording. Removing the dedupe fails 2, and
+      inverting it so the stale copy wins fails 2. On discoverability: the abandoned entry's own
+      `rename` is discarded with no announcement, and a drop aimed at a rendered position after the
+      stale copy shifts by one because the translation runs over the deduplicated list (dropping onto
+      the third of `[A, B, C]` while moving a second `A` yields `[B, C, A]`). Both are consequences
+      of a precondition no gesture this Navigator ships can create, the announcement that is made is
+      true, and refusing instead would reproduce the silent no-op of finding 1 — so the chosen
+      behaviour is right and neither consequence is a defect.
+- [x] false positive — that the cross-slice blast radius cost slice 04 an assertion. Every removed
+      line in the two touched test files was diffed against `93afee2`: all seven are `expect(...)`
+      calls re-emitted verbatim with the extra tab-list argument, and all seven are present in the
+      current file. No `it` was deleted, no `toEqual` became a `toBe`, no expectation was loosened.
+      Slice 03's access-intersection tests and slice 04's reorder tests all still pass, and slice
+      04's own behaviour is now *stronger* than it was: reverting `moveItemWithinSection` to ignore
+      `tabs` fails 3.
+
+fix_cycles: 1
