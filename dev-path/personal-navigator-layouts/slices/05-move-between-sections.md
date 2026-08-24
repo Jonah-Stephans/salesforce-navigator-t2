@@ -614,4 +614,94 @@ rather than being documentary.
       04's own behaviour is now *stronger* than it was: reverting `moveItemWithinSection` to ignore
       `tabs` fails 3.
 
-fix_cycles: 1
+- [ ] **`grabbedItemOrigin` is re-seated off the *grabbed item's* shift rather than off its own, so
+      when a sibling between the held item and its origin leaves, Escape returns the item to a slot
+      it was never picked up from — and writes that.** This re-opens the origin half of the
+      re-seating finding above; the identity half (`grabbedItemIndex`) is correct and stays correct.
+      `reseatOrReleaseGrab` computes `shift = at - this.grabbedItemIndex` and adds that same `shift`
+      to `grabbedItemOrigin`, and it returns early at `if (at === this.grabbedItemIndex)` — so when
+      the grabbed item's own position does not move, the origin is not adjusted at all, even though
+      the list above the origin changed. The two only agree while the grabbed item sits below every
+      departure, which is to say only until the user walks it. Driven in jsdom against `330168b`
+      (`c-navigator-section`, four items, no parent involved):
+      stored `[Account, Contact, standard-OurSite, standard-ShieldHome]`; grab `Our Site` (rendered
+      index 2, origin 2) and press ArrowLeft once, giving
+      `[Account, standard-OurSite, Contact, standard-ShieldHome]` with `grabbedItemIndex = 1` and
+      `grabbedItemOrigin = 2`. Now `Contacts` — the item `Our Site` was originally sitting behind,
+      now *below* the grab at rendered index 2 — leaves by its own Move to… menu, so the list
+      becomes `[Account, standard-OurSite, standard-ShieldHome]`. `Our Site` is still at index 1, so
+      the early return fires and the origin stays 2. Escape then dispatches
+      `itemmove {sectionIndex: 0, from: 1, to: 2}` and announces
+      `"Move cancelled. Our Site returned. Position 3 of 3."` — the item is moved *past* `Shield`,
+      which it started ahead of, and the parent applies and autosaves that. The correct destination
+      is 1, which is a no-op, by this slice's own stated rule: its test
+      `still returns a walked item to where it was picked up after a sibling leaves` says in as many
+      words "where it started **relative to the items that are still here** — not position 2, which
+      is where it started relative to a list that no longer exists". That rule is satisfied when the
+      departure is *above* the grabbed item (the case the new test drives, which does pass) and
+      violated when it is between the grabbed item and its origin. Nothing in the 274 covers the
+      second case: dropping the origin shift entirely still fails only 1, and that one test is the
+      above-the-grab case. Same mechanism, less definite right answer, on arrivals: with
+      `[Account, Contact, standard-OurSite]`, grab `Our Site`, ArrowLeft, then let `Shield` arrive at
+      rendered index 2 — Escape dispatches `to: 2` and puts `Our Site` ahead of both `Shield` and
+      `Contacts`, when it was picked up behind `Contacts`. Reachability is the same argument the two
+      previous findings were accepted on: a sibling's Move to… menu button is a sibling of the
+      anchor and `navigatorItem.handleClick` guards navigation only, so it can be clicked mid-grab,
+      and the drag route reaches it identically. Fix direction: re-seat the origin from its own
+      identity rather than from the grabbed item's shift — record at grab time which ids preceded
+      the grabbed item and recompute the origin as how many of those are still present (which yields
+      1 in the reproduction above, and still yields the passing answer in the existing
+      above-the-grab test) — or clamp-recompute it on the surviving list some other way. Whatever is
+      chosen needs a test with the departure *below* the grab, because the existing one cannot
+      distinguish the two rules.
+- [x] false positive — that the setter-versus-`renderedCallback` reasoning is post-hoc, or that the
+      suite cannot tell the two apart. Relocated the call: `set section` left assigning only, and
+      `this.reseatOrReleaseGrab()` placed as the first statement of `renderedCallback`. **3 failed**
+      — `keeps a keyboard grab on the item it was placed on when a sibling leaves`, `keeps a
+      keyboard grab on its own item when another arrives above it`, and, exactly as the fix report
+      predicted, `refuses a second grab while one is in flight, so the first Escape origin survives`,
+      which drives a keyboard move and no list replacement at all: the render caused by the
+      component's own announcement compares the freshly-assigned index against the list it has not
+      been handed yet and re-seats the move back onto the position it just left. The reasoning is
+      load-bearing and pinned. Also checked around it: `salesforceNavigator.sections` rebuilds every
+      section object on every render, so the setter does fire on parent renders that changed nothing
+      — and an identical re-assignment mid-grab is a no-op (`at === grabbedItemIndex`, early return),
+      dispatches nothing, and leaves the announcement reading `"Contacts grabbed. Position 2 of 3."`.
+      No re-render loop: the setter writes only this component's own fields.
+- [x] false positive — that the previous mutation table was traded again, as it was last round. All
+      eighteen rows were re-applied to `330168b` and reverted, none survived: row 1 **1 failed on
+      each half** (the within-section splice and the between-section splice applied independently —
+      this is the row the last fix pass re-closed, and the failing test is
+      `leaves the section as it was when the destination is not a real position`), 2 **1**, 2b **1**,
+      3 **3**, 4 **2**, 5 **2**, 6 **4**, 7 **4**, 8 **3**, 9 **2**, 10 **1**, 11 **2**, 12 **6**,
+      13 **2**, 14 **5**, 15 **3**, 16 **1**, 17 **15**, 18 **12**. Several counts are higher than
+      the build recorded, none lower, which is what the diff predicts: `git show --numstat` gives
+      **0 deleted lines** in all three touched test files, so no assertion was removed or loosened
+      and the only production file changed is `navigatorSection.js` — a row whose mutation lives
+      elsewhere cannot have been weakened by this commit.
+- [x] false positive — that the new non-numeric-destination tests cannot fail, or are vacuous.
+      They fail: re-applying row 1's hand-inlined splice to `moveItemWithinSection` reds exactly
+      `leaves the section as it was when the destination is not a real position`, and the
+      `moveItemBetweenSections` half behaves the same. **What they are** is worth stating plainly,
+      and the tests' own comments already do: a non-numeric destination is **not reachable by any
+      real route** — `handleItemKeyMove` computes `from + delta`, `handleItemDrop` reads an index the
+      section itself assigned in `renderItems`, and `moveItemBetweenSections` special-cases
+      `undefined`/`null` before `storedDestination` is called at all. So these are guard tests on an
+      input no gesture produces, pinned to catch the duplicate-maths regression they were written
+      for, not tests of user-visible behaviour. That is the honest reading and it is the one the
+      slice writes down; the criterion 6 tick rests on the shipped code, which does call `reorder`.
+- [x] false positive — that the changed release path cost the slice-04 case, where the grabbed
+      item's *own* tab is withdrawn mid-grab. Driven in jsdom: grab `Contacts` of
+      `[Account, Contact, standard-OurSite]`, then hand down the section with `Contact` no longer
+      accessible — the card announces `"Move cancelled. Contacts is no longer available."` and no
+      item is left grabbed. The same holds when the whole section arrives empty. Mutating
+      `reseatOrReleaseGrab` to release when the item is *present* fails **18**; to re-seat when it is
+      *absent* fails **2**; to re-seat by index rather than by identity fails **6**; to re-seat one
+      position off fails **4**; `releaseGrabForDepartingItem` made unconditional fails **4**.
+- [x] false positive — that the `splice` invariant or the toolchain slipped. `grep -rn "splice("`
+      over `force-app` outside `__tests__` returns exactly the two lines inside `reorder`.
+      `npm test` 274 passed across 5 suites, `npm run lint`, `npm run lint:slds-gate` and
+      `npm run prettier:verify` all clean, and `git status` is clean — every mutated file was
+      restored, and no deploy was needed because no production file was left changed.
+
+fix_cycles: 2
