@@ -70,10 +70,14 @@ light and dark mode. Every gesture that works with a mouse works from the keyboa
 - Changing the App Launcher itself, or changing the org's own tab labels — a rename is the user's own
   wording, local to their layout.
 - Themes other than Cosmos, and any styling route that bypasses SLDS 2 global styling hooks.
-- **Placing the tab into any app's navigation, and assigning the permission set.** Neither can ship
-  as source — `CustomApplication` deploys as a full replace of an app's nav list, and
-  `PermissionSetAssignment` is data rather than metadata. Both are documented admin steps; see
-  `## Design`, *What an administrator must do*.
+- **Placing the tab into any app's navigation, assigning the permission set, and unticking "Grant
+  Access Using Hierarchies" on `Navigator_Layout__c`.** None can ship as source —
+  `CustomApplication` deploys as a full replace of an app's nav list, `PermissionSetAssignment` is data
+  rather than metadata, and the hierarchy flag is not expressible in the Metadata API under any
+  spelling. All three are documented admin steps; see `## Design`, *What an administrator must do*.
+  **The third is load-bearing for the isolation Outcome**, which the other two are not — it was added
+  at Build on 2026-08-24 by the engineer's decision, after slice 03 proved the flag undeployable
+  against a live org.
 - **Icons on items.** There is no supported route from a tab to an SLDS icon name, and the nav-item
   icon fields were empty in every item observed. Items are text, which is what the All Items list
   this component improves on is already.
@@ -659,6 +663,23 @@ Neither of these can ship as source, and both are now in `## Out of scope` as ad
    would clobber the customer admin's own navigation.
 2. **Assign the permission set.** `PermissionSetAssignment` is data, not metadata. The only
    no-admin-action route is profile tab visibility, which this repo's `.forceignore` blocks.
+3. **Untick "Grant Access Using Hierarchies" on Navigator Layout.** Setup → Sharing Settings →
+   Organization-Wide Defaults. **This one differs from the other two: it is load-bearing for an
+   Outcome, not just for reach.** Until it is performed, every manager above a user in the role
+   hierarchy can read that user's layouts through ordinary record access, and the isolation Outcome is
+   not met in that org.
+
+   Added at Build on 2026-08-24, by the engineer's decision, after slice 03 established against a live
+   org at API 67.0 that the flag is not expressible in the Metadata API at all: the server round-trips
+   `CustomObject` emitting no hierarchy element, `SharingSettings` carries nothing per-object, and
+   dry-run deploys of four candidate element names each failed with the *identical* error a
+   deliberately bogus control element produced. It is Setup-only under every spelling.
+
+   **The Navigator itself is safe either way**, which is what makes this a documented step rather than
+   a hole: `NavigatorLayoutController.getLayouts()` filters on `OwnerId = :UserInfo.getUserId()`
+   explicitly, in addition to running `WITH USER_MODE`, so the component never renders one user's
+   layout to another regardless of the sharing setting. The exposure this step closes is through
+   reports, list views and the API.
 
 What *does* ship: the `CustomTab` (`<lwcComponent>` pointing straight at the bundle — no Aura
 wrapper, so the house ban holds; `<label>` and `<motif>` both required), the `js-meta.xml` with

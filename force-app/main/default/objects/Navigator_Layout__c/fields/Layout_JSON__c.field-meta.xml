@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Layout_JSON__c</fullName>
+    <label>Layout JSON</label>
+    <description
+  >The layout's sections, each with a name, a column count and an ordered list of {id, rename?}. Carries no tab labels, icons or pageReferences — everything derivable from the platform is derived at render time, so an org relabelling a tab propagates with no write.</description>
+    <type>LongTextArea</type>
+    <length>131072</length>
+    <visibleLines>10</visibleLines>
+    <required>false</required>
+</CustomField>
