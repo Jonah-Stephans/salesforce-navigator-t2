@@ -15,6 +15,27 @@
   padding: var(--slds-g-spacing-4, 1rem);
 }
 
+/* The layout menu's three dialogs. A row, so the commit and the cancel sit
+   beside what they act on rather than below it; `flex-end` because the input
+   carries a label above it and the buttons do not. */
+.rstk-nav-layout-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--slds-g-spacing-2, 0.5rem);
+  padding: var(--slds-g-spacing-4, 1rem);
+}
+
+.rstk-nav-layout-prompt__input {
+  flex: 1 1 auto;
+}
+
+.rstk-nav-layout-prompt__text {
+  flex: 1 1 auto;
+  color: var(--slds-g-color-on-surface-1, #747474);
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+}
+
 .rstk-nav-error__text {
   color: var(--slds-g-color-on-error-1, #ffffff);
   font-size: var(--slds-g-font-scale-1, 0.875rem);

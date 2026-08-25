@@ -13,6 +13,9 @@ import { SCHEMA_VERSION, reorder } from "c/navigatorLayoutModel";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
 import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
 import updateLayout from "@salesforce/apex/NavigatorLayoutController.updateLayout";
+import activateLayout from "@salesforce/apex/NavigatorLayoutController.activateLayout";
+import renameLayout from "@salesforce/apex/NavigatorLayoutController.renameLayout";
+import deleteLayout from "@salesforce/apex/NavigatorLayoutController.deleteLayout";
 
 // The Apex seam. Without these, `@lwc/jest-transformer` substitutes a plain
 // function returning `Promise.resolve()` that records nothing — the same
@@ -30,6 +33,21 @@ jest.mock(
 );
 jest.mock(
   "@salesforce/apex/NavigatorLayoutController.updateLayout",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.activateLayout",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.renameLayout",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.deleteLayout",
   () => ({ default: jest.fn() }),
   { virtual: true }
 );
@@ -193,6 +211,13 @@ describe("c-salesforce-navigator", () => {
       name: "My Navigator",
       isActive: true
     });
+    // `jest.clearAllMocks()` clears recorded calls but leaves implementations
+    // in place, so a fake store installed by one test would otherwise still be
+    // answering in the next. Re-declaring the default here is what keeps each
+    // test's store its own.
+    activateLayout.mockResolvedValue([]);
+    renameLayout.mockResolvedValue({});
+    deleteLayout.mockResolvedValue([]);
   });
 
   afterEach(async () => {
@@ -3316,6 +3341,633 @@ describe("c-salesforce-navigator", () => {
       expect(
         picker.shadowRoot.querySelector("lightning-modal-footer")
       ).not.toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // Keeping more than one layout and switching between them.
+  //
+  // **Every assertion in this block is about what the store holds
+  // afterwards**, never about which Apex method was called with what. That is
+  // this slice's whole subject: the failure it exists to prevent is a client
+  // sending a plausible call and the server writing it to the wrong row, and a
+  // suite asserting the call stays green throughout that. So the Apex mocks
+  // below are not stubs returning fixed values — they are a small in-memory
+  // store that behaves the way `NavigatorLayoutController` does, and the
+  // assertions read `store.rows`.
+  //
+  // The fixture is three layouts with **the active one in the middle**. One
+  // layout cannot tell "the active one" from "the only one", and an active
+  // layout at position 0 cannot tell it from "the first one" — either would
+  // pass a switcher wired to the wrong record.
+  // -------------------------------------------------------------------
+
+  describe("switching between layouts", () => {
+    const FIRST_ID = "a0X000000000011AAA";
+    const SECOND_ID = "a0X000000000012AAA";
+    const THIRD_ID = "a0X000000000013AAA";
+
+    const NAV_ITEMS = [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM];
+
+    /** A payload whose section name, column count and rename are all distinct. */
+    function payload(sectionName, columns, items) {
+      return JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
+        sections: [{ name: sectionName, columns, items }]
+      });
+    }
+
+    const SELLING = payload("Selling", 2, [
+      { id: "Account", rename: "Clients" }
+    ]);
+    const SUPPORT = payload("Support", 4, [{ id: "Contact" }]);
+    const ADMIN = payload("Admin", 1, [{ id: "standard-ActionHub" }]);
+
+    function threeRows() {
+      return [
+        {
+          layoutId: FIRST_ID,
+          name: "Selling",
+          isActive: false,
+          isReadable: true,
+          layoutJson: SELLING
+        },
+        {
+          layoutId: SECOND_ID,
+          name: "Support",
+          isActive: true,
+          isReadable: true,
+          layoutJson: SUPPORT
+        },
+        {
+          layoutId: THIRD_ID,
+          name: "Admin",
+          isActive: false,
+          isReadable: true,
+          layoutJson: ADMIN
+        }
+      ];
+    }
+
+    /**
+     * A stand-in for `Navigator_Layout__c` that enforces what the controller
+     * enforces: exactly one active row, a create that sits beside what is
+     * already there, and a delete that hands the active flag to the layout
+     * taking the deleted one's place. Assertions read from it.
+     */
+    function installStore(rows) {
+      const store = {
+        rows: rows.map((row) => ({ ...row })),
+        of(layoutId) {
+          return store.rows.find((row) => row.layoutId === layoutId);
+        },
+        activeName() {
+          const active = store.rows.filter((row) => row.isActive);
+          return active.length === 1
+            ? active[0].name
+            : `${active.length} active`;
+        },
+        payloadOf(layoutId) {
+          const row = store.of(layoutId);
+          return row ? row.layoutJson : undefined;
+        },
+        names() {
+          return store.rows.map((row) => row.name);
+        }
+      };
+
+      function makeActiveOnly(layoutId) {
+        store.rows.forEach((row) => {
+          row.isActive = row.layoutId === layoutId;
+        });
+      }
+      function copies() {
+        return store.rows.map((row) => ({ ...row }));
+      }
+      function refuse() {
+        return Promise.reject(
+          new Error("That layout no longer exists, or does not belong to you.")
+        );
+      }
+
+      getLayouts.mockImplementation(() => Promise.resolve(copies()));
+
+      updateLayout.mockImplementation(
+        ({ layoutId, name, layoutJson, makeActive }) => {
+          const row = store.of(layoutId);
+          if (!row) {
+            return refuse();
+          }
+          row.name = name;
+          row.layoutJson = layoutJson;
+          if (makeActive) {
+            makeActiveOnly(layoutId);
+          }
+          return Promise.resolve({ ...row });
+        }
+      );
+
+      createLayout.mockImplementation(({ name, layoutJson, makeActive }) => {
+        const row = {
+          layoutId: `a0X0000000000${20 + store.rows.length}AAA`,
+          name,
+          layoutJson,
+          isActive: false,
+          isReadable: true
+        };
+        store.rows.push(row);
+        if (makeActive) {
+          makeActiveOnly(row.layoutId);
+        }
+        return Promise.resolve({ ...row });
+      });
+
+      activateLayout.mockImplementation(({ layoutId }) => {
+        if (!store.of(layoutId)) {
+          return refuse();
+        }
+        makeActiveOnly(layoutId);
+        return Promise.resolve(copies());
+      });
+
+      /**
+       * Holds the next switch open until the caller lets it go, so a change can
+       * be made *while a switch is in flight*. Every other test here resolves
+       * Apex instantly, and instant resolution hides the one ordering the
+       * previous project actually shipped a bug in.
+       */
+      store.deferNextActivation = () => {
+        const answer = activateLayout.getMockImplementation();
+        let release;
+        const gate = new Promise((resolve) => {
+          release = resolve;
+        });
+        activateLayout.mockImplementationOnce((args) =>
+          gate.then(() => answer(args))
+        );
+        return release;
+      };
+
+      renameLayout.mockImplementation(({ layoutId, name }) => {
+        const row = store.of(layoutId);
+        if (!row) {
+          return refuse();
+        }
+        row.name = name;
+        return Promise.resolve({ ...row });
+      });
+
+      deleteLayout.mockImplementation(({ layoutId }) => {
+        const at = store.rows.findIndex((row) => row.layoutId === layoutId);
+        if (at === -1) {
+          return refuse();
+        }
+        const wasActive = store.rows[at].isActive;
+        store.rows = store.rows.filter((row) => row.layoutId !== layoutId);
+        if (wasActive && store.rows.length > 0) {
+          makeActiveOnly(
+            store.rows[Math.min(at, store.rows.length - 1)].layoutId
+          );
+        }
+        return Promise.resolve(copies());
+      });
+
+      return store;
+    }
+
+    async function navigatorOnStore(store, navItems = NAV_ITEMS) {
+      const element = createNavigator();
+      getNavItems.emit({ navItems });
+      await flush();
+      await flush();
+      expect(store.rows.length).toBeGreaterThanOrEqual(0);
+      return element;
+    }
+
+    function layoutMenu(element) {
+      return element.shadowRoot.querySelector("lightning-button-menu");
+    }
+
+    function layoutMenuEntries(element) {
+      return Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).map((entry) => ({
+        value: entry.value,
+        label: entry.label,
+        checked: entry.checked === true
+      }));
+    }
+
+    function selectLayoutMenu(element, value) {
+      layoutMenu(element).dispatchEvent(
+        new CustomEvent("select", { detail: { value } })
+      );
+    }
+
+    async function switchToLayout(element, layoutId) {
+      selectLayoutMenu(element, `layout:${layoutId}`);
+      await settleAutosave();
+    }
+
+    /** The column count actually painted, read off the grid's class. */
+    function renderedColumns(element, sectionIndex) {
+      const grid =
+        querySections(element)[sectionIndex].shadowRoot.querySelector("ul");
+      return Number(/cols-(\d)/.exec(grid.className)[1]);
+    }
+
+    function promptInput(element) {
+      return element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input");
+    }
+
+    function promptButton(element, label) {
+      return Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      ).find((button) => button.label === label);
+    }
+
+    async function typeLayoutName(element, name) {
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: name } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await settleAutosave();
+    }
+
+    // ---------------------------------------------------------------
+    // Listing, and what the active layout renders as
+    // ---------------------------------------------------------------
+
+    it("lists every layout the user owns with the active one checked, and the active one is neither the only one nor the first", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      expect(layoutMenuEntries(element)).toEqual([
+        { value: `layout:${FIRST_ID}`, label: "Selling", checked: false },
+        { value: `layout:${SECOND_ID}`, label: "Support", checked: true },
+        { value: `layout:${THIRD_ID}`, label: "Admin", checked: false },
+        { value: "new-layout", label: "New layout…", checked: false },
+        { value: "rename-layout", label: "Rename layout…", checked: false },
+        { value: "delete-layout", label: "Delete layout…", checked: false }
+      ]);
+      expect(layoutMenu(element).label).toBe("Support");
+    });
+
+    it("renders the sections, items, column counts and renames of the active layout, not of the first one", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      expect(sectionNames(element)).toEqual(["Support"]);
+      expect(itemLabelsBySection(element)).toEqual([["Contacts"]]);
+      expect(renderedColumns(element, 0)).toBe(4);
+    });
+
+    // ---------------------------------------------------------------
+    // Switching
+    // ---------------------------------------------------------------
+
+    it("switching re-renders the selected layout's sections, items, column counts and renames", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      await switchToLayout(element, FIRST_ID);
+
+      expect(sectionNames(element)).toEqual(["Selling"]);
+      expect(itemLabelsBySection(element)).toEqual([["Clients"]]);
+      expect(renderedColumns(element, 0)).toBe(2);
+      expect(store.activeName()).toBe("Selling");
+    });
+
+    it("switching leaves every other layout in the store exactly as it was", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      await switchToLayout(element, THIRD_ID);
+
+      expect(store.payloadOf(FIRST_ID)).toBe(SELLING);
+      expect(store.payloadOf(SECOND_ID)).toBe(SUPPORT);
+      expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
+      expect(store.names()).toEqual(["Selling", "Support", "Admin"]);
+    });
+
+    it("switching writes no payload at all, so it cannot rewrite the layout it switches to", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      await switchToLayout(element, THIRD_ID);
+
+      // The switch has to have actually happened, or "no payload was written"
+      // is true of a test that never switched at all.
+      expect(store.activeName()).toBe("Admin");
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("switching away and back restores the first layout's own renames and column count from the store", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      await switchToLayout(element, FIRST_ID);
+      await switchToLayout(element, SECOND_ID);
+
+      expect(sectionNames(element)).toEqual(["Support"]);
+      expect(renderedColumns(element, 0)).toBe(4);
+      expect(store.payloadOf(FIRST_ID)).toBe(SELLING);
+    });
+
+    it("no sequence of switches leaves two layouts active or none", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      for (const id of [THIRD_ID, FIRST_ID, FIRST_ID, SECOND_ID, THIRD_ID]) {
+        // eslint-disable-next-line no-await-in-loop
+        await switchToLayout(element, id);
+        expect(store.rows.filter((row) => row.isActive)).toHaveLength(1);
+      }
+      expect(store.activeName()).toBe("Admin");
+    });
+
+    it("the display follows the store rather than the request, so a client that asked for the wrong layout is corrected", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      // The server refuses the id and the store is unchanged; the component
+      // must not paint a layout the store does not say is active.
+      await switchToLayout(element, "a0X000000000099AAA");
+
+      expect(store.activeName()).toBe("Support");
+      expect(sectionNames(element)).toEqual(["Support"]);
+    });
+
+    it("selecting the layout that is already active changes nothing and calls nothing", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      await switchToLayout(element, SECOND_ID);
+
+      expect(activateLayout).not.toHaveBeenCalled();
+      expect(store.activeName()).toBe("Support");
+    });
+
+    it("a change still in the debounce is written to the layout it was made on, not to the one switched to", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      // Switched inside the debounce window, before the save has fired.
+      await switchToLayout(element, THIRD_ID);
+
+      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
+        6
+      );
+      expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
+      expect(store.activeName()).toBe("Admin");
+    });
+
+    /**
+     * The previous project's bug, in the one ordering that still reaches it
+     * after every switch flushes its debounce: a change made *while a switch is
+     * in flight*. `this.layoutId` moves when the switch resolves, so a save
+     * that read it at write time rather than at queue time would put the layout
+     * the user was looking at onto the layout they had just moved to.
+     *
+     * Every other test in this block resolves Apex instantly, which is exactly
+     * why none of them can tell the two apart — the switch is over before the
+     * change is made. This one holds the switch open.
+     */
+    it("a change made while a switch is still in flight is written to the layout it was made on", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      const releaseSwitch = store.deferNextActivation();
+
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await flush();
+
+      // Still looking at Support, because the switch has not landed.
+      expect(sectionNames(element)).toEqual(["Support"]);
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+      await flush();
+
+      releaseSwitch();
+      await settleAutosave();
+
+      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
+        6
+      );
+      expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
+      expect(store.activeName()).toBe("Admin");
+      expect(sectionNames(element)).toEqual(["Admin"]);
+    });
+
+    it("the chosen layout is still the active one after a reload", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await switchToLayout(element, THIRD_ID);
+
+      // A reload: the component is destroyed and a fresh one reads the store.
+      document.body.removeChild(element);
+      jest.runOnlyPendingTimers();
+      await flush();
+      const reloaded = await navigatorOnStore(store);
+
+      expect(layoutMenu(reloaded).label).toBe("Admin");
+      expect(sectionNames(reloaded)).toEqual(["Admin"]);
+      expect(store.activeName()).toBe("Admin");
+    });
+
+    /**
+     * The placement criterion, as far as jsdom reaches it. A second component
+     * instance stands for a second placement — an App page or a Home page —
+     * and it is handed nothing that could scope it differently, because the
+     * bundle declares no design-time property at all: `lightning__Tab` rejects
+     * `<property>` outright, server-enforced, so a placement key does not
+     * exist to differ by. Both read the same per-user store with no placement
+     * argument, so both show the same active layout.
+     *
+     * What this cannot reach is the three placements themselves — a real tab,
+     * a real App page and a real Home page in a running org. See the slice's
+     * `## Deviations`.
+     */
+    it("a second placement shows the same active layout, because a layout is scoped to the user and to nothing else", async () => {
+      const store = installStore(threeRows());
+      const tabPlacement = await navigatorOnStore(store);
+      await switchToLayout(tabPlacement, THIRD_ID);
+
+      const appPagePlacement = await navigatorOnStore(store);
+
+      expect(layoutMenu(appPagePlacement).label).toBe("Admin");
+      expect(sectionNames(appPagePlacement)).toEqual(["Admin"]);
+      expect(sectionNames(tabPlacement)).toEqual(["Admin"]);
+      // Neither placement passed anything to the read: the call takes no
+      // argument, so there is no seam at which a placement could scope it.
+      expect(getLayouts).toHaveBeenCalledWith();
+    });
+
+    // ---------------------------------------------------------------
+    // Creating
+    // ---------------------------------------------------------------
+
+    it("a new layout sits beside the existing ones rather than renaming and overwriting one", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await typeLayoutName(element, "Weekly review");
+
+      expect(store.names()).toEqual([
+        "Selling",
+        "Support",
+        "Admin",
+        "Weekly review"
+      ]);
+      expect(store.payloadOf(SECOND_ID)).toBe(SUPPORT);
+      expect(store.activeName()).toBe("Weekly review");
+      expect(layoutMenu(element).label).toBe("Weekly review");
+    });
+
+    it("a new layout starts from every tab the user can reach, as a first open does", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await typeLayoutName(element, "Weekly review");
+
+      expect(sectionNames(element)).toEqual(["All Items"]);
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Contacts", "Action Plans"]
+      ]);
+    });
+
+    // ---------------------------------------------------------------
+    // Renaming
+    // ---------------------------------------------------------------
+
+    it("renaming a layout renames that layout in the store and leaves its payload and its neighbours alone", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Cases");
+
+      expect(store.names()).toEqual(["Selling", "Cases", "Admin"]);
+      expect(store.payloadOf(SECOND_ID)).toBe(SUPPORT);
+      expect(store.activeName()).toBe("Cases");
+      expect(layoutMenu(element).label).toBe("Cases");
+    });
+
+    // ---------------------------------------------------------------
+    // Deleting
+    // ---------------------------------------------------------------
+
+    it("deleting the active layout leaves the layout that takes its place active and on screen", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await settleAutosave();
+
+      expect(store.names()).toEqual(["Selling", "Admin"]);
+      expect(store.rows.filter((row) => row.isActive)).toHaveLength(1);
+      expect(store.activeName()).toBe("Admin");
+      expect(sectionNames(element)).toEqual(["Admin"]);
+      expect(renderedColumns(element, 0)).toBe(1);
+    });
+
+    it("deleting the only layout leaves no row at all and puts the user back on the seeded layout", async () => {
+      const store = installStore([
+        {
+          layoutId: SECOND_ID,
+          name: "Support",
+          isActive: true,
+          isReadable: true,
+          layoutJson: SUPPORT
+        }
+      ]);
+      const element = await navigatorOnStore(store);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await settleAutosave();
+
+      expect(store.rows).toEqual([]);
+      expect(sectionNames(element)).toEqual(["All Items"]);
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Contacts", "Action Plans"]
+      ]);
+    });
+
+    // ---------------------------------------------------------------
+    // Looking is not changing
+    // ---------------------------------------------------------------
+
+    it("opening the menu, and opening each of its dialogs, writes nothing for a user who has never changed anything", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+
+      layoutMenu(element).dispatchEvent(new CustomEvent("open"));
+      await settleAutosave();
+
+      // Opening a dialog is not committing one. A `select` that merely opened
+      // a box has been enough to create a row twice on this spec, from two
+      // different directions, so each is opened here and none is committed.
+      for (const entry of ["new-layout", "rename-layout", "delete-layout"]) {
+        selectLayoutMenu(element, entry);
+        // eslint-disable-next-line no-await-in-loop
+        await settleAutosave();
+      }
+
+      expect(store.rows).toEqual([]);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("cancelling New layout, Rename layout and Delete layout each writes nothing", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      for (const entry of ["new-layout", "rename-layout", "delete-layout"]) {
+        selectLayoutMenu(element, entry);
+        // eslint-disable-next-line no-await-in-loop
+        await flush();
+        promptButton(element, "Cancel").click();
+        // eslint-disable-next-line no-await-in-loop
+        await settleAutosave();
+      }
+
+      expect(store.names()).toEqual(["Selling", "Support", "Admin"]);
+      expect(store.activeName()).toBe("Support");
+      expect(store.payloadOf(SECOND_ID)).toBe(SUPPORT);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(deleteLayout).not.toHaveBeenCalled();
+      expect(renameLayout).not.toHaveBeenCalled();
+    });
+
+    it("a user who has never changed anything still gets a menu, and it names the layout they are looking at", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+
+      expect(layoutMenu(element).label).toBe("My Navigator");
+      // Delete is absent: there is no row to delete, and offering it would
+      // promise something no call could deliver.
+      expect(layoutMenuEntries(element).map((entry) => entry.value)).toEqual([
+        "layout:",
+        "new-layout",
+        "rename-layout"
+      ]);
+      expect(store.rows).toEqual([]);
     });
   });
 });

@@ -52,6 +52,20 @@ public with sharing class NavigatorLayoutController {
     'update whichever layout happens to load first — call createLayout to make a new one.';
 
   /**
+   * The same refusal, for the three methods this class gained when layouts
+   * became switchable. Each takes an id and each refuses a null one, for the
+   * reason `updateLayout` does: a null that reaches the server as "whichever
+   * layout loads on arrival" is the shape of the bug this class was written
+   * around, and there is no gesture in the Navigator that legitimately means
+   * "switch to, rename, or delete a layout I cannot name".
+   */
+  private static String nullIdMessage(String methodName) {
+    return methodName +
+      ' needs the id of the layout to act on. A null id is not a request to act on ' +
+      'whichever layout happens to load first.';
+  }
+
+  /**
    * What the component gets. A DTO rather than the SObject so that
    * `layoutJson` can be handed over already upgraded to the current schema,
    * whatever version the row was stored at.
@@ -102,8 +116,18 @@ public with sharing class NavigatorLayoutController {
    */
   @AuraEnabled(cacheable=true)
   public static List<LayoutDTO> getLayouts() {
+    return toDtos(ownLayouts());
+  }
+
+  /**
+   * The read's own DTO walk, shared with the three methods below that hand
+   * back the list the user is left with. One definition, so a layout reported
+   * by a switch can never describe itself differently from the same layout
+   * reported by the read.
+   */
+  private static List<LayoutDTO> toDtos(List<Navigator_Layout__c> rows) {
     List<LayoutDTO> layouts = new List<LayoutDTO>();
-    for (Navigator_Layout__c row : ownLayouts()) {
+    for (Navigator_Layout__c row : rows) {
       try {
         layouts.add(toDto(row));
       } catch (Exception e) {
@@ -160,7 +184,17 @@ public with sharing class NavigatorLayoutController {
     List<Navigator_Layout__c> existing = ownLayouts();
     Navigator_Layout__c row = findOwned(existing, layoutId);
     row.Name = name;
-    row.Is_Active__c = makeActive == true;
+    // **`makeActive == false` means "leave the flag as it is", not "clear it".**
+    // An update is a write of a *payload*; the only thing that deactivates a
+    // layout is another layout being activated, which `deactivations` below
+    // does in the same statement. Clearing the flag here instead would let an
+    // ordinary autosave leave the user with no active layout at all — and it
+    // would do it on exactly the row the save was for, so the next read would
+    // fall back to whichever layout sorts first. The flag is loaded by
+    // `ownLayouts`, so leaving it alone writes it back unchanged.
+    if (makeActive == true) {
+      row.Is_Active__c = true;
+    }
     row.Schema_Version__c = CURRENT_SCHEMA_VERSION;
     row.Layout_JSON__c = fromClient(layoutJson);
 
@@ -173,6 +207,159 @@ public with sharing class NavigatorLayoutController {
     Database.update(toWrite, AccessLevel.USER_MODE);
 
     return toDto(row);
+  }
+
+  // ---------------------------------------------------------------------
+  // Switching between layouts.
+  //
+  // **None of the three below takes a payload.** That is the whole design of
+  // this section rather than an omission. The bug this class was written
+  // around was a name and a payload travelling together to a row the server
+  // picked; switching, renaming and deleting are changes to a layout's
+  // *identity and flags*, so there is no payload in the signature for a
+  // client to send to the wrong layout. A switch cannot overwrite the layout
+  // it switches to, and a rename cannot overwrite the layout it renames,
+  // because neither has anything to overwrite it with.
+  //
+  // Each writes id-and-flag stubs rather than the queried rows, for the same
+  // reason `deactivations` does: a stub carries no `Layout_JSON__c` at all, so
+  // even a future edit to these methods has nothing to write over a payload
+  // with.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Makes one of the running user's layouts the active one, and returns every
+   * layout they own with the flags as they now stand.
+   *
+   * The whole list comes back rather than just the activated row because the
+   * client's own "exactly one active" display is then read from the store
+   * rather than inferred — a client that got the invariant wrong would be
+   * corrected on the next call instead of drifting.
+   */
+  @AuraEnabled
+  public static List<LayoutDTO> activateLayout(Id layoutId) {
+    if (layoutId == null) {
+      throw raise(nullIdMessage('activateLayout'));
+    }
+
+    List<Navigator_Layout__c> existing = ownLayouts();
+    Navigator_Layout__c row = findOwned(existing, layoutId);
+
+    Database.update(activation(existing, row.Id), AccessLevel.USER_MODE);
+    applyActivation(existing, row.Id);
+    return toDtos(existing);
+  }
+
+  /**
+   * Changes a layout's name and nothing else. `Layout_JSON__c` is not in the
+   * stub written, so a rename cannot reach a payload — the criterion is
+   * structural rather than a rule to remember.
+   */
+  @AuraEnabled
+  public static LayoutDTO renameLayout(Id layoutId, String name) {
+    if (layoutId == null) {
+      throw raise(nullIdMessage('renameLayout'));
+    }
+
+    List<Navigator_Layout__c> existing = ownLayouts();
+    Navigator_Layout__c row = findOwned(existing, layoutId);
+
+    Database.update(
+      new Navigator_Layout__c(Id = row.Id, Name = name),
+      AccessLevel.USER_MODE
+    );
+    row.Name = name;
+    return toDto(row);
+  }
+
+  /**
+   * Deletes one of the running user's layouts and returns the ones they are
+   * left with.
+   *
+   * **Deleting the active layout leaves a sensible active one, and which one
+   * is decided here rather than by the client.** The successor is the layout
+   * that takes the deleted one's place in the user's own ordering — the one
+   * after it, or the one before it when the deleted layout was last. That is
+   * what a list does when a row is removed from the middle of it, and it means
+   * the user's next screen is the layout their eye was already next to rather
+   * than an arbitrary one.
+   *
+   * Deleting the *only* layout deliberately leaves no row at all. That is not
+   * an empty screen: it is exactly the first-open state, in which the user
+   * sees every tab they can reach in one seeded section and nothing is written
+   * until they change something. Writing a replacement row here would put back
+   * the thing the user just asked to be rid of, and would create a row for a
+   * user who now has no customisation to store.
+   */
+  @AuraEnabled
+  public static List<LayoutDTO> deleteLayout(Id layoutId) {
+    if (layoutId == null) {
+      throw raise(nullIdMessage('deleteLayout'));
+    }
+
+    List<Navigator_Layout__c> existing = ownLayouts();
+    Navigator_Layout__c row = findOwned(existing, layoutId);
+    Boolean wasActive = row.Is_Active__c == true;
+
+    // Built before the delete, because the position the deleted layout held is
+    // what names its successor and that position is gone afterwards.
+    List<Navigator_Layout__c> remaining = new List<Navigator_Layout__c>();
+    Integer removedAt = 0;
+    for (Navigator_Layout__c candidate : existing) {
+      if (candidate.Id == layoutId) {
+        removedAt = remaining.size();
+      } else {
+        remaining.add(candidate);
+      }
+    }
+
+    Database.delete(
+      new Navigator_Layout__c(Id = row.Id),
+      AccessLevel.USER_MODE
+    );
+
+    if (wasActive && !remaining.isEmpty()) {
+      Id successorId = remaining[Math.min(removedAt, remaining.size() - 1)].Id;
+      Database.update(
+        activation(remaining, successorId),
+        AccessLevel.USER_MODE
+      );
+      applyActivation(remaining, successorId);
+    }
+    return toDtos(remaining);
+  }
+
+  /**
+   * The one UPDATE that makes `keepActiveId` the active layout: the row being
+   * activated, plus every flag it displaces. One statement rather than two, so
+   * that "exactly one layout is active" holds at every point another
+   * transaction could look, and so the cost does not grow with the number of
+   * layouts the user keeps.
+   */
+  private static List<Navigator_Layout__c> activation(
+    List<Navigator_Layout__c> existing,
+    Id keepActiveId
+  ) {
+    List<Navigator_Layout__c> toWrite = new List<Navigator_Layout__c>{
+      new Navigator_Layout__c(Id = keepActiveId, Is_Active__c = true)
+    };
+    toWrite.addAll(deactivations(existing, keepActiveId, true));
+    return toWrite;
+  }
+
+  /**
+   * The same activation applied to the rows already in memory, so the DTOs
+   * handed back describe the store as it now is without a second query. It
+   * mirrors `activation` exactly — one place decides who is active, and the
+   * write and the reply read it from there.
+   */
+  private static void applyActivation(
+    List<Navigator_Layout__c> rows,
+    Id keepActiveId
+  ) {
+    for (Navigator_Layout__c row : rows) {
+      row.Is_Active__c = row.Id == keepActiveId;
+    }
   }
 
   // ---------------------------------------------------------------------

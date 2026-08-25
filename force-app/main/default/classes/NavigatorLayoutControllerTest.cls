@@ -959,6 +959,572 @@ private with sharing class NavigatorLayoutControllerTest {
   }
 
   // ---------------------------------------------------------------------
+  // Switching between layouts — activate, rename, delete
+  //
+  // Every assertion below re-queries the store. That is the whole point of
+  // this section: the failure it exists to prevent is a *client* that sends a
+  // plausible call and a *server* that writes it to the wrong row, and a suite
+  // asserting the call is green throughout that.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Three layouts whose payloads differ, with the active one deliberately in
+   * the *middle*. A fixture with one layout, or with the active one first,
+   * cannot tell "the active one" from "the only one" or "the first one" — so
+   * a switch written to the wrong record would pass it.
+   */
+  private static void seedThree() {
+    User owner = userWith(OWNER_ALIAS);
+    System.runAs(owner) {
+      insert new List<Navigator_Layout__c>{
+        seedNamed('First', false, 1, 'Selling'),
+        seedNamed('Second', true, 2, 'Support'),
+        seedNamed('Third', false, 3, 'Admin')
+      };
+    }
+  }
+
+  /**
+   * A layout whose payload names its own section, so that a payload written
+   * onto the wrong row is visible as the wrong section name rather than as
+   * two identical blobs that no assertion can tell apart.
+   */
+  private static Navigator_Layout__c seedNamed(
+    String layoutName,
+    Boolean isActive,
+    Integer sortOrder,
+    String sectionName
+  ) {
+    Navigator_Layout__c row = seed(layoutName, isActive, sortOrder);
+    row.Layout_JSON__c =
+      '{"schemaVersion":2,"sections":[{"name":"' +
+      sectionName +
+      '","columns":3,"items":[{"id":"standard-Account"}]}]}';
+    return row;
+  }
+
+  private static Id layoutIdNamed(String layoutName) {
+    return [SELECT Id FROM Navigator_Layout__c WHERE Name = :layoutName LIMIT 1]
+    .Id;
+  }
+
+  private static String sectionNameOf(String layoutName) {
+    return String.valueOf(
+      firstSectionOf(
+          [
+            SELECT Layout_JSON__c
+            FROM Navigator_Layout__c
+            WHERE Name = :layoutName
+            LIMIT 1
+          ]
+          .Layout_JSON__c
+        )
+        .get('name')
+    );
+  }
+
+  private static Integer activeCount() {
+    return [SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE];
+  }
+
+  private static String activeName() {
+    List<Navigator_Layout__c> active = [
+      SELECT Name
+      FROM Navigator_Layout__c
+      WHERE Is_Active__c = TRUE
+      LIMIT 1
+    ];
+    return active.isEmpty() ? null : active[0].Name;
+  }
+
+  /**
+   * The trap this slice exists to keep shut, at the server end: switching must
+   * be a change of *flag*, never a write of a payload. `activateLayout` takes
+   * no payload at all, so there is no payload for a caller to send to the
+   * wrong row — and this asserts the consequence rather than the signature.
+   */
+  @IsTest
+  static void activatingALayoutChangesNoPayloadAtAll() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+    Id thirdId = layoutIdNamed('Third');
+
+    Test.startTest();
+    System.runAs(owner) {
+      NavigatorLayoutController.activateLayout(thirdId);
+    }
+    Test.stopTest();
+
+    Assert.areEqual(1, activeCount(), 'Exactly one layout may be active');
+    Assert.areEqual(
+      'Third',
+      activeName(),
+      'The layout that was activated must be the active one'
+    );
+    Assert.areEqual(
+      'Selling',
+      sectionNameOf('First'),
+      'Switching must leave the payload of a layout it did not select alone'
+    );
+    Assert.areEqual(
+      'Support',
+      sectionNameOf('Second'),
+      'Switching away from a layout must leave that layout\'s payload alone'
+    );
+    Assert.areEqual(
+      'Admin',
+      sectionNameOf('Third'),
+      'Switching to a layout must not rewrite the payload it is switching to'
+    );
+  }
+
+  /**
+   * The invariant stated as a sequence rather than as a single call: no order
+   * of switches may leave two active or none. Every layout is visited,
+   * including the one that started active and the one that ends where it
+   * began.
+   */
+  @IsTest
+  static void noSequenceOfSwitchesLeavesTwoActiveOrNone() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+    List<String> order = new List<String>{
+      'Third',
+      'First',
+      'First',
+      'Second',
+      'Third'
+    };
+
+    Test.startTest();
+    System.runAs(owner) {
+      for (String layoutName : order) {
+        NavigatorLayoutController.activateLayout(layoutIdNamed(layoutName));
+        Assert.areEqual(
+          1,
+          activeCount(),
+          'Exactly one layout must be active after switching to ' + layoutName
+        );
+        Assert.areEqual(
+          layoutName,
+          activeName(),
+          'The layout just switched to must be the active one'
+        );
+      }
+    }
+    Test.stopTest();
+  }
+
+  /**
+   * An autosave for a layout the user has since switched away from must write
+   * its payload without dragging the active flag back to it — and it must not
+   * clear the flag either, or a user whose save resolves late is left with no
+   * active layout and the next read falls back to whichever sorts first.
+   * `makeActive == false` therefore means "leave the flag as it is".
+   */
+  @IsTest
+  static void anUpdateThatDoesNotClaimTheActiveFlagLeavesEveryFlagAlone() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+    Id firstId = layoutIdNamed('First');
+
+    Test.startTest();
+    System.runAs(owner) {
+      NavigatorLayoutController.updateLayout(
+        firstId,
+        'First',
+        '{"schemaVersion":2,"sections":[{"name":"Rewritten","columns":3,"items":[]}]}',
+        false
+      );
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      'Rewritten',
+      sectionNameOf('First'),
+      'The payload must still be written'
+    );
+    Assert.areEqual(
+      1,
+      activeCount(),
+      'An update that claims no active flag must leave exactly one layout active'
+    );
+    Assert.areEqual(
+      'Second',
+      activeName(),
+      'The layout that was active must still be the active one'
+    );
+  }
+
+  @IsTest
+  static void activateRefusesANullLayoutId() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+
+    Boolean refused = false;
+    Test.startTest();
+    System.runAs(owner) {
+      try {
+        NavigatorLayoutController.activateLayout(null);
+        Assert.fail('A null id must not activate whichever layout loads first');
+      } catch (AuraHandledException e) {
+        refused = true;
+      }
+    }
+    Test.stopTest();
+
+    Assert.isTrue(refused, 'activateLayout must refuse a null id');
+    Assert.areEqual(
+      'Second',
+      activeName(),
+      'A refused activation must leave the active layout exactly as it was'
+    );
+  }
+
+  @IsTest
+  static void aUserCannotActivateAnotherUsersLayout() {
+    seedThree();
+    User peer = userWith(PEER_ALIAS);
+    Id thirdId = layoutIdNamed('Third');
+
+    Boolean refused = false;
+    Test.startTest();
+    System.runAs(peer) {
+      try {
+        NavigatorLayoutController.activateLayout(thirdId);
+        Assert.fail('One user must not switch another user\'s active layout');
+      } catch (AuraHandledException e) {
+        refused = true;
+      }
+    }
+    Test.stopTest();
+
+    Assert.isTrue(refused, 'A layout belonging to somebody else is refused');
+    Assert.areEqual(
+      'Second',
+      activeName(),
+      'The owner\'s active layout must be exactly as they left it'
+    );
+  }
+
+  /**
+   * A rename is a change of *name* and of nothing else. It takes no payload,
+   * for the same reason `activateLayout` takes none: the previous project's
+   * bug was a name and a payload travelling together to a row chosen by a
+   * null.
+   */
+  @IsTest
+  static void renamingALayoutTouchesNeitherItsPayloadNorItsNeighbours() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+    Id thirdId = layoutIdNamed('Third');
+
+    Test.startTest();
+    System.runAs(owner) {
+      NavigatorLayoutController.renameLayout(thirdId, 'Renamed');
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      'Renamed',
+      [SELECT Name FROM Navigator_Layout__c WHERE Id = :thirdId].Name,
+      'The layout named in the call must be the one renamed'
+    );
+    Assert.areEqual(
+      'Admin',
+      sectionNameOf('Renamed'),
+      'A rename must leave the renamed layout\'s own payload alone'
+    );
+    Assert.areEqual(
+      'Support',
+      sectionNameOf('Second'),
+      'A rename must leave every other layout alone'
+    );
+    Assert.areEqual(
+      'Second',
+      activeName(),
+      'Renaming a layout must not change which layout is active'
+    );
+  }
+
+  @IsTest
+  static void renameRefusesANullLayoutId() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+
+    Boolean refused = false;
+    Test.startTest();
+    System.runAs(owner) {
+      try {
+        NavigatorLayoutController.renameLayout(null, 'Renamed');
+        Assert.fail('A null id must not rename whichever layout loads first');
+      } catch (AuraHandledException e) {
+        refused = true;
+      }
+    }
+    Test.stopTest();
+
+    Assert.isTrue(refused, 'renameLayout must refuse a null id');
+    Assert.areEqual(
+      0,
+      [SELECT COUNT() FROM Navigator_Layout__c WHERE Name = 'Renamed'],
+      'A refused rename must leave every layout under its own name'
+    );
+  }
+
+  @IsTest
+  static void aUserCannotRenameAnotherUsersLayout() {
+    seedThree();
+    User peer = userWith(PEER_ALIAS);
+    Id secondId = layoutIdNamed('Second');
+
+    Boolean refused = false;
+    Test.startTest();
+    System.runAs(peer) {
+      try {
+        NavigatorLayoutController.renameLayout(secondId, 'Hijacked');
+        Assert.fail('One user must not rename another user\'s layout');
+      } catch (AuraHandledException e) {
+        refused = true;
+      }
+    }
+    Test.stopTest();
+
+    Assert.isTrue(refused, 'A layout belonging to somebody else is refused');
+    Assert.areEqual(
+      'Second',
+      [SELECT Name FROM Navigator_Layout__c WHERE Id = :secondId].Name,
+      'The owner\'s layout must keep its own name'
+    );
+  }
+
+  /**
+   * Deleting the active layout must leave the user with a sensible active
+   * layout rather than an empty screen. "Sensible" is the layout that takes
+   * the deleted one's place in the user's own ordering — the one after it —
+   * which is what a list does when a row is removed from the middle of it.
+   */
+  @IsTest
+  static void deletingTheActiveLayoutActivatesTheOneThatTakesItsPlace() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+    Id secondId = layoutIdNamed('Second');
+
+    List<NavigatorLayoutController.LayoutDTO> remaining;
+    Test.startTest();
+    System.runAs(owner) {
+      remaining = NavigatorLayoutController.deleteLayout(secondId);
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      1,
+      activeCount(),
+      'Deleting the active layout must leave exactly one layout active'
+    );
+    Assert.areEqual(
+      'Third',
+      activeName(),
+      'The layout that took the deleted one\'s place must be the active one'
+    );
+    Assert.areEqual(
+      2,
+      remaining.size(),
+      'The call must report the layouts the user is left with'
+    );
+    Assert.areEqual(
+      'Selling',
+      sectionNameOf('First'),
+      'A delete must leave every surviving layout\'s payload alone'
+    );
+    Assert.areEqual(
+      'Admin',
+      sectionNameOf('Third'),
+      'Activating the successor must not rewrite its payload'
+    );
+  }
+
+  /**
+   * The end of the list has no "one after it". The layout before it is then
+   * the one that takes its place, and the invariant is the same: exactly one
+   * active, never none.
+   */
+  @IsTest
+  static void deletingTheLastAndActiveLayoutActivatesTheOneBeforeIt() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+    System.runAs(owner) {
+      NavigatorLayoutController.activateLayout(layoutIdNamed('Third'));
+    }
+
+    Test.startTest();
+    System.runAs(owner) {
+      NavigatorLayoutController.deleteLayout(layoutIdNamed('Third'));
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      1,
+      activeCount(),
+      'Deleting the last layout must still leave exactly one active'
+    );
+    Assert.areEqual(
+      'Second',
+      activeName(),
+      'The layout before the deleted one must become the active one'
+    );
+  }
+
+  @IsTest
+  static void deletingAnInactiveLayoutLeavesTheActiveOneAlone() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+
+    Test.startTest();
+    System.runAs(owner) {
+      NavigatorLayoutController.deleteLayout(layoutIdNamed('First'));
+    }
+    Test.stopTest();
+
+    Assert.areEqual(1, activeCount(), 'Exactly one layout may be active');
+    Assert.areEqual(
+      'Second',
+      activeName(),
+      'Deleting a layout that was not active must not move the active flag'
+    );
+    Assert.areEqual(
+      'Support',
+      sectionNameOf('Second'),
+      'Deleting a neighbour must not rewrite the active layout\'s payload'
+    );
+  }
+
+  /**
+   * Deleting the only layout leaves no row at all, which is the first-open
+   * state: the user sees every tab they can reach in one seeded section, and
+   * nothing is written until they change something again. That is a sensible
+   * screen, and it is emphatically not an empty one.
+   */
+  @IsTest
+  static void deletingTheOnlyLayoutLeavesTheUserWithNoRowAtAll() {
+    User owner = userWith(OWNER_ALIAS);
+    System.runAs(owner) {
+      insert seedNamed('Only', true, 1, 'Selling');
+    }
+
+    List<NavigatorLayoutController.LayoutDTO> remaining;
+    Test.startTest();
+    System.runAs(owner) {
+      remaining = NavigatorLayoutController.deleteLayout(layoutIdNamed('Only'));
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      0,
+      remaining.size(),
+      'A user who deletes their only layout is left with none'
+    );
+    Assert.areEqual(
+      0,
+      [SELECT COUNT() FROM Navigator_Layout__c],
+      'The row must actually be gone from the store'
+    );
+  }
+
+  @IsTest
+  static void deleteRefusesANullLayoutId() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+
+    Boolean refused = false;
+    Test.startTest();
+    System.runAs(owner) {
+      try {
+        NavigatorLayoutController.deleteLayout(null);
+        Assert.fail('A null id must not delete whichever layout loads first');
+      } catch (AuraHandledException e) {
+        refused = true;
+      }
+    }
+    Test.stopTest();
+
+    Assert.isTrue(refused, 'deleteLayout must refuse a null id');
+    Assert.areEqual(
+      3,
+      [SELECT COUNT() FROM Navigator_Layout__c],
+      'A refused delete must leave every layout standing'
+    );
+  }
+
+  @IsTest
+  static void aUserCannotDeleteAnotherUsersLayout() {
+    seedThree();
+    User peer = userWith(PEER_ALIAS);
+    Id secondId = layoutIdNamed('Second');
+
+    Boolean refused = false;
+    Test.startTest();
+    System.runAs(peer) {
+      try {
+        NavigatorLayoutController.deleteLayout(secondId);
+        Assert.fail('One user must not delete another user\'s layout');
+      } catch (AuraHandledException e) {
+        refused = true;
+      }
+    }
+    Test.stopTest();
+
+    Assert.isTrue(refused, 'A layout belonging to somebody else is refused');
+    Assert.areEqual(
+      3,
+      [SELECT COUNT() FROM Navigator_Layout__c],
+      'The owner must still have all three of their layouts'
+    );
+  }
+
+  /**
+   * A second user's list is independent. Both users hold layouts under the
+   * same names, so a query that lost its owner predicate would return six
+   * rows and this would catch it.
+   */
+  @IsTest
+  static void oneUsersLayoutListIsIndependentOfAnothers() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+    User peer = userWith(PEER_ALIAS);
+    System.runAs(peer) {
+      insert new List<Navigator_Layout__c>{
+        seedNamed('First', true, 1, 'Peer selling')
+      };
+    }
+
+    List<NavigatorLayoutController.LayoutDTO> ownersList;
+    List<NavigatorLayoutController.LayoutDTO> peersList;
+    Test.startTest();
+    System.runAs(owner) {
+      ownersList = NavigatorLayoutController.getLayouts();
+    }
+    System.runAs(peer) {
+      peersList = NavigatorLayoutController.getLayouts();
+      NavigatorLayoutController.deleteLayout(peersList[0].layoutId);
+    }
+    Test.stopTest();
+
+    Assert.areEqual(3, ownersList.size(), 'The owner sees their own three');
+    Assert.areEqual(1, peersList.size(), 'The peer sees only their own one');
+    Assert.areEqual(
+      3,
+      [SELECT COUNT() FROM Navigator_Layout__c WHERE OwnerId = :owner.Id],
+      'One user deleting their layout must not touch another user\'s list'
+    );
+    Assert.areEqual(
+      'Second',
+      activeName(),
+      'The owner\'s active layout must be untouched by the peer\'s delete'
+    );
+  }
+
+  // ---------------------------------------------------------------------
   // Bulk — 200 records, as this repo's testing rule requires
   // ---------------------------------------------------------------------
 
@@ -1030,6 +1596,67 @@ private with sharing class NavigatorLayoutControllerTest {
       200,
       layouts.size(),
       'Every one of the 200 layouts should still be readable'
+    );
+  }
+
+  /**
+   * The same bulk question asked of the switcher. Activation has to clear the
+   * flag on every other layout the user owns, and a delete of the active one
+   * has to do the same for its successor; both stay one UPDATE only if the
+   * clearing is bulkified. Seeding all 200 active makes the clearing do real
+   * work in both.
+   */
+  @IsTest
+  static void switchingAndDeletingStayBulkifiedAcrossTwoHundredLayouts() {
+    User owner = userWith(OWNER_ALIAS);
+    List<Navigator_Layout__c> seeds = new List<Navigator_Layout__c>();
+    for (Integer i = 0; i < 200; i++) {
+      seeds.add(
+        seedNamed('Layout ' + String.valueOf(1000 + i), true, i + 1, 'Selling')
+      );
+    }
+    System.runAs(owner) {
+      insert seeds;
+    }
+
+    Integer activateDml;
+    Integer deleteDml;
+    Test.startTest();
+    System.runAs(owner) {
+      Integer before = Limits.getDmlStatements();
+      NavigatorLayoutController.activateLayout(layoutIdNamed('Layout 1150'));
+      activateDml = Limits.getDmlStatements() - before;
+
+      before = Limits.getDmlStatements();
+      NavigatorLayoutController.deleteLayout(layoutIdNamed('Layout 1150'));
+      deleteDml = Limits.getDmlStatements() - before;
+    }
+    Test.stopTest();
+
+    Assert.isTrue(
+      activateDml <= 2,
+      'Clearing 199 flags on a switch must be one UPDATE, not one per row. Used: ' +
+      activateDml
+    );
+    Assert.isTrue(
+      deleteDml <= 3,
+      'A delete plus its successor activation must not grow with the number of layouts. Used: ' +
+      deleteDml
+    );
+    Assert.areEqual(
+      1,
+      activeCount(),
+      'Exactly one layout may be active however many the user owns'
+    );
+    Assert.areEqual(
+      'Layout 1151',
+      activeName(),
+      'The layout that took the deleted one\'s place must be the active one'
+    );
+    Assert.areEqual(
+      199,
+      [SELECT COUNT() FROM Navigator_Layout__c],
+      'Exactly one row must have been deleted'
     );
   }
 }

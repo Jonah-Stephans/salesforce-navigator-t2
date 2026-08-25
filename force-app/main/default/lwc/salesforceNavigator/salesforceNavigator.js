@@ -34,6 +34,9 @@ import NavigatorItemPicker from "c/navigatorItemPicker";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
 import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
 import updateLayout from "@salesforce/apex/NavigatorLayoutController.updateLayout";
+import activateLayout from "@salesforce/apex/NavigatorLayoutController.activateLayout";
+import renameLayout from "@salesforce/apex/NavigatorLayoutController.renameLayout";
+import deleteLayout from "@salesforce/apex/NavigatorLayoutController.deleteLayout";
 
 const GENERIC_ERROR_MESSAGE =
   "We could not load your tabs. Try reloading the page.";
@@ -86,6 +89,36 @@ function unreadableLayoutMessage(reason) {
  */
 const DEFAULT_LAYOUT_NAME = "My Navigator";
 const NEW_SECTION_NAME = "New section";
+
+/**
+ * The name a layout created from the menu gets if the user commits an empty
+ * box. A layout with no name at all would be an unreachable entry in the very
+ * menu it has to be selected from.
+ */
+const NEW_LAYOUT_NAME = "New layout";
+
+/**
+ * The layout menu's own vocabulary. The three actions are fixed strings and a
+ * layout is `layout:<id>`, so a Salesforce id can never collide with an action
+ * — and the prefix is stripped in exactly one place, below.
+ */
+const LAYOUT_VALUE_PREFIX = "layout:";
+const NEW_LAYOUT = "new-layout";
+const RENAME_LAYOUT = "rename-layout";
+const DELETE_LAYOUT = "delete-layout";
+
+/**
+ * Which of the menu's three dialogs is open, or none. It is one field rather
+ * than three booleans so that two cannot be open at once, and it is
+ * transient UI state that never reaches the store — opening a dialog and
+ * cancelling it writes nothing, which is this spec's oldest settled rule.
+ */
+const PROMPT_NEW = "new";
+const PROMPT_RENAME = "rename";
+const PROMPT_DELETE = "delete";
+
+const SWITCH_ERROR_MESSAGE =
+  "We could not switch layouts. The layout on screen is the one that is still active.";
 
 /**
  * How long a change waits before it is written. A drag flurry, or six taps
@@ -146,6 +179,25 @@ export default class SalesforceNavigator extends LightningElement {
   storedLayout;
   layoutId;
   layoutName = DEFAULT_LAYOUT_NAME;
+
+  /**
+   * Every layout the running user owns — `{layoutId, name, layoutJson}` each —
+   * as the store last reported it. The menu is rendered from this and a switch
+   * reads the target's payload out of it, so switching costs no second read.
+   *
+   * **Which of them is active is not a field here.** It is `this.layoutId`, one
+   * value, so "exactly one layout is active" is not something this component
+   * can get wrong by forgetting to clear a flag: there is no second flag to
+   * clear. The server enforces the same invariant in its own store and hands
+   * the whole list back after every switch and delete, so a disagreement is
+   * settled by the store rather than by this cache.
+   */
+  layouts = [];
+
+  // Which of the layout menu's three dialogs is open. Transient, and
+  // deliberately nowhere near the store — see the PROMPT_* constants.
+  layoutPrompt;
+  draftLayoutName = "";
 
   saveTimer;
 
@@ -264,11 +316,7 @@ export default class SalesforceNavigator extends LightningElement {
     // A pending debounce must not be dropped on the floor when the user
     // navigates away — that is precisely the "unsaved state to lose" the
     // design says does not exist here.
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = undefined;
-      this.save();
-    }
+    this.flushPendingSave();
   }
 
   /**
@@ -294,6 +342,7 @@ export default class SalesforceNavigator extends LightningElement {
       );
     }
     const readable = layouts.filter((row) => row.isReadable !== false);
+    this.layouts = readable.map(SalesforceNavigator.cachedLayout);
 
     const active = readable.find((row) => row.isActive) || readable[0];
     if (!active) {
@@ -305,6 +354,334 @@ export default class SalesforceNavigator extends LightningElement {
     // on the template to be safe, though — assigning `storedLayout` over a
     // change the user has already made and seen is silent data loss.
     if (this.storedLayout !== undefined) {
+      return;
+    }
+    this.layoutId = active.layoutId;
+    this.layoutName = active.name || DEFAULT_LAYOUT_NAME;
+    this.storedLayout = deserializeLayout(active.layoutJson);
+  }
+
+  /**
+   * One layout as this component caches it. `isActive` is deliberately dropped
+   * on the way in: which layout is active is `this.layoutId` and nothing else,
+   * so there is no second copy of that fact to fall out of step with the first.
+   */
+  static cachedLayout(row) {
+    return {
+      layoutId: row.layoutId,
+      name: row.name || DEFAULT_LAYOUT_NAME,
+      layoutJson: row.layoutJson
+    };
+  }
+
+  // -------------------------------------------------------------------
+  // The layout switcher.
+  //
+  // **Not one method with a nullable id.** The previous project shipped a
+  // single `saveLayout(layoutId, …)` in which null meant "make me a new one"
+  // to the client and "update the one that loads on arrival" to the server,
+  // and New layout renamed and overwrote the existing layout in the running
+  // org. Creating, switching, renaming and deleting are four calls here
+  // because they are four intentions, and three of the four carry no payload
+  // at all — so there is nothing for a switch or a rename to write onto the
+  // wrong row even if it named one.
+  // -------------------------------------------------------------------
+
+  /**
+   * The menu's entries: every layout the user owns, with the active one
+   * checked, then the three actions.
+   *
+   * A user who has never changed anything owns no row, and yet is looking at a
+   * layout — the seeded one. It gets an entry with an empty id, which
+   * `switchToLayout` refuses like any other id that names nothing, so the entry
+   * reports state without being a route to anywhere.
+   */
+  get layoutChoices() {
+    const choices = this.layouts.map((row) => ({
+      value: `${LAYOUT_VALUE_PREFIX}${row.layoutId}`,
+      label: row.name,
+      checked: row.layoutId === this.layoutId
+    }));
+    if (!this.layoutId) {
+      choices.unshift({
+        value: LAYOUT_VALUE_PREFIX,
+        label: this.layoutName,
+        checked: true
+      });
+    }
+    return choices;
+  }
+
+  /**
+   * Whether Delete layout… is offered. It is not, for a user who has no row:
+   * there is nothing to delete, and a menu entry that cannot do what it says
+   * is worse than an absent one.
+   */
+  get canDeleteLayout() {
+    return Boolean(this.layoutId);
+  }
+
+  get isNamingLayout() {
+    return (
+      this.layoutPrompt === PROMPT_NEW || this.layoutPrompt === PROMPT_RENAME
+    );
+  }
+
+  get isConfirmingLayoutDelete() {
+    return this.layoutPrompt === PROMPT_DELETE;
+  }
+
+  get layoutPromptLabel() {
+    return this.layoutPrompt === PROMPT_NEW
+      ? "Name for the new layout"
+      : `Rename ${this.layoutName}`;
+  }
+
+  get layoutPromptCommitLabel() {
+    return this.layoutPrompt === PROMPT_NEW ? "Create layout" : "Rename layout";
+  }
+
+  /**
+   * Names the layout, because every other layout the user owns survives and a
+   * confirmation reading "Are you sure?" does not say which one is about to
+   * go. The consequence is stated too: what they are left with, so that
+   * deleting the last one is not a surprise.
+   */
+  get layoutDeleteMessage() {
+    return this.layouts.length > 1
+      ? `Delete ${this.layoutName}? Your other layouts are not affected.`
+      : `Delete ${this.layoutName}? You will go back to seeing every tab you can reach in one section.`;
+  }
+
+  handleLayoutMenuSelect(event) {
+    const value = event.detail.value;
+
+    if (value === NEW_LAYOUT) {
+      this.openPrompt(PROMPT_NEW, "");
+      return;
+    }
+    if (value === RENAME_LAYOUT) {
+      this.openPrompt(PROMPT_RENAME, this.layoutName);
+      return;
+    }
+    if (value === DELETE_LAYOUT) {
+      if (this.canDeleteLayout) {
+        this.openPrompt(PROMPT_DELETE, "");
+      }
+      return;
+    }
+    if (value.startsWith(LAYOUT_VALUE_PREFIX)) {
+      this.switchToLayout(value.slice(LAYOUT_VALUE_PREFIX.length));
+    }
+  }
+
+  /** Opening a dialog is not a change. Nothing here writes, and nothing may. */
+  openPrompt(prompt, draft) {
+    this.draftLayoutName = draft;
+    this.layoutPrompt = prompt;
+  }
+
+  handleLayoutPromptCancel() {
+    this.closePrompt();
+  }
+
+  closePrompt() {
+    this.layoutPrompt = undefined;
+    this.draftLayoutName = "";
+  }
+
+  handleLayoutNameChange(event) {
+    // Tracked, never dispatched: renaming on every keystroke would put a
+    // half-typed name into the store, and into the menu under the caret.
+    this.draftLayoutName = event.detail.value;
+  }
+
+  handleLayoutNameCommit() {
+    const name = (this.draftLayoutName || "").trim();
+    const prompt = this.layoutPrompt;
+    this.closePrompt();
+
+    if (prompt === PROMPT_NEW) {
+      this.createNewLayout(name || NEW_LAYOUT_NAME);
+      return;
+    }
+    if (prompt === PROMPT_RENAME) {
+      this.renameCurrentLayout(name);
+    }
+  }
+
+  handleLayoutPromptKeydown(event) {
+    if (event.key === "Escape") {
+      this.closePrompt();
+    }
+  }
+
+  handleLayoutDeleteConfirm() {
+    this.closePrompt();
+    this.deleteCurrentLayout();
+  }
+
+  /**
+   * Switches to one of the user's other layouts.
+   *
+   * **A pending change is flushed first, and it carries its own layout's id.**
+   * This is the exact seam the previous project's bug lived at, from the client
+   * side: a debounced save that fired *after* `this.layoutId` had moved would
+   * write the layout the user was looking at onto the layout they had just
+   * switched to. `save()` captures the id, the name and the payload together
+   * at the moment the change is queued, and the flush goes onto the same chain
+   * this switch does — so the write lands on the layout the change was made on
+   * whatever order things resolve in.
+   *
+   * The store's answer is adopted rather than the request: `activateLayout`
+   * returns every layout with the flags as they now stand, so a client that
+   * asked for a layout the store refused is corrected instead of painting a
+   * layout the store does not agree is active.
+   */
+  switchToLayout(layoutId) {
+    if (!layoutId || layoutId === this.layoutId) {
+      return;
+    }
+    this.flushPendingSave();
+    this.saveChain = this.saveChain
+      .then(() => activateLayout({ layoutId }))
+      .then((rows) => {
+        this.saveErrorMessage = undefined;
+        this.adoptFromStore(rows);
+        this.announce(`Switched to ${this.layoutName}.`);
+      })
+      .catch((error) => {
+        this.saveErrorMessage = SalesforceNavigator.reduceError(
+          error,
+          SWITCH_ERROR_MESSAGE
+        );
+      });
+  }
+
+  /**
+   * Creates a layout beside the ones the user already has and switches to it.
+   *
+   * It is seeded exactly as a first open is — every tab the user can reach in
+   * one section — rather than started empty. An empty new layout is the blank
+   * screen this slice's delete criterion exists to avoid, arrived at from the
+   * other direction, and a user who wants fewer items has Remove; a user
+   * looking at an empty card has nothing to work from.
+   */
+  createNewLayout(name) {
+    this.flushPendingSave();
+    const layoutJson = serializeLayout(buildSeededLayout(this.items));
+    this.saveChain = this.saveChain
+      .then(() => createLayout({ name, layoutJson, makeActive: true }))
+      .then((saved) => {
+        this.saveErrorMessage = undefined;
+        if (!saved || !saved.layoutId) {
+          return;
+        }
+        this.layouts = this.layouts.concat([
+          SalesforceNavigator.cachedLayout({ ...saved, layoutJson })
+        ]);
+        this.layoutId = saved.layoutId;
+        this.layoutName = saved.name || name;
+        this.storedLayout = deserializeLayout(layoutJson);
+        this.announce(`${this.layoutName} created and now showing.`);
+      })
+      .catch((error) => {
+        this.saveErrorMessage = SalesforceNavigator.reduceError(
+          error,
+          SAVE_ERROR_MESSAGE
+        );
+      });
+  }
+
+  /**
+   * Renames the layout on screen. `renameLayout` carries no payload, so a
+   * rename cannot reach the sections it is a name for.
+   *
+   * A user with no row yet has nothing to rename on the server, and naming
+   * their layout is a real change — so it goes through the ordinary autosave,
+   * which creates the row under the new name. Cancelling still writes nothing,
+   * because a cancel never reaches here.
+   */
+  renameCurrentLayout(name) {
+    if (!name || name === this.layoutName) {
+      return;
+    }
+    this.layoutName = name;
+
+    if (!this.layoutId) {
+      this.applyLayout(this.layout);
+      this.announce(`Layout renamed to ${name}.`);
+      return;
+    }
+
+    const layoutId = this.layoutId;
+    this.layouts = this.layouts.map((row) => {
+      return row.layoutId === layoutId ? { ...row, name } : row;
+    });
+    this.saveChain = this.saveChain
+      .then(() => renameLayout({ layoutId, name }))
+      .then(() => {
+        this.saveErrorMessage = undefined;
+        this.announce(`Layout renamed to ${name}.`);
+      })
+      .catch((error) => {
+        this.saveErrorMessage = SalesforceNavigator.reduceError(
+          error,
+          SAVE_ERROR_MESSAGE
+        );
+      });
+  }
+
+  /**
+   * Deletes the layout on screen and adopts whatever the store says the user
+   * is left with — which layout succeeds a deleted active one is the
+   * controller's decision, not this component's, so the two cannot disagree
+   * about it.
+   *
+   * A pending change is **discarded** rather than flushed: writing a payload to
+   * a row that is about to be deleted is work with no reader, and if it failed
+   * it would report a save error about a layout that no longer exists.
+   */
+  deleteCurrentLayout() {
+    const layoutId = this.layoutId;
+    if (!layoutId) {
+      return;
+    }
+    this.discardPendingSave();
+    this.saveChain = this.saveChain
+      .then(() => deleteLayout({ layoutId }))
+      .then((rows) => {
+        this.saveErrorMessage = undefined;
+        this.adoptFromStore(rows);
+        this.announce(`Layout deleted. Now showing ${this.layoutName}.`);
+      })
+      .catch((error) => {
+        this.saveErrorMessage = SalesforceNavigator.reduceError(
+          error,
+          SAVE_ERROR_MESSAGE
+        );
+      });
+  }
+
+  /**
+   * Takes the store's own picture of the user's layouts — which one is active
+   * included — after a switch or a delete.
+   *
+   * An empty list is the first-open state and is adopted as one: no id, no
+   * stored layout, and `this.layout` computes the seeded arrangement again.
+   * That is the right screen for a user who has just deleted their only
+   * layout, and it writes nothing, so they are back to owning no row exactly
+   * as they were before they first customised anything.
+   */
+  adoptFromStore(rows) {
+    const readable = (rows || []).filter((row) => row.isReadable !== false);
+    this.layouts = readable.map(SalesforceNavigator.cachedLayout);
+
+    const active = readable.find((row) => row.isActive);
+    if (!active) {
+      this.layoutId = undefined;
+      this.layoutName = DEFAULT_LAYOUT_NAME;
+      this.storedLayout = undefined;
       return;
     }
     this.layoutId = active.layoutId;
@@ -867,6 +1244,11 @@ export default class SalesforceNavigator extends LightningElement {
    * cancel — the drag becomes unfinishable.
    */
   renderedCallback() {
+    // Focus follows the layout dialog, or the gesture is mouse-only: the menu
+    // entry that opened it is gone from the DOM by the time it renders, so a
+    // keyboard user would otherwise be left with focus on nothing.
+    this.focusLayoutPrompt();
+
     // A live grab wins, because it is re-asserted on every render for as long
     // as the drag lasts; `cardFocusIndex` is the one-shot hand-off the two
     // gestures that *end* a drag leave behind, and it is consumed here
@@ -884,6 +1266,16 @@ export default class SalesforceNavigator extends LightningElement {
     const grabbed = cards[target];
     if (grabbed && this.template.activeElement !== grabbed) {
       grabbed.focusCard();
+    }
+  }
+
+  focusLayoutPrompt() {
+    if (!this.isNamingLayout) {
+      return;
+    }
+    const input = this.template.querySelector(".rstk-nav-layout-prompt__input");
+    if (input && this.template.activeElement !== input) {
+      input.focus();
     }
   }
 
@@ -924,35 +1316,83 @@ export default class SalesforceNavigator extends LightningElement {
     }, AUTOSAVE_DELAY_MS);
   }
 
+  /**
+   * Writes a pending change now instead of when its debounce would have fired,
+   * onto the same chain everything else uses. Called before a switch and before
+   * the component goes away — in both cases there is about to be no later
+   * moment at which the timer could usefully fire.
+   */
+  flushPendingSave() {
+    if (!this.saveTimer) {
+      return;
+    }
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
+    this.save();
+  }
+
+  /**
+   * Drops a pending change without writing it. Only the delete path uses this:
+   * a payload written to a row that is about to be deleted has no reader, and
+   * a failure would report a save error about a layout that no longer exists.
+   */
+  discardPendingSave() {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+    }
+  }
+
+  /**
+   * **Which layout is being written is decided here, with the payload, and
+   * carried to the call.**
+   *
+   * This is the exact seam the previous project's bug lived at. Reading
+   * `this.layoutId` inside the chained callback instead would mean a save
+   * queued while looking at one layout, and resolving after the user switched,
+   * writes the first layout's sections onto the second — the same "one row, two
+   * meanings" failure the controller closed on its own side, reopened from the
+   * client. The id, the name and the payload are one value taken at one moment,
+   * so a switch that happens in between cannot reach it.
+   */
   save() {
-    // Serialised here rather than inside the chained callback so that the
-    // payload is the layout as it stood when the debounce fired, not
-    // whatever it has become by the time an earlier save resolves.
-    const layoutJson = serializeLayout(this.layout);
-    this.saveChain = this.saveChain.then(() => this.persist(layoutJson));
+    const target = {
+      layoutId: this.layoutId,
+      name: this.layoutName,
+      layoutJson: serializeLayout(this.layout)
+    };
+    this.saveChain = this.saveChain.then(() => this.persist(target));
     return this.saveChain;
   }
 
-  persist(layoutJson) {
-    const call = this.layoutId
+  persist(target) {
+    // **Which layout is active is asked as late as possible, and the id is
+    // asked as early as possible — and the asymmetry is the point.** *Where*
+    // this payload goes was settled when the change was made, so it is
+    // captured. *Whether that layout is the one on screen* is a fact about now:
+    // a save queued before a switch and resolving after it must write its
+    // payload to the layout it was made on without dragging the active flag
+    // back there. A late answer here cannot reach the wrong row, because the
+    // row is already decided.
+    const isCurrent = target.layoutId === this.layoutId;
+
+    const call = target.layoutId
       ? updateLayout({
-          layoutId: this.layoutId,
-          name: this.layoutName,
-          layoutJson,
-          makeActive: true
+          layoutId: target.layoutId,
+          name: target.name,
+          layoutJson: target.layoutJson,
+          makeActive: isCurrent
         })
       : createLayout({
-          name: this.layoutName,
-          layoutJson,
+          name: target.name,
+          layoutJson: target.layoutJson,
           makeActive: true
         });
 
     return call
       .then((saved) => {
         this.saveErrorMessage = undefined;
-        if (saved && saved.layoutId) {
-          this.layoutId = saved.layoutId;
-        }
+        this.rememberSaved(target, saved);
       })
       .catch((error) => {
         // Reported beside the layout rather than in place of it: the user's
@@ -965,5 +1405,42 @@ export default class SalesforceNavigator extends LightningElement {
           SAVE_ERROR_MESSAGE
         );
       });
+  }
+
+  /**
+   * Records what the store now holds for the layout that was just written, so
+   * that switching away and back shows the change without a second read.
+   *
+   * **A create adopts its id only while this component is still showing the
+   * layout that was created.** If the user has switched since, adopting it
+   * would point every later save at a layout they are no longer looking at,
+   * which is the trap this file exists to keep shut, arrived at by a third
+   * route. `target.layoutId` being absent is what makes the call a create;
+   * `this.layoutId` being absent is what makes the created layout still the
+   * one on screen. Both are required.
+   */
+  rememberSaved(target, saved) {
+    const savedId = saved && saved.layoutId ? saved.layoutId : target.layoutId;
+    if (!savedId) {
+      return;
+    }
+
+    const row = {
+      layoutId: savedId,
+      name: target.name,
+      layoutJson: target.layoutJson
+    };
+    const known = this.layouts.some(
+      (existing) => existing.layoutId === savedId
+    );
+    this.layouts = known
+      ? this.layouts.map((existing) => {
+          return existing.layoutId === savedId ? row : existing;
+        })
+      : this.layouts.concat([row]);
+
+    if (!target.layoutId && this.layoutId === undefined) {
+      this.layoutId = savedId;
+    }
   }
 }
