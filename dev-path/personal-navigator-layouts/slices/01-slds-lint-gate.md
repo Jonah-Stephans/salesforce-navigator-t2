@@ -209,13 +209,23 @@ must not create.
 
 ### Commit audit
 
-- [ ] excess — `.vscode/settings.json`, committed by `git add -A` and outside this slice's `touches`.
+- [x] won't fix — excess — `.vscode/settings.json`, committed by `git add -A` and outside this slice's `touches`.
       One added line, `"xml.preferences.showSchemaDocumentationType": "none"`, written by an editor
       extension rather than by this slice. Nothing in the slice reads or needs it.
-- [ ] excess — `package-lock.json`, committed by `git add -A` and outside this slice's `touches`. This
+      **Engineer's disposition, 2026-08-25.** Genuinely excess and genuinely unrelated — the audit is
+      right, and this is not a `touches` that was incomplete: the slice neither produced nor needs
+      that line. It is editor noise that rode in on `git add -A`, it is inert, and it is already in
+      the history. Reverting it now would be a second commit of churn touching a file the slice has
+      no business in, so it is left where it is and the lesson is the `git add -A`, not the line.
+- [x] false positive — excess — `package-lock.json`, committed by `git add -A` and outside this slice's `touches`. This
       one is a direct consequence of the slice's own work — installing
       `@salesforce-ux/eslint-plugin-slds` — so it is very likely a `touches` that was simply
       incomplete rather than a stray file.
+      **Engineer's disposition, 2026-08-25.** The audit's own reading is the right one and it settles
+      the box: this slice's work *is* installing `@salesforce-ux/eslint-plugin-slds`, and a lockfile
+      change is the direct, unavoidable consequence of that install — a slice that adds a dependency
+      and leaves `package-lock.json` behind would be the defect. So the path was in scope and the
+      `touches` list was simply incomplete in not naming it; the file is not excess.
 
 ## Critique findings
 

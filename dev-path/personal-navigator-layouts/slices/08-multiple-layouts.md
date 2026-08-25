@@ -35,8 +35,20 @@ at.
       same transaction, and no sequence of switches leaves two active or none active.
 - [x] met Deleting the active layout leaves the user with a sensible active layout rather than an empty
       screen.
-- [ ] The same active layout is shown on the Navigator tab, on an App page placement and on a Home page
+- [x] won't fix — The same active layout is shown on the Navigator tab, on an App page placement and on a Home page
       placement — switching on one is reflected on the others.
+      **Engineer's disposition, 2026-08-25: accepted unverified rather than closed.** The code side is
+      complete and evidenced — see `## Deviations`, *Criterion 7*: layouts are global to the user and
+      there is no seam at which a placement could scope one, `getLayouts()` takes no argument and the
+      client passes none, the `js-meta.xml` declares all three targets and no `<property>` at all
+      (which `lightning__Tab` rejects outright, server-enforced), and a jest test mounts a second
+      component instance standing for a second placement and asserts it shows the same active layout
+      after a switch made in the first. What is missing is not code but org state: seeing the three
+      placements side by side requires the tab to be **placed in an app**, which is admin step 1 in
+      `spec.md` → `## Design`, *What an administrator must do*, and which cannot ship as source —
+      `CustomApplication` deploys as a full replace of an app's nav list. That step has not been
+      performed, and the engineer's scratch-org session covered dragging, not placement. Accepted as
+      pending an admin action rather than as unfinished work.
 - [x] met A user's layouts are theirs alone; a second user's list is independent.
 
 ## Deviations

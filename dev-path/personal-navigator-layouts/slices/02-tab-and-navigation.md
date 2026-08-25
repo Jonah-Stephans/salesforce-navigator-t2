@@ -764,7 +764,25 @@ apart from this slice file.
       decision above accepts exactly this and nothing was asked to surface the error, so it is
       recorded here honestly rather than re-raised.
 
-- [ ] Nothing pins the Enter half of `handleKeydown`'s guard, so a rejected item would activate on any
+- [x] fixed — 2026-08-25, one test, no production change. Added
+      `activates only on Enter, not on any other key, when NavigationMixin.GenerateUrl rejects` to
+      `navigatorItem.test.js`: in the rejected-`GenerateUrl` state it presses `" "`, `"Spacebar"`,
+      `"ArrowDown"`, `"Escape"`, `"Tab"` and `"a"` on the anchor, asserting `Navigate` is uncalled
+      after each, then presses Enter and asserts the stored `pageReference` reaches `Navigate` — so
+      the test cannot be satisfied by an anchor that activates on nothing at all. The finding's
+      mutation was then applied to shipped code: reducing the guard to `this.url !== undefined`
+      fails it with `expect(received).toBeUndefined() — Received: {"pageReference": {"attributes":
+      {"pageName": "our-site-home"}, "state": {}, "type": "standard__cmsPage"}, "replace": false}`,
+      and it is the only failure in the suite, which is what makes this the test that closes the gap.
+      Mutation reverted; suite 439/439 across 6 suites, `npm run lint` and `npm run prettier:verify`
+      clean. **One correction to the finding, worth carrying:** Space is *not* the key that
+      discriminates. `handleDragKeydown` consumes `" "` / `"Spacebar"` as the grab gesture and
+      returns before this guard is reached, mutant or not — the loop above passes on both Space
+      iterations and first goes red on `"ArrowDown"`. The keys that actually reach the guard are
+      every non-Space key on an item that is not grabbed, so the defect the mutant introduces is
+      wider than "Space activates a link", not narrower. The shipped behaviour was correct
+      throughout; only the test was missing. Original finding:
+      Nothing pins the Enter half of `handleKeydown`'s guard, so a rejected item would activate on any
       key. Found and reported by the Build worker in the final fix pass rather than left hidden, and
       not re-reviewed by a critic — see the deviation above. Reducing the guard to
       `this.url !== undefined` alone leaves the full 22-test suite green, because on a working anchor

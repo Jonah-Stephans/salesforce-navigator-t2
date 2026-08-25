@@ -31,9 +31,23 @@ and reorders whole sections the same way.
 
 ## Acceptance criteria
 
-- [ ] A user drags an item to a new position within its section and it stays there after a page reload
+- [x] met — A user drags an item to a new position within its section and it stays there after a page reload
       and a fresh login.
-- [ ] A user reorders the sections themselves by dragging a section card, and that order also survives.
+      **Engineer's disposition, 2026-08-25.** Both halves are now evidenced. The half jsdom reaches is
+      recorded under `## Deviations`, *Criterion 1*: the anchor reflects `draggable === true`, the
+      declarative `ondragstart` binding fires, the section keeps the source index in JS rather than
+      reading `dataTransfer` back, the payload is written, and a second Navigator mounted on the
+      payload that was actually written renders the new order — which is what a reload is, since
+      nothing else survives. The only half left was "that a real browser fires those events on this
+      markup at all", and the engineer supplied it first-hand in the scratch org on 2026-08-25:
+      *"dragging works great. just tried it."* Human observation of the gesture plus the tested
+      persistence is the whole criterion.
+- [x] met — A user reorders the sections themselves by dragging a section card, and that order also survives.
+      **Engineer's disposition, 2026-08-25.** Same two halves, same evidence. `## Deviations`,
+      *Criterion 2* records the tested half — the card carries `draggable="true"`, the handlers move
+      the right card, the payload is written, and a remount on that payload shows the new order — and
+      the engineer's first-hand drag in the scratch org on 2026-08-25 supplies the gesture the
+      environment cannot fire.
 - [x] met — A keyboard-only user can do both: Space to grab, arrow keys to move, Space to drop, Escape to
       cancel and leave the item where it started.
 - [x] met — A screen reader announces the grab, each move, the drop and the cancel, including the item's new
@@ -43,8 +57,16 @@ and reorders whole sections the same way.
 - [x] met — `aria-grabbed` and `aria-dropeffect` do not appear anywhere — both are deprecated.
 - [x] met — The placement maths lives in a plain module with no component in it, unit-tested directly, and both
       the mouse path and the keyboard path call the same function.
-- [ ] Dragging still works when the item's clickable link is the drag source — a drag does not navigate,
+- [x] met — Dragging still works when the item's clickable link is the drag source — a drag does not navigate,
       and a click still does.
+      **Engineer's disposition, 2026-08-25.** `## Deviations`, *Criterion 9* verifies in jsdom that
+      the anchor itself is the drag source rather than a handle beside it, that `dragstart` neither
+      navigates nor `preventDefault()`s (which would cancel the drag outright), and that a plain
+      click after a completed drag still navigates with the stored `pageReference` unmodified. The
+      unreached half was the browser's own suppression of `click` after a drag — the HTML
+      specification's behaviour rather than this component's. The engineer dragged items in the
+      scratch org on 2026-08-25 and reported *"dragging works great. just tried it."*: a drag that
+      navigated instead of moving the item is exactly what that observation would have caught.
 
 ## Deviations
 

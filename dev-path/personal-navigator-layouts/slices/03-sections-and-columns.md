@@ -112,8 +112,21 @@ still there tomorrow.
       enough, and the refusal does not distinguish "not yours" from "does not exist". Both run under
       `System.runAs` a genuine Standard User. The query is `WITH USER_MODE` *and* explicitly
       predicated on `OwnerId = :UserInfo.getUserId()`; sharing is defence in depth, never the filter.
-- [ ] A user whose manager sits above them in the role hierarchy is not visible to that manager — the
+- [x] won't fix — A user whose manager sits above them in the role hierarchy is not visible to that manager — the
       object grants no access through hierarchies.
+      **Engineer's disposition, 2026-08-25.** Already resolved, and this box only records the
+      resolution. The criterion is a claim about **org configuration**, not about this code: "Grant
+      Access Using Hierarchies" is not expressible in the Metadata API under any spelling, proved
+      against a live org at API 67.0 by the four probes under `## Deviations` above — including four
+      candidate element names each failing with the *identical* error a deliberately bogus control
+      element produced. The engineer decided on 2026-08-24 to accept it as a third documented admin
+      step; it is carried in `spec.md` → `## Out of scope` and `## Design` → *What an administrator
+      must do*, step 3, flagged there as the one admin step that is load-bearing for an Outcome
+      rather than only for reach. What source can deliver ships: the object is OWD Private. What
+      makes this a documented step rather than a hole is that the Navigator itself is safe either
+      way — `getLayouts()` filters on `OwnerId = :UserInfo.getUserId()` explicitly as well as running
+      `WITH USER_MODE`, so the component never renders one user's layout to another regardless of the
+      setting; the exposure the step closes is through reports, list views and the API.
 - [x] met — An item whose tab the user has lost access to stops rendering, and the stored layout is unchanged:
       restoring access restores the item to its original position.
       `navigatorLayoutModel.resolveLayout` intersects the stored ids against the live accessible set

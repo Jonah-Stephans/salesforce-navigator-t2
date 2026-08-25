@@ -40,8 +40,21 @@ they can reach.
 
 - [x] met — A user removes an item from its overflow menu and it disappears from the layout; the removal
       survives a page reload.
-- [ ] A section header offers "Add items", opening a picker listing every tab the user can reach that is
+- [x] won't fix — A section header offers "Add items", opening a picker listing every tab the user can reach that is
       not already in the layout.
+      **Engineer's disposition, 2026-08-25: accepted unverified rather than closed.** Nothing here is
+      a drag, so the engineer's scratch-org drag verification does not reach it and is not claimed
+      for it. Two of the criterion's three clauses are verified (`## Deviations`, *Criterion 2*): the
+      header offers the button as something a user can find — a real control in the section's own
+      header, with the section named in its accessible name, deleting it fails 22 tests, and it is
+      clicked rather than synthesised in every end-to-end test — and the list is right, built by
+      filtering the accessible tab list and excluding ids placed in any section, with 16 and 14 tests
+      failing on the two mutations of that. The unverified clause is `LightningModal.open()` mounting
+      the picker as a modal dialog in a real browser. sfdx-lwc-jest ships no `lightning/modal` stub
+      at all, so the contract in play is the one this spec wrote at `test/jest-mocks/lightning/modal.js`;
+      that mock mounts the real picker, so the picker's own code is fully driven, but the base it
+      extends is not. Closing it needs a browser driver against a real org, outside this spec.
+      Accepted as a known ceiling, not deferred work.
 - [x] met — The picker has a search box, and finds an item by typing part of its label — with 174 items a
       scrolling list alone fails this.
 - [x] met — Adding an item from the picker places it in the section the picker was opened from.
@@ -50,7 +63,20 @@ they can reach.
 - [x] met — The picker lists items under their Salesforce label, and never lists a tab the user cannot reach.
 - [x] met — A user who removes every item from a section sees something that explains the section is empty and
       how to add to it, not a blank card.
-- [ ] The picker is operable from the keyboard alone, and closing it with Escape adds nothing.
+- [x] won't fix — The picker is operable from the keyboard alone, and closing it with Escape adds nothing.
+      **Engineer's disposition, 2026-08-25: accepted unverified rather than closed.** Not a drag, so
+      the engineer's scratch-org verification does not reach it. `## Deviations`, *Criterion 9*
+      establishes both halves as far as this environment allows: every control in the picker is a
+      natively focusable element and the component writes no key handler at all — entries are real
+      `<button type="button">`s, and replacing one with a `<div>` carrying the same `onclick` fails
+      22 tests, which is exactly the distinction between a control a click-driven test is happy with
+      and one a keyboard user can reach — and focus lands on the search box on open. On the Escape
+      half, the picker neither handles Escape itself nor leaves a chosen id behind, and a close
+      carrying `undefined` reaches no `applyLayout` and no save. What is unverified is the platform's
+      own modal machinery: that a real `lightning-modal` traps focus inside the dialog, and that a
+      real Escape closes it with `undefined` — the second modelled only by this spec's own mock, the
+      first not modelled at all. Both are browser-driver questions against a real org, which the
+      spec's *Test entry points* places outside this spec. Accepted as a known ceiling.
 
 ## Deviations
 

@@ -31,14 +31,50 @@ from a menu on the item.
 
 ## Acceptance criteria
 
-- [ ] A user drags an item from one section into another, drops it at a chosen position, and both
+- [x] met — A user drags an item from one section into another, drops it at a chosen position, and both
       sections show the right contents after a page reload and a fresh login.
+      **Engineer's disposition, 2026-08-25.** Same shape as slice 04's criteria 1 and 2, and the same
+      evidence closes it. `## Deviations`, *Criterion 1* verifies in jsdom that a drag beginning in
+      one section and ending on another section's item lands the item in that section *at the
+      position it was dropped on*, that ending on the card appends instead, that the source index is
+      kept in JS rather than read back out of `dataTransfer`, and that both sections' contents are
+      asserted per section; the reload half is closed on the menu route, which ends at the same
+      `moveItemBetweenSections` and the same serialiser. The only outstanding half was that a real
+      browser fires the drag events on this markup, and the engineer supplied it first-hand in the
+      scratch org on 2026-08-25: *"dragging works great. just tried it."*
 - [x] met — Each item offers a "Move to…" menu listing the other sections; choosing one moves the item there.
-- [ ] A keyboard-only user can complete a cross-section move using that menu — arrow keys are not
+- [x] won't fix — A keyboard-only user can complete a cross-section move using that menu — arrow keys are not
       required to cross a section boundary, and are not expected to.
+      **Engineer's disposition, 2026-08-25: accepted unverified rather than closed.** This is *not* a
+      drag, so the engineer's scratch-org drag verification does not reach it and is not being
+      stretched to. What `## Deviations`, *Criterion 3* establishes stands: the second clause is
+      verified outright (`never asks to cross a section boundary with an arrow key` presses all four
+      arrows on a grabbed item and asserts four `itemkeymove`s and zero `itemmoveto`s), the menu
+      lists every other section and never the item's own, choosing an entry moves the item and writes
+      it, a remount on that payload renders it, and the route is pinned as a real
+      `lightning-button-menu` rather than a hand-rolled div (replacing it fails 8 tests). The one
+      unverified half is `lightning-button-menu`'s own key handling — that it opens on Enter and
+      walks its entries on the arrows. sfdx-lwc-jest stubs base components, so that behaviour is not
+      present in this environment at all, and it is Salesforce's code rather than this component's.
+      Closing it needs a browser driver against a real org, which the spec's *Test entry points*
+      places outside this spec. Accepted as a known ceiling, not deferred work.
 - [x] met — The move is announced to a screen reader, naming the destination section.
-- [ ] The section an item is dragged over is visually distinguishable as the drop target while the drag is
+- [x] won't fix — The section an item is dragged over is visually distinguishable as the drop target while the drag is
       in progress.
+      **Engineer's disposition, 2026-08-25: accepted unverified rather than closed, and deliberately
+      *not* claimed under the scratch-org drag.** The engineer's words were *"dragging works great.
+      just tried it."* — a statement about the gesture. He did not say he watched a section light up,
+      and a visual affordance he may or may not have looked for is an honestly separate observation,
+      so it is not being read into what he said. What is established stands and is substantial
+      (`## Deviations`, *Criterion 5*): the class is computed from two facts and appears only when
+      both hold, walked in both directions; it goes away on drop; the parent gates it so a
+      section-card drag does not light a section up as an item drop target; and the rule is real
+      rather than an empty class, pinned by a stylesheet test that also holds it to `--slds-g-*`
+      semantic hooks with no `prefers-color-scheme`, `--slds-c-*` or `--lwc-*`. What is left is that
+      a real browser fires `dragenter`/`dragleave` on this markup and that the rule renders as
+      intended in each colour mode — both browser-driver questions the spec places outside itself.
+      Accepted as a known ceiling. If anyone wants it closed cheaply, it is one look at the screen
+      mid-drag.
 - [x] met — The cross-section move uses the same placement function as the within-section reorder from slice 04
       rather than a second implementation.
 - [x] met — Dropping an item back into the section it came from leaves the layout unchanged.

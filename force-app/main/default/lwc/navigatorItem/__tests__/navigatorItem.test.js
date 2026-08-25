@@ -254,6 +254,44 @@ describe("c-navigator-item", () => {
     expect(getNavigateCalledWith()).toBeUndefined();
   });
 
+  it("activates only on Enter, not on any other key, when NavigationMixin.GenerateUrl rejects", async () => {
+    // The other half of handleKeydown's guard. The `url !== undefined` half is
+    // pinned by the test above; nothing pinned `event.key !== "Enter"`, and
+    // dropping it leaves the suite green because on a *working* anchor `url`
+    // is a defined string and the first half returns early regardless of key.
+    // Its real effect is on the rejection state, where `url` is undefined and
+    // every remaining key would activate the item. A link activates on Enter
+    // and not otherwise, so that is an accessibility defect rather than only
+    // an untested branch.
+    //
+    // Space is asserted because it is the key the rule is usually stated
+    // about, but it cannot discriminate on its own: `handleDragKeydown`
+    // consumes Space as the grab gesture and returns before this guard is
+    // reached either way. The keys that reach the guard — an arrow, Escape,
+    // Tab and an ordinary character on an item that is not grabbed — are what
+    // make this bite.
+    GenerateUrl.mockRejectedValueOnce(new Error("GenerateUrl failed"));
+
+    const element = createNavigatorItem();
+    await settled(element);
+    await Promise.resolve();
+
+    const anchor = anchorOf(element);
+    expect(anchor.hasAttribute("href")).toBe(false);
+
+    for (const key of [" ", "Spacebar", "ArrowDown", "Escape", "Tab", "a"]) {
+      anchor.dispatchEvent(keydown(key));
+      expect(getNavigateCalledWith()).toBeUndefined();
+    }
+
+    // ...and the item is still reachable the one way it should be, so this
+    // cannot be satisfied by an anchor that activates on nothing at all.
+    anchor.dispatchEvent(keydown("Enter"));
+    expect(getNavigateCalledWith().pageReference).toEqual(
+      STORED_PAGE_REFERENCE
+    );
+  });
+
   describe("as a drag source", () => {
     it("makes the anchor itself draggable, so the clickable link is the drag source", async () => {
       const element = await settled(createNavigatorItem({ index: 2 }));
