@@ -9,7 +9,7 @@ touches:
   - force-app/main/default/lwc/salesforceNavigator/salesforceNavigator.css
   - force-app/main/default/lwc/salesforceNavigator/__tests__/salesforceNavigator.test.js
 done: true
-fix_cycles: 1
+fix_cycles: 2
 ---
 
 # Keep more than one layout and switch between them
@@ -477,3 +477,86 @@ test now opens all three dialogs and would catch it on its own.
       red when that fix is undone: the create-adoption guard (1 red), `flushPendingSave` in
       `switchToLayout` (1), `discardPendingSave` in `deleteCurrentLayout` (1), the rename rollback
       (1), and `activeRowIn`'s `|| readable[0]` (3, including the two pre-existing load-path tests).
+
+- [x] false positive — *the failed-delete claim is reasoning rather than evidence: a delete the store
+      refuses leaves the change queued behind it silently dropped, exactly as refusing at gesture time
+      would.* Driven, because nobody had. Held the delete open with a `deleteLayout.mockImplementationOnce`
+      that gates and then **rejects**, made a `columns-6` change on `Support` while it was in flight,
+      released, then advanced the timer. Result: the store still holds all three rows
+      (`["Selling", "Support", "Admin"]`), `SECOND_ID`'s payload is `columns: 6`, and the single
+      `updateLayout` call is `{layoutId: SECOND_ID, name: "Support", makeActive: true}` — the change
+      written **normally**, on the layout it was made on, still active, still on screen at 6 columns.
+      `saveChain` does serialise the delete ahead of the timer-queued write, so `stillExists` reads a
+      store that has already answered, and a refused delete leaves the row listed. The stated advantage
+      of refusing to *send* over refusing to *schedule* is real and now measured.
+
+- [x] false positive — *`stillExists` reads `this.layouts`, which can be stale, so a legitimate save
+      can be refused.* Every route that populates `this.layouts` was walked and each named window
+      checked. Between a delete resolving and adoption there is no window at all: `adoptFromStore`
+      replaces the list inside the same `.then` that receives the rows, before any later chain link
+      runs. A rejected `getLayouts` leaves the list `[]` but also sets `layoutLoadErrorMessage`, and
+      `scheduleSave` returns before capturing anything, so no target exists to refuse. First open
+      before any fetch, and a user with no rows, both leave `this.layoutId` undefined, which makes
+      `target.layoutId` falsy and short-circuits the guard ahead of `stillExists` — the create path is
+      untouched, and *a change made while a new layout is being created* still passes. The list is also
+      never a subset of what the user owns: `getLayouts`, `activateLayout` and `deleteLayout` all
+      return `toDtos` over the whole of `ownLayouts()` / `remaining` with no `LIMIT`
+      (`NavigatorLayoutController.cls` lines 119, 263, 342). No refusal of a legitimate save was
+      reachable.
+
+- [x] false positive — *refusing to send leaves the change on screen and in `this.layout` with the
+      store never told and the user never informed, which is inconsistent.* It leaves nothing on
+      screen. When the delete succeeds, `adoptFromStore` reassigns `this.storedLayout` from the
+      successor's payload, so the change made on the doomed layout is gone from the display in the same
+      turn it is refused — the shipped test's own `expect(sectionNames(element)).toEqual(["Admin"])`
+      is that fact. There is no surviving state for the store to be out of step with, and nothing to
+      tell the user about, which is why the absent `[role="alert"]` is the right outcome rather than a
+      suppressed message. Contrasted against a genuinely failed save, which keeps the user's work on
+      screen and does raise the alert — the two are different situations and are treated differently.
+
+- [x] false positive — *the new test `a change made while its layout is being deleted is written
+      nowhere and reports no save error` could pass vacuously, or its `[role="alert"]` assertion has no
+      teeth.* Both halves checked by running. Vacuity: added
+      `expect(renderedColumns(element, 0)).toBe(6)` immediately after the `columns-6` gesture and
+      before the delete is released — green on the shipped code, so the change really is made and
+      really is queued. Teeth: with the `stillExists` guard deleted from `persist` and the
+      `expect(updateLayout).not.toHaveBeenCalled()` line temporarily removed, the alert assertion fails
+      on its own with `Received: <div class="rstk-nav-error" role="alert"><p>We could not save your
+      layout. Your last change may not be kept.</p></div>`. The two assertions pin different halves and
+      each can fail independently. (The test does not carry its own vacuity guard, but mutation shows
+      it is not vacuous in fact.)
+
+- [x] false positive — *a delete the store refuses tells the user, and then a later successful autosave
+      wipes the message, so the refusal goes unreported.* Observed in the refused-delete drive above —
+      `[role="alert"]` is absent at the end because `persist`'s success path clears
+      `saveErrorMessage`. It is not this fix's doing: the identical drive run against
+      `git show e673a8e^` of `salesforceNavigator.js` produces byte-identical output — same store, same
+      single `updateLayout` call, same absent alert. One shared transient `saveErrorMessage` cleared by
+      any success is this file's settled behaviour across every path, and the refused delete is still
+      visible to the user as a layout that is plainly still on screen and still in the menu.
+
+- [x] false positive — *a mutation count fell on the re-run, or the fix silently killed coverage a
+      mutation used to catch.* All seven re-run against the shipped code and the org. **Nothing
+      survived and no count fell.** jest, measured: 1 -> 3 (read literally, `persist` taking
+      `this.layoutId` for the branch and the field — the reading the last two passes recorded, and row
+      1's recorded wording ambiguity still bites); 2 -> 2; 5 -> 2; 6 -> 6; 7 -> 1 applied to
+      `adoptFromStore` alone, the same figure and the same recorded caveat as the last pass, so row 7's
+      ambiguity also still bites. Apex rows 3 and 4 were not re-deployed: `e673a8e` touches no `.cls`
+      at all (`git show --stat` lists only the slice file and the two LWC files), and
+      `NavigatorLayoutController.cls` / `...Test.cls` were last modified at `0db4376`, which is the
+      commit the previous pass measured 3 and 6 against — so those two cells provably cannot have
+      moved, and deploying a mutation into the engineer's open scratch org would have bought no
+      information. Confirmed instead that the org is unchanged and green: `--dry-run` reports
+      *No changes to deploy*, and `NavigatorLayoutControllerTest` runs 41/41 at 100%.
+
+- [x] false positive — *the guard merges "does this row still exist" with "is this row on screen",
+      collapsing two rules into one.* Reproduced the fix report's own second mutation independently.
+      Over-broadening `persist`'s guard to `target.layoutId !== this.layoutId` fails exactly
+      *a change made while a switch is still in flight is written to the layout it was made on* and
+      *a change made while a switch is in flight survives the switch landing before the debounce
+      fires*, and leaves the new delete test **green** — so a currency test cannot stand in for the
+      existence test. Weakening `stillExists` to `this.layouts.length > 0 && Boolean(layoutId)` fails
+      the new delete test **alone**. The two mutations fail disjoint sets, which is the evidence that
+      existence and currency were kept as separate rules rather than merged. The asymmetry the code
+      claims — the row settled at change time, its continued existence asked at call time — is the one
+      the fixture actually discriminates.
