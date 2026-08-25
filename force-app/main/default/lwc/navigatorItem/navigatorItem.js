@@ -280,8 +280,19 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
    * pressing Enter is not an edit, and treating it as one would schedule a
    * write — and on an item with no rename would freeze the platform label into
    * the payload, so a later org relabelling stopped reaching it.
+   *
+   * The guard is on `isRenaming` and not on the value, because for an item the
+   * value carries no signal: an empty commit is a legitimate clear, so the
+   * empty-name refusal that keeps `navigatorSection` safe from this cannot be
+   * borrowed. `commit` is fired on blur as well as on Enter and Escape removes
+   * a focused input from the DOM, so a commit can arrive *after* the draft has
+   * been blanked by an abandoned edit — and dispatching that would clear the
+   * wording the user pressed Escape to protect.
    */
   handleRenameCommit() {
+    if (!this.isRenaming) {
+      return;
+    }
     const rename = (this.draftName || "").trim();
     this.isRenaming = false;
 

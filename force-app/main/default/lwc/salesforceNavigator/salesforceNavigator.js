@@ -546,14 +546,33 @@ export default class SalesforceNavigator extends LightningElement {
    * item goes back to is the platform's, which is not a thing the section
    * knows until after the parent has applied the change. Reading the resolved
    * label on either side of `applyLayout` names both.
+   *
+   * **A commit that stores nothing is not applied and not announced.** The
+   * item's own guard can only compare the draft against the wording it is
+   * shown under, so an empty box committed on an item that has *no* rename
+   * still arrives here — asking for the Salesforce label it already has. Left
+   * unguarded that schedules a write, which for a user who has only ever
+   * looked is the gesture that creates their layout row, against slice 03's
+   * criterion; and it announces "Accounts renamed to Accounts." Comparing the
+   * payload the change would produce against the current one settles it for
+   * every route at once, rather than adding a second rule about wording that
+   * would have to agree with the model's.
    */
   handleItemRename(event) {
     const { sectionIndex, index, rename } = event.detail;
-    const before = this.itemLabelAt(sectionIndex, index);
-
-    this.applyLayout(
-      renameItem(this.layout, this.items, sectionIndex, index, rename)
+    const next = renameItem(
+      this.layout,
+      this.items,
+      sectionIndex,
+      index,
+      rename
     );
+    if (serializeLayout(next) === serializeLayout(this.layout)) {
+      return;
+    }
+
+    const before = this.itemLabelAt(sectionIndex, index);
+    this.applyLayout(next);
     this.announce(
       `${before} renamed to ${this.itemLabelAt(sectionIndex, index)}.`
     );

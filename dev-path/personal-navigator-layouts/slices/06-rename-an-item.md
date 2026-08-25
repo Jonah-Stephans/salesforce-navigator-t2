@@ -69,6 +69,18 @@ other user's first open is — shows `Accounts` for the same tab a renamed layou
 The residual exposure through reports and the API, and the admin step that closes it, is the spec's
 own *What an administrator must do*, item 3; it is unchanged by this slice.
 
+**What the fix pass changed about what two ticked criteria claim.** Both stay ticked and both claim
+*more* than they did, but the boundary moved and that is worth stating rather than leaving to be
+re-derived. **Criterion 5** (clearing returns the item to its Salesforce label) now has two routes
+into it rather than one: emptying the box, and typing the wording the tab already carries. The second
+is a consequence of the rule findings 4 and 5 were fixed by, not an interaction that was designed —
+but it is the same end state, so it stores the same thing. **Criterion 6** (an item with no rename
+picks up an org relabelling without a write) now holds for every item *shown under the platform
+label*, not only for those that never had a rename. Before the fix, an item renamed to its own
+platform label stored that wording and stopped following the org; that item was inside the criterion's
+words and outside its behaviour. The cost, accepted deliberately: a user cannot pin the current
+platform wording against a future relabelling. Criterion 6 is the promise that they cannot.
+
 ### Decisions taken during the build
 
 - **A cleared rename is the key's absence, not an empty string.** `renameItem` builds the stored item
@@ -124,10 +136,14 @@ own *What an administrator must do*, item 3; it is unchanged by this slice.
   first, the first of them driven from a section built at **index 1**, per slice 05's row 13.
 - `salesforceNavigator`: the single `renameItem` call site and the announcement. 11 tests watched red
   first; the two that were green on arrival are noted below.
-- **Three pre-existing tests were adjusted, none weakened, and no `it` was deleted.** All three
+- **Four pre-existing `it` blocks were adjusted, none weakened, and no `it` was deleted** — three in
+  `navigatorItem.test.js` (`lists every destination…`, `offers no menu at all…` →
+  `offers nowhere to move to…`, `reports the chosen destination upward…`) and one in
+  `salesforceNavigator.test.js`. The count read "three" until the fix pass; only the count was wrong.
+  All four
   selected menu entries with a bare `lightning-menu-item` query, which stopped being a list of
   destinations the moment the menu grew a second kind of entry; each now filters on the `move-to-`
-  prefix and its assertions are otherwise untouched. The third —
+  prefix and its assertions are otherwise untouched. The fourth —
   `shows no menu at all when the layout has only one section` — is the one whose *behaviour* this slice
   deliberately changes, and it was rewritten as
   `offers no destination at all when the layout has only one section`, asserting the same fact it
@@ -140,7 +156,8 @@ own *What an administrator must do*, item 3; it is unchanged by this slice.
   resolved `pageReference` since slice 03, and the payload has never stored a label. They are here
   because they are criteria 2 and 6, they are what this slice must not break, and both are caught by
   the mutation table below.
-- 274 pre-existing jest tests all still pass. The suite is **307 across 5 suites**.
+- 274 pre-existing jest tests all still pass. The suite was **307 across 5 suites** at build; the fix
+  pass added five and it is **312 across 5 suites**.
 - Invariants re-checked by reading: `grep -rn 'splice' force-app` outside `__tests__` returns exactly
   two lines, both inside `reorder`; `aria-grabbed` and `aria-dropeffect` appear nowhere outside the
   tests asserting their absence; `navigatorLayoutModel` imports nothing and mutates nothing; the only
@@ -150,30 +167,62 @@ own *What an administrator must do*, item 3; it is unchanged by this slice.
 ### The mutation table
 
 Each mutation was applied to shipped code by a runner that **fails loudly when its pattern does not
-match**, the whole suite was run, and the file was restored. The suite is 307 and green either side of
-every row. Rows 1–5 are the five the brief named; the rest are mine.
+match**, the whole suite was run, and the file was restored. The suite is 312 and green either side of
+every row. Rows 1–5 are the five the brief named; 6–17 are mine; 18 is the seam the fix pass turned
+into a row of its own, and 19–22 are the four fixes, each mutated back to the defect the critic found.
 
-| # | Mutation | Suite noticed |
-| --- | --- | --- |
-| 1 | The rename is written to `id` instead of to `rename` | 16 failed |
-| 2 | The rendered label ignores `rename` and always uses the platform label | 19 failed |
-| 3 | Clearing a rename leaves the old one in place | 5 failed |
-| 4 | The rename applies the rendered index to the stored list, so an inaccessible earlier item makes it hit the wrong one | 3 failed |
-| 5 | A cleared rename survives in the payload as `rename: ""` | 3 failed |
-| 6 | The section forwards `sectionIndex: 0` instead of its own index | 2 failed |
-| 7 | The item reports `index: 0` instead of its own position | 7 failed |
-| 8 | The committed wording is not trimmed | 2 failed |
-| 9 | A rename is dispatched on every keystroke | 7 failed |
-| 10 | Escape commits the draft instead of abandoning it | 1 failed |
-| 11 | An unchanged commit is reported as a rename | 1 failed |
-| 12 | An empty commit is refused, so a rename cannot be cleared | 5 failed |
-| 13 | `renameItem` drops `copySection` and hands back the caller's own items | 1 failed |
-| 14 | The announcement names the old wording twice | 2 failed |
-| 15 | The whole menu is gated on having somewhere to move to again | 12 failed |
-| 16 | The Rename… entry is removed from the menu | 2 failed |
-| 17 | The rename is applied to state but never written | 6 failed |
+The **Re-run** column is the fix pass. Every row still bites and nothing survived; the counts that
+moved are named under the table.
 
-**Nothing survived.** Two rows are worth reading rather than counting.
+| # | Mutation | Suite noticed | Re-run |
+| --- | --- | --- | --- |
+| 1 | The rename is written to `id` instead of to `rename` | 16 failed | 12 failed |
+| 2 | The rendered label ignores `rename` and always uses the platform label | 19 failed | 20 failed |
+| 3 | Clearing a rename leaves the old one in place | 5 failed | 7 failed |
+| 4 | The rename applies the rendered index to the stored list, so an inaccessible earlier item makes it hit the wrong one | 3 failed | 3 failed |
+| 5 | A cleared rename survives in the payload as `rename: ""` | 3 failed | 6 failed |
+| 6 | The section forwards `sectionIndex: 0` instead of its own index | 2 failed | 2 failed |
+| 7 | The item reports `index: 0` instead of its own position | 7 failed | 7 failed |
+| 8 | The committed wording is not trimmed | 2 failed | 2 failed |
+| 9 | A rename is dispatched on every keystroke | 7 failed | 6 failed |
+| 10 | Escape commits the draft instead of abandoning it | 1 failed | 2 failed |
+| 11 | An unchanged commit is reported as a rename | 1 failed | 1 failed |
+| 12 | An empty commit is refused, so a rename cannot be cleared | 5 failed | 5 failed |
+| 13 | `renameItem` drops `copySection` and hands back the caller's own items | 1 failed | 1 failed |
+| 14 | The announcement names the old wording twice | 2 failed | 2 failed |
+| 15 | The whole menu is gated on having somewhere to move to again | 12 failed | 14 failed |
+| 16 | The Rename… entry is removed from the menu | 2 failed | 2 failed |
+| 17 | The rename is applied to state but never written | 6 failed | 7 failed |
+| 18 | The anchor renders alongside the input during a rename, rather than being replaced by it | 1 failed | 2 failed |
+| 19 | `handleRenameCommit` loses its `isRenaming` guard, so a commit after Escape clears the rename | — | 1 failed |
+| 20 | Wording equal to the platform label is stored as a `rename` | — | 2 failed |
+| 21 | A commit that changes the payload not at all is applied and announced anyway | — | 1 failed |
+| 22 | Focus does not follow the rename into the input | — | 1 failed |
+
+**Nothing survived**, in either column.
+
+**The counts that moved, and the one that is a real trade.** Rows 2, 3, 5, 10, 15, 17 and 18 all went
+*up*, which is the five new tests biting rows beyond their own.
+
+**Row 1 is a different mutation, not a weaker suite.** The critic recorded two numbers for the same
+property — 16 in the table and 12 in its `id` false-positive box — because there are two ways to
+write it. This pass ran `storedItem(wording || item.id, undefined)` and got 12; the strict
+`storedItem(wording, undefined)` was run separately in this session and fails **19**, up from the
+build's 16. Neither formulation lost anything.
+
+**Row 9 is a real trade, and here it is in full.** It fell from 7 to 6, and the movement is two
+changes rather than one: it gains the new `reports nothing when a commit arrives after the rename was
+abandoned`, and it loses the parent's two announcement tests. The loss was diagnosed by running row 9
+with and without the finding-4 guard: with the guard, 6 failures, all in `navigatorItem`; with the
+guard removed, 9. Under row 9 the keystrokes have already applied the rename by the time the commit
+arrives, so the commit is a no-op — and before the fix that no-op announced `"People renamed to
+People."` over the correct announcement, which is what those two tests were catching. The guard now
+suppresses it, so the correct announcement survives the mutation and the tests pass. That is the
+guard doing exactly what finding 4 asked for, and it masks row 9 for those two as a side effect. Row
+9 is still pinned six ways, including `does not fire a rename while the user is still typing`, which
+is the test that names the property rather than catching it in passing.
+
+Two more rows are worth reading rather than counting.
 
 **Row 16 was a survivor at 1 until a test was added for it, and the reason generalises.** Every test
 that renames drives the menu's own `select` event — which is what a click or a keypress on the entry
@@ -192,7 +241,15 @@ same two private helpers rather than by getting it right here.
 
 ## Critique findings
 
-- [ ] **The focus-follows-rename block in `navigatorItem.renderedCallback` is not tested at all, and
+- [x] fixed — added `puts focus on the input it opened, so the rename is not a mouse-only gesture` to
+      `navigatorItem.test.js`, using the critic's own `jest.spyOn(HTMLElement.prototype, "focus")`
+      (restored in a `finally`, so a failure cannot leak the mock into the rest of the suite). Shipped
+      code passes; the mutation — the `isRenaming` branch replaced with a bare `return` — was applied
+      and watched red first:
+      `expect(received).toContain(expected) // indexOf / Expected value: "LIGHTNING-INPUT" / Received
+      array: []`. Shipped code was then restored from a scratchpad copy and the suite is green.
+      `navigatorSection`'s identical block is still uncovered; it belongs to the slice that added it.
+      **The focus-follows-rename block in `navigatorItem.renderedCallback` is not tested at all, and
       deleting it leaves the suite green at 307.** Replacing the body of the `isRenaming` branch with
       a bare `return` — so the input never receives focus when the menu entry opens it — fails
       nothing. The comment above it states the consequence exactly: the menu entry that opened the
@@ -205,7 +262,18 @@ same two private helpers rather than by getting it right here.
       assertion `expect(focused).toContain("LIGHTNING-INPUT")` passes on shipped code and fails on
       the mutation. Verified both ways. `navigatorSection`'s identical block is uncovered too, from
       an earlier slice; this slice added the second instance.
-- [ ] **`does not navigate, grab or drag while the wording is being edited` cannot fail.** It
+- [x] fixed — the test now asserts the property its name claims: the anchor is **absent** during a
+      rename (`expect(anchorOf(element)).toBeNull()`), and so is any other drag source
+      (`querySelector("[draggable]")`), before the Space is dispatched. The Space assertions are kept
+      — with the anchor gone they say the box takes the key — and the comment now records why the
+      Space alone pins nothing. Watched red under the critic's own mutation, the `lwc:else` wrapper
+      removed so the anchor renders alongside the input (removing only the `lwc:else` *directive* is
+      not a usable mutation — it is `LWC1077: Invalid template tag`, a setup error and not a red
+      test, so the wrapper tags were removed instead):
+      `expect(received).toBeNull() / Received: <a aria-describedby="rstk-nav-hint-standard-OurSite-0"
+      aria-label="Our Site" class="rstk-nav-item" ... draggable="true" ...>`. That mutation now fails
+      2 rather than 1, and the second is this test rather than an incidental line in another.
+      **`does not navigate, grab or drag while the wording is being edited` cannot fail.** It
       dispatches `keydown(" ")` on the `lightning-input` and asserts no `itemgrab`. The grab handler
       is bound to the anchor, and a keydown raised on the input never reaches it whether or not the
       anchor is on screen — sibling nodes in one shadow root, no ancestor handler. Verified by
@@ -215,7 +283,14 @@ same two private helpers rather than by getting it right here.
       therefore pinned only by that other test's one line, and the test that claims it in its name
       pins nothing. To bite, it should assert against the anchor being absent, or drive the Space at
       the item host / at whatever node a user's focus would actually be on.
-- [ ] **`handleRenameCommit` has no `isRenaming` guard, and `handleRenameKeydown` blanks `draftName`
+- [x] fixed — `handleRenameCommit` now returns early when `isRenaming` is already false, so a commit
+      that arrives after Escape is a no-op. The guard is on the *state* and not on the value
+      deliberately: an empty commit is a legitimate clear for an item, so `navigatorSection`'s
+      empty-name refusal could not be borrowed without giving up the clear. New test
+      `reports nothing when a commit arrives after the rename was abandoned` (Escape, then `commit`)
+      was watched red first:
+      `expect(jest.fn()).not.toHaveBeenCalled() / Expected number of calls: 0 / Received number of calls: 1`.
+      **`handleRenameCommit` has no `isRenaming` guard, and `handleRenameKeydown` blanks `draftName`
       on Escape — so any commit that arrives after Escape clears the user's rename.** Verified by
       driving the component: Escape, then a `commit` event, dispatches one `itemrename` carrying
       `rename: ""`, which for an item is destructive (the wording is dropped and the key is removed
@@ -227,7 +302,24 @@ same two private helpers rather than by getting it right here.
       commit on removal is browser-dependent and could not be settled in jsdom, but the handler is
       unguarded either way. Cheap fix direction: return early from `handleRenameCommit` when
       `isRenaming` is already false, or stop blanking `draftName` on Escape.
-- [ ] **Committing an empty box on an item that has *no* rename schedules a write that stores
+- [x] fixed — **the rule, which findings 4 and 5 now both follow: a commit stores the item's
+      *effective* label, and the platform label's stored form is the key's absence — whichever route
+      reached it; and a commit that changes the payload not at all is neither applied nor announced.**
+      Two edits. `renameItem` reads the target's live platform label from the `tabs` it already takes
+      and treats wording equal to it exactly as it treats an empty box (finding 5).
+      `handleItemRename` compares `serializeLayout(next)` against `serializeLayout(this.layout)` and
+      returns before `applyLayout` when they match, which closes finding 4 for every route at once
+      rather than adding a second wording rule that would have to agree with the model's.
+      **The consequence, judged and accepted:** typing the platform label into a renamed item is now
+      a second way to clear the rename, and pinning the current platform wording against a future org
+      relabelling is not on offer — which is what criterion 6 promises, so the alternative was to
+      break criterion 6 for exactly the items that had been renamed once.
+      New test `creates no layout row when an empty box is committed on an item with no rename`
+      watched red: `expect(jest.fn()).not.toHaveBeenCalled() / Expected number of calls: 0 / Received
+      number of calls: 1 / 1: {"layoutJson": "{\"schemaVersion\":2,\"sections\":[{\"name\":\"All
+      Items\",\"columns\":3,\"items\":[{\"id\":\"Account\"}]}]}", "makeActive": true, ...}` — the row
+      being created for a user who had only looked, visible in the payload.
+      **Committing an empty box on an item that has *no* rename schedules a write that stores
       nothing.** Verified: the item dispatches `itemrename` with `rename: ""` (the unchanged-commit
       guard compares the trimmed draft against `this.label`, and `"" !== "Accounts"`), and
       `salesforceNavigator.handleItemRename` calls `applyLayout` unconditionally, so `scheduleSave`
@@ -235,7 +327,17 @@ same two private helpers rather than by getting it right here.
       payload identical to the seeded one. The live region also says `"Accounts renamed to
       Accounts."`. This is the same hazard the slice's own "wording committed unchanged reports
       nothing at all" decision exists to close, reached by the other door.
-- [ ] **Renaming an item to the exact text of the platform label, when it already has a rename,
+- [x] fixed — same rule as finding 4 above; the model half is this one. `renameItem` now looks the
+      target id's platform label up in `tabs` through a new private `platformLabelOf` and folds
+      wording equal to it into the same branch as an empty box, so `{id: "A", rename: "Clients"}`
+      renamed to `"Accounts"` stores `{id: "A"}` and a later relabelling to `"Accts"` reaches it
+      again. New model test `clears the rename when the wording committed is the platform label
+      itself` watched red: `expect(received).toEqual(expected) // deep equality / Object { "id":
+      "Contact", + "rename": "Contacts" }`. Its end-to-end twin
+      `clears the rename when the user types the platform label into a renamed item` was written at
+      the same time and was green once the model change landed — recorded honestly rather than
+      claimed as a second red.
+      **Renaming an item to the exact text of the platform label, when it already has a rename,
       stores that text and quietly costs the item criterion 6.** Verified against the model: an item
       stored as `{id: "A", rename: "Clients"}` renamed to `"Accounts"` (the live label) is stored as
       `{id: "A", rename: "Accounts"}`, and a later org relabelling to `"Accts"` no longer reaches it
@@ -244,7 +346,10 @@ same two private helpers rather than by getting it right here.
       store nothing. Whether a user who types the platform label means "pin this word" or "put it
       back" is a product call, but the two paths disagree today and neither the code nor the slice
       says which is intended.
-- [ ] **The slice records "Three pre-existing tests were adjusted"; four `it` blocks were edited.**
+- [x] fixed — the Progress log entry now reads "Four pre-existing `it` blocks were adjusted" and
+      names all four with their files, keeping the rest of the record as written. Nothing about the
+      edits themselves changed; only the count was wrong, as the finding says.
+      **The slice records "Three pre-existing tests were adjusted"; four `it` blocks were edited.**
       Three in `navigatorItem.test.js` (`lists every destination…`, `offers no menu at all…` →
       `offers nowhere to move to…`, `reports the chosen destination upward…`) and one in
       `salesforceNavigator.test.js` (`shows no menu at all…` → `offers no destination at all…`).
@@ -301,5 +406,23 @@ when its pattern does not match, the whole suite was run, and the file was resto
 in-memory original. `npm test` is 307 passed across 5 suites before and after; `npm run lint`,
 `npm run lint:slds-gate` and `npm run prettier:verify` are clean; `git status` shows only this slice
 file modified, no production file was left changed and no deploy was needed.
+
+**Verification, fix pass.** `npm test` is **312 passed across 5 suites**. All 22 mutation rows were
+re-run by the same kind of runner — pattern-checked, suite run, file restored — and nothing survived
+in either column. `npm run lint`, `npm run lint:slds-gate` and `npm run prettier:verify` are clean.
+`grep -rn 'splice' force-app | grep -v __tests__` returns exactly the two lines in `reorder`;
+`aria-grabbed`, `aria-dropeffect`, `if:true`, `if:false`, `--slds-c-` and `prefers-color-scheme`
+appear nowhere outside the tests asserting their absence. `sf project deploy start` reported the same
+three-bundle source-tracking conflict every slice on this spec has; all 10 org-side files were
+retrieved with `--target-metadata-dir <scratchpad> --unzip` — the form that cannot touch the working
+tree — and diffed against `git show HEAD:<path>`. **Every one differs only by the trailing newline
+the platform strips on retrieve**, so `--ignore-conflicts` was used; the deploy then reported all 10
+files `Changed`, `Status: Succeeded`, Deploy ID `0AfO800000ZSJZpKAP`.
+
+One operator error is recorded rather than hidden: a `git checkout` on
+`navigatorLayoutModel.js`, used mid-session to undo a probe, reverted the finding-5 fix along with
+it. It was caught immediately by the suite (2 failed), reapplied, and re-verified — but the lesson is
+that `git checkout` is the wrong restore tool while a fix is uncommitted in the same file. The
+mutation runner's own scratchpad-copy restore, used everywhere else, has no such hazard.
 
 fix_cycles: 0

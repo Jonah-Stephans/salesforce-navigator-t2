@@ -829,6 +829,38 @@ describe("c-navigator-item", () => {
       expect(anchorOf(element)).toBeNull();
     });
 
+    it("puts focus on the input it opened, so the rename is not a mouse-only gesture", async () => {
+      // "The user can find this" and "the handler does the right thing when
+      // told" are two facts, and every other test here drives the input by
+      // holding a reference to it — which pins only the second. The menu entry
+      // that opened the input is gone from the DOM by the time it renders, so
+      // without the focus call a keyboard user is left with focus on nothing.
+      //
+      // jsdom's base-component stub is an empty custom element whose `focus()`
+      // does not move `shadowRoot.activeElement`, so the assertion cannot be
+      // made against `activeElement` the way `focusAnchor`'s is on a real
+      // anchor. Recording the call on the prototype is what makes the fact
+      // observable at all.
+      const focused = [];
+      const spy = jest
+        .spyOn(HTMLElement.prototype, "focus")
+        .mockImplementation(function record() {
+          focused.push(this.tagName);
+        });
+
+      try {
+        const element = await settled(
+          createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        );
+
+        await startRenaming(element);
+
+        expect(focused).toContain("LIGHTNING-INPUT");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it("reports the wording upward with its own position, on commit", async () => {
       const element = await settled(
         createNavigatorItem({ index: 2, moveTargets: TARGETS })
@@ -942,10 +974,45 @@ describe("c-navigator-item", () => {
       expect(inputOf(element)).toBeNull();
     });
 
+    it("reports nothing when a commit arrives after the rename was abandoned", async () => {
+      // `commit` is what `lightning-input` fires on blur as well as on Enter,
+      // and Escape removes the focused input from the DOM — so the blur that
+      // follows an abandoned edit can deliver a commit of the blanked draft.
+      // For a *section* that would be refused as an empty name; for an item an
+      // empty commit is a legitimate clear, so the guard has to be the state
+      // rather than the value. Abandoning an edit must not destroy the wording
+      // the user was editing.
+      const element = await settled(
+        createNavigatorItem({
+          index: 1,
+          label: "Clients",
+          moveTargets: TARGETS
+        })
+      );
+      const handler = jest.fn();
+      element.addEventListener("itemrename", handler);
+
+      const input = await startRenaming(element);
+      type(input, "Nope");
+      input.dispatchEvent(keydown("Escape"));
+      input.dispatchEvent(new CustomEvent("commit"));
+      await Promise.resolve();
+
+      expect(handler).not.toHaveBeenCalled();
+      // And the wording it was abandoned from is still what is on screen.
+      expect(anchorOf(element).textContent.trim()).toBe("Clients");
+    });
+
     it("does not navigate, grab or drag while the wording is being edited", async () => {
-      // The anchor is what carries every one of those, and it is not on screen
-      // during a rename — so a Space typed into the box cannot also pick the
-      // item up.
+      // Navigation, the drag source and Space-to-grab are all carried by the
+      // anchor and by nothing else, so the property that makes all three safe
+      // is that the anchor is *replaced* by the input rather than joined by it.
+      // That is what this asserts. Dispatching the Space on the input alone
+      // would not: the two are siblings in one shadow root with no ancestor
+      // handler, so a keydown raised on the input never reaches the anchor's
+      // handler whether or not the anchor is rendered — the test would pass
+      // over a template that left the anchor sitting there for a real user to
+      // Tab onto and Space.
       const element = await settled(
         createNavigatorItem({ index: 0, moveTargets: TARGETS })
       );
@@ -953,6 +1020,15 @@ describe("c-navigator-item", () => {
       element.addEventListener("itemgrab", grabbed);
 
       const input = await startRenaming(element);
+
+      expect(input).not.toBeNull();
+      expect(anchorOf(element)).toBeNull();
+      // Nothing else in the item is a drag source either, so there is no
+      // second node a mouse drag could start from during a rename.
+      expect(element.shadowRoot.querySelector("[draggable]")).toBeNull();
+
+      // And with the anchor gone, the Space the user types into the box is a
+      // Space and not a grab.
       input.dispatchEvent(keydown(" "));
 
       expect(grabbed).not.toHaveBeenCalled();

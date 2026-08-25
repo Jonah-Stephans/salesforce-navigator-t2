@@ -2379,6 +2379,45 @@ describe("c-salesforce-navigator", () => {
       ]);
     });
 
+    it("creates no layout row when an empty box is committed on an item with no rename", async () => {
+      // The other door onto "wording committed unchanged reports nothing at
+      // all". Emptying the box on an item that has no rename asks for the
+      // Salesforce label it already has, so it stores nothing — and a gesture
+      // that stores nothing must not be what creates a layout row for a user
+      // who has only ever looked, which slice 03 has a criterion against. Nor
+      // is there anything to announce: "Accounts renamed to Accounts."
+      const element = await navigatorOn(undefined, [ACCOUNT_ITEM]);
+
+      await renameTo(element, 0, 0, "");
+      await settleAutosave();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(renderedLabel(element, 0, 0)).toBe("Accounts");
+      expect(
+        spoken(
+          element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+        )
+      ).toBe("");
+    });
+
+    it("clears the rename when the user types the platform label into a renamed item", async () => {
+      // The same end state as emptying the box, reached by the other route,
+      // and it must be stored the same way — otherwise this item quietly loses
+      // criterion 6 while an unrenamed one keeps it under identical
+      // keystrokes. The consequence is deliberate: typing the platform label
+      // is a second way to clear a rename.
+      const element = await navigatorOn(RENAMED);
+      expect(renderedLabel(element, 0, 0)).toBe("Clients");
+
+      await renameTo(element, 0, 0, "Accounts");
+
+      expect(renderedLabel(element, 0, 0)).toBe("Accounts");
+      await settleAutosave();
+      expect(savedItems(updateLayout)[0]).toEqual({ id: "Account" });
+      expect(Object.keys(savedItems(updateLayout)[0])).toEqual(["id"]);
+    });
+
     it("picks up a change to the org's own tab label, with no write at all", async () => {
       // The payload stores no labels, so this costs nothing: the item is
       // resolved against the live tab source on every render.

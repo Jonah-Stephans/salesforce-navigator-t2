@@ -299,6 +299,17 @@ function accessibleIdsOf(tabs) {
 }
 
 /**
+ * What Salesforce currently calls the tab an item points at, or "" when the
+ * running user cannot reach it. Read from the same live tab source
+ * `resolveLayout` reads the rendered label from, so "the wording on screen
+ * with no rename" is one fact with one definition.
+ */
+function platformLabelOf(tabs, id) {
+  const tab = (tabs || []).find((candidate) => candidate.id === id);
+  return tab ? textOf(tab.label) : "";
+}
+
+/**
  * The stored positions of the items a user can see, in the order they see
  * them. Entry `n` is the stored index of the item rendered at position `n`,
  * so this array *is* the translation.
@@ -481,6 +492,18 @@ export function moveItemBetweenSections(
  * that means something goes, and the serialiser is asserted against an exact
  * key set.
  *
+ * **And so is the platform label itself.** "Call this what Salesforce calls
+ * it" has one stored form, whichever route the user reached it by — emptying
+ * the box, or typing the wording that is already on the tab. Storing the
+ * platform label as a `rename` would render identically and quietly cost that
+ * item criterion 6: a later org relabelling would stop reaching it. It would
+ * also make an item that *has* a rename behave differently from one that has
+ * none under exactly the same keystrokes, which is a disagreement about the
+ * same end state. The consequence is deliberate and worth stating: typing the
+ * platform label into a renamed item is a second way to clear the rename.
+ * Pinning the current platform wording against a future relabelling is not on
+ * offer, because criterion 6 is the promise that it is not.
+ *
  * `itemIndex` is a position in the list the user is looking at, and `tabs` is
  * what turns it into a position in the stored list — see the note on the seam
  * above `moveItemWithinSection`. Nothing else about the section is touched, so
@@ -503,7 +526,11 @@ export function renameItem(layout, tabs, sectionIndex, itemIndex, rename) {
     return unchanged;
   }
 
-  const wording = textOf(rename).trim();
+  const typed = textOf(rename).trim();
+  const items = itemsOf(sections[sectionIndex]);
+  const wording =
+    typed === platformLabelOf(tabs, items[storedAt].id) ? "" : typed;
+
   return replaceSection(layout, sectionIndex, (section) => {
     const copy = copySection(section);
     return {

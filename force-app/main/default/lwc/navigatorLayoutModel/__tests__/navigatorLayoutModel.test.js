@@ -1154,6 +1154,22 @@ describe("renameItem", () => {
     ).toEqual({ id: "Account", rename: "Clients" });
   });
 
+  it("clears the rename when the wording committed is the platform label itself", () => {
+    // "Call this what Salesforce calls it" has one stored form, whichever
+    // route reached it: the key's absence. Storing the platform label as a
+    // rename would look identical on screen and quietly cost that item
+    // criterion 6 — a later org relabelling would stop reaching it — and it
+    // would make an item that already has a rename behave differently from an
+    // item that has none under exactly the same keystrokes.
+    const next = renameItem(base, ALL_TABS, 0, 1, "Contacts");
+
+    expect(next.sections[0].items[1]).toEqual({ id: "Contact" });
+    expect(payloadItem(next, 0, 1)).toEqual({ id: "Contact" });
+    // Which is the whole point of it: the org relabels and the item follows.
+    const relabelled = [ACCOUNT, { ...CONTACT, label: "People" }, OUR_SITE];
+    expect(resolveLayout(next, relabelled)[0].items[1].label).toBe("People");
+  });
+
   it("renames the item the user picked when an earlier one is out of reach", () => {
     // The resolved-versus-stored seam. `Account` is stored first and is not
     // accessible, so the first item *on screen* is `Contact` — and a rename
