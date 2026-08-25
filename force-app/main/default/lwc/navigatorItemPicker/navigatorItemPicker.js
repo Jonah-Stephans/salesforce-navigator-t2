@@ -104,6 +104,42 @@ export default class NavigatorItemPicker extends LightningModal {
     return `No item matches “${(this.searchTerm || "").trim()}”.`;
   }
 
+  /**
+   * The other empty state's wording, as a getter rather than a literal in the
+   * template, because the live region below has to say the same sentence and
+   * two copies of it is one copy too many.
+   */
+  get emptyLayoutMessage() {
+    return "Every tab you can reach is already in this layout.";
+  }
+
+  /**
+   * What the live region says. Typing narrows the list on screen, and without
+   * this the narrowing is silent: a sighted user watches 174 entries become
+   * one, and a screen-reader user gets no feedback at all from the one control
+   * the criterion says makes 174 items usable, and has to tab into the list to
+   * discover whether anything matched.
+   *
+   * Both empty states are voiced here as well as rendered, because a `<p>` that
+   * appears and disappears announces nothing on its own.
+   */
+  get searchStatus() {
+    if (!this.hasAvailable) {
+      return this.emptyLayoutMessage;
+    }
+    const count = this.visibleItems.length;
+    if (count === 0) {
+      return this.noMatchMessage;
+    }
+    const noun = count === 1 ? "item" : "items";
+    if (!this.term) {
+      return `${count} ${noun} available.`;
+    }
+    return `${count} ${noun} ${count === 1 ? "matches" : "match"} “${(
+      this.searchTerm || ""
+    ).trim()}”.`;
+  }
+
   handleSearch(event) {
     this.searchTerm = event.detail.value;
   }

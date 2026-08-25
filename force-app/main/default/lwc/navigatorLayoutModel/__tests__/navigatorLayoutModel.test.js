@@ -482,6 +482,47 @@ describe("the section operations", () => {
     expect(base).toEqual(before);
   });
 
+  // Row 30's general form, on the two operations that had no purity test at
+  // all. `expect(base).toEqual(before)` above catches an in-place *write*; it
+  // says nothing about the returned sections being the caller's own objects,
+  // and `filter`/`map`/`concat` over the caller's list is exactly the shape
+  // that passes a deep-equal and shares every object it hands back. All three
+  // levels are asserted — per section, per `items` array, and per item — plus
+  // a write-through, because an assertion on the container's identity says
+  // nothing about the contents'.
+  it("deleteSection hands back copies, not the caller's own section and item objects", () => {
+    const next = deleteSection(base, 0);
+
+    next.sections.forEach((section, at) => {
+      // The survivors shift down by one, so section `at` of the result came
+      // from section `at + 1` of the input.
+      const source = base.sections[at + 1];
+      expect(section).not.toBe(source);
+      expect(section.items).not.toBe(source.items);
+      section.items.forEach((item) => {
+        expect(source.items).not.toContain(item);
+      });
+    });
+
+    next.sections[0].items[0].rename = "Written through";
+    expect(base.sections[1].items[0]).toEqual({ id: "Contact" });
+  });
+
+  it("addSection hands back copies, not the caller's own section and item objects", () => {
+    const next = addSection(base, "Third");
+
+    base.sections.forEach((source, at) => {
+      expect(next.sections[at]).not.toBe(source);
+      expect(next.sections[at].items).not.toBe(source.items);
+      next.sections[at].items.forEach((item) => {
+        expect(source.items).not.toContain(item);
+      });
+    });
+
+    next.sections[0].items[0].rename = "Written through";
+    expect(base.sections[0].items[0]).toEqual({ id: "Account" });
+  });
+
   it("leaves the layout alone when an operation names a section that is not there", () => {
     expect(renameSection(base, 7, "Nope")).toEqual(base);
     expect(deleteSection(base, 7)).toEqual(base);

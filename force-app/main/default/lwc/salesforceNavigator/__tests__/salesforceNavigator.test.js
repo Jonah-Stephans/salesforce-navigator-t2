@@ -7,7 +7,7 @@ import { getNavigateCalledWith } from "lightning/navigation";
 // real component** rather than standing in for it, so the assertions below
 // about what the picker lists, what a search finds and what a click on an
 // entry does are driven against the component that ships.
-import { getOpenModals, resetModals } from "lightning/modal";
+import { getOpenModals, resetModals, configOf } from "lightning/modal";
 import { MAX_PAGE_SIZE, NAV_ITEMS_CONFIG } from "c/navigatorTabSource";
 import { SCHEMA_VERSION, reorder } from "c/navigatorLayoutModel";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
@@ -3149,6 +3149,99 @@ describe("c-salesforce-navigator", () => {
       expect(updateLayout).not.toHaveBeenCalled();
     });
 
+    it("writes nothing when a removal names no item on screen", async () => {
+      // The payload-equality guard in `handleItemRemove` is what stops a
+      // gesture that stores nothing from creating a layout row for a user who
+      // has only ever looked — slice 03's criterion. Nothing drove that
+      // gesture before: every removal in the suite names a real item, so
+      // `removeItem` always changed something and the guard never had to hold.
+      // `getLayouts` returns nothing here, so a write would be a
+      // `createLayout` — the row that must not exist.
+      const element = await navigatorOn(undefined);
+      const before = itemLabelsBySection(element);
+
+      querySections(element)[0].dispatchEvent(
+        new CustomEvent("itemremove", {
+          bubbles: true,
+          composed: true,
+          detail: { sectionIndex: 0, index: 9 }
+        })
+      );
+      await flush();
+      await settleAutosave();
+
+      expect(itemLabelsBySection(element)).toEqual(before);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when the picker closes with a falsy value that is not undefined", async () => {
+      // Cancel and Escape both hand back `undefined`, and the payload-equality
+      // guard swallows those on its own. This drives the other falsy shape a
+      // real close can carry — an entry whose `data-id` is the empty string,
+      // which is what a tab with a blank developer name produces. That one the
+      // equality guard cannot swallow: an empty id *is* in the accessible set,
+      // so `addItemToSection` would happily store `{id: ""}` and the layout
+      // would change, and an item the user cannot navigate to would be in it.
+      // `addChosenItem`'s `if (!tabId)` is the only thing standing there. (A
+      // *stored* layout rather than the seeded one, because the seed places
+      // every reachable tab, so a user with no layout is offered nothing at
+      // all and this route cannot be driven against them.)
+      const element = await navigatorOn(
+        TWO_SECTIONS,
+        THREE.concat([
+          {
+            developerName: "",
+            label: "Blank",
+            pageReference: {
+              type: "standard__navItemPage",
+              attributes: { apiName: "" },
+              state: {}
+            }
+          }
+        ])
+      );
+      const before = itemLabelsBySection(element);
+
+      const picker = await openPicker(element, 0);
+      const blank = pickerEntries(picker).find(
+        (entry) => entry.dataset.id === ""
+      );
+      expect(blank).toBeDefined();
+      blank.dispatchEvent(new CustomEvent("click"));
+      await flush();
+      await settleAutosave();
+
+      expect(itemLabelsBySection(element)).toEqual(before);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("schedules no autosave when the picker resolves after the Navigator has gone", async () => {
+      // `LightningModal.open` mounts the picker on `document.body`, outside
+      // this component's tree, so it outlives the Navigator. A user who leaves
+      // the Navigator tab with the picker open and then chooses an item runs
+      // `applyLayout` -> `scheduleSave` on a destroyed instance, starting a 1s
+      // timer that `disconnectedCallback` has already come and gone for. This
+      // is the only write path in the file not driven by a template event, and
+      // therefore the only one that can fire after disconnect.
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 0);
+
+      document.body.removeChild(element);
+      expect(jest.getTimerCount()).toBe(0);
+
+      pickerEntries(picker)[0].dispatchEvent(new CustomEvent("click"));
+      await flush();
+
+      // The hazard is the *timer*, not only the call: nothing is left running
+      // that no `disconnectedCallback` will flush.
+      expect(jest.getTimerCount()).toBe(0);
+      await settleAutosave();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
     it("adds nothing and writes nothing when Escape closes the picker", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
       const before = itemLabelsBySection(element);
@@ -3188,6 +3281,19 @@ describe("c-salesforce-navigator", () => {
 
       expect(pickerEntries(picker)).toHaveLength(0);
       expect(picker.shadowRoot.textContent).toContain("already");
+    });
+
+    it("names the dialog after the section it was opened from", async () => {
+      // `label` is the dialog's accessible name in the real platform, and it
+      // is base-class config rather than an `@api` property of the picker —
+      // so nothing asserted that it survived the trip until the mock stopped
+      // dropping it. Section 1, not 0, so "names the section" is
+      // distinguishable from "names the first one".
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 1);
+
+      expect(configOf(picker).label).toBe("Add items to Support");
+      expect(configOf(picker).size).toBe("small");
     });
 
     it("puts the picker in a real lightning-modal rather than a hand-rolled panel", async () => {

@@ -17,6 +17,19 @@
       onchange={handleSearch}
     ></lightning-input>
 
+    <!-- Polite rather than assertive: this is feedback on typing, not on a
+         gesture the user has just completed and is about to repeat. Without
+         it the list narrows in silence — a sighted user watches 174 entries
+         become one and a screen-reader user is told nothing, which is the one
+         control the criterion says makes 174 items usable. Atomic, or a
+         reader may voice only the digit that changed. -->
+    <span
+      class="slds-assistive-text rstk-nav-picker__announcer"
+      aria-live="polite"
+      aria-atomic="true"
+      >{searchStatus}</span
+    >
+
     <template lwc:if={hasMatches}>
       <ul class="rstk-nav-picker__list">
         <template for:each={visibleItems} for:item="item">
@@ -46,9 +59,7 @@
       <p class="rstk-nav-picker__empty">{noMatchMessage}</p>
     </template>
     <template lwc:else>
-      <p class="rstk-nav-picker__empty">
-        Every tab you can reach is already in this layout.
-      </p>
+      <p class="rstk-nav-picker__empty">{emptyLayoutMessage}</p>
     </template>
   </lightning-modal-body>
 

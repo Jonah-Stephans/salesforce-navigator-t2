@@ -54,6 +54,35 @@ let openModals = [];
  */
 const handles = new WeakMap();
 
+/**
+ * The base component's own public surface, as distinct from a subclass's
+ * `@api` properties. These four are declared on the class below rather than on
+ * the picker, and `element[key] = config[key]` reaches a component only for
+ * `@api` properties — so applied that way they landed as unknown
+ * own-properties on the host (LWC logs "Unknown public property" for each) and
+ * the component never saw them. `disableClose` in particular was accepted and
+ * silently ignored, so `open({disableClose: true})` followed by Escape closed
+ * the modal anyway: a mock passing for the wrong reason.
+ *
+ * They are carried on the side instead, keyed on the host, and adopted by the
+ * instance in `connectedCallback` — which is the same shape as the `handles`
+ * bridge above and for the same reason: this file is linted by the flat
+ * config's plain-JS `jest-mocks` entry, which has no decorator-aware parser,
+ * so `@api` cannot be written here.
+ */
+const BASE_CONFIG_KEYS = ["label", "size", "description", "disableClose"];
+
+/** host element -> the base-class config `open()` was called with. */
+const configs = new WeakMap();
+
+/**
+ * What a component asked the base for, so a test can assert the dialog's
+ * accessible name and its size rather than take them on trust.
+ */
+export function configOf(host) {
+  return configs.get(host) || {};
+}
+
 export function getOpenModals() {
   return openModals.slice();
 }
@@ -79,15 +108,27 @@ export function resetModals() {
 
 export default class LightningModal extends LightningElement {
   // The platform's public surface. Plain fields rather than `@api` for the
-  // parser reason above; nothing in this mock reads them except
-  // `disableClose`, and `open()` assigns them onto the host so a test can see
-  // what a component asked for.
+  // parser reason above; `open()` routes them through `configs` instead, and
+  // `connectedCallback` adopts them below, so the instance really does hold
+  // what the caller asked for.
   label;
   size;
   description;
   disableClose = false;
 
   connectedCallback() {
+    // Adopt the base-class config before anything reads it. `open()` records
+    // it against the host before appending, so it is here by now; a modal
+    // mounted directly with `createElement` has none and keeps its defaults.
+    const config = configs.get(this.template.host);
+    if (config) {
+      BASE_CONFIG_KEYS.forEach((key) => {
+        if (key in config) {
+          this[key] = config[key];
+        }
+      });
+    }
+
     // The base component's own Escape handling. A listener on the host rather
     // than inside a template, because the subclass owns the template and the
     // platform's base owns this behaviour — a picker that handled Escape
@@ -115,9 +156,17 @@ export default class LightningModal extends LightningElement {
 
   static open(config = {}) {
     const element = createElement("c-lightning-modal", { is: this });
+    const baseConfig = {};
     Object.keys(config).forEach((key) => {
-      element[key] = config[key];
+      if (BASE_CONFIG_KEYS.indexOf(key) !== -1) {
+        // The base's own, which no amount of host assignment would reach.
+        baseConfig[key] = config[key];
+      } else {
+        // The subclass's `@api` properties, which host assignment does reach.
+        element[key] = config[key];
+      }
     });
+    configs.set(element, baseConfig);
 
     return new Promise((resolve) => {
       trackModal(element, resolve);

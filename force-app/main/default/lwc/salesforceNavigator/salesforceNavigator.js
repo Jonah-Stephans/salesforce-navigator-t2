@@ -149,6 +149,15 @@ export default class SalesforceNavigator extends LightningElement {
 
   saveTimer;
 
+  // Whether this instance is still in the document. Every other write path in
+  // this file is driven by a template event and so cannot fire after
+  // disconnect; the picker is the exception, because `LightningModal.open`
+  // mounts it on `document.body` and it therefore outlives the Navigator. A
+  // choice made after the user has left the tab would otherwise start a 1s
+  // autosave timer that `disconnectedCallback` has already come and gone for
+  // — precisely the hazard `@lwc/lwc/no-async-operation` names.
+  isAttached = false;
+
   // What kind of drag is in flight, and where it started. Held here rather
   // than in a section because only this component sees both kinds: a drop
   // landing on a section card can mean "put this section here" or "put this
@@ -218,6 +227,7 @@ export default class SalesforceNavigator extends LightningElement {
   pages = [];
 
   connectedCallback() {
+    this.isAttached = true;
     // Imperative rather than wired: the component holds the layout as its own
     // state from the first change onward, so a cached wire re-emission after a
     // save would only ever fight with what the user is looking at.
@@ -250,6 +260,7 @@ export default class SalesforceNavigator extends LightningElement {
   }
 
   disconnectedCallback() {
+    this.isAttached = false;
     // A pending debounce must not be dropped on the floor when the user
     // navigates away — that is precisely the "unsaved state to lose" the
     // design says does not exist here.
@@ -661,6 +672,12 @@ export default class SalesforceNavigator extends LightningElement {
 
   /** The one call site for putting an item into a section. */
   addChosenItem(sectionIndex, tabId) {
+    // The picker outlives this component — see `isAttached`. A choice that
+    // arrives after the user has left the tab must not schedule a save no
+    // `disconnectedCallback` will ever flush.
+    if (!this.isAttached) {
+      return;
+    }
     if (!tabId) {
       return;
     }

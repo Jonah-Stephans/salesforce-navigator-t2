@@ -1130,13 +1130,24 @@ describe("c-navigator-section", () => {
 
       const button = addButtonOf(element);
       expect(button).not.toBeNull();
-      expect(button.label).toBe("Add items");
+      expect(button.label).toBe("Add items to Selling");
     });
 
     it("names the section on the Add items button, so a column of them is not identical", () => {
       const element = createSection(resolvedSection({ name: "Support" }));
 
       expect(addButtonOf(element).title).toBe("Add items to Support");
+    });
+
+    it("names the section in the button's own label, which is what a screen reader reads", () => {
+      // A <button>'s accessible name comes from its *content* before its
+      // `title` (HTML-AAM), so `title` is a mouse tooltip and nothing else —
+      // pinning it leaves every card in the layout announced as the identical
+      // "Add items". `lightning-button` exposes no `aria-label` passthrough,
+      // so the name has to be in `label`, and this asserts it there.
+      const element = createSection(resolvedSection({ name: "Support" }));
+
+      expect(addButtonOf(element).label).toBe("Add items to Support");
     });
 
     it("asks the parent to open the picker for its own section", () => {

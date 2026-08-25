@@ -102,6 +102,23 @@ fails **16**, and making it list ids rather than labels fails **14**.
 **What remains unverifiable here:** that `LightningModal.open()` mounts the picker as a modal in a
 real browser. That is the base component's, and it is the one step the mock supplies.
 
+**Amended by the fix pass — what "with the section named on it" was actually worth.** The claim
+above was true of the button's `title` and false of its accessible name. A `<button>`'s name comes
+from its content before its `title` (HTML-AAM), so the section name sat in a mouse tooltip and every
+card in the layout announced the identical "Add items"; the test that looked like it covered this
+asserted `.title`. The name is now in the button's `label`, which is both its visible text and its
+accessible name, and is asserted there. So this clause is *verified again* — but it was not before
+the fix, and the visible wording of the button changed with it, from "Add items" to "Add items to
+&lt;section&gt;". Criterion 2 stays unticked for the reason it always was: `open()` mounting a real
+modal is the platform's.
+
+**Also amended: the dialog's own name.** `handleSectionAddItems` passes `label: "Add items to
+&lt;section&gt;"`, which in the real platform is the dialog's accessible name — and it travelled a
+path the mock could not carry, because `element[key] = config[key]` reaches an LWC component only
+for `@api` properties and `label` is the base's. It was neither delivered nor asserted. The mock now
+carries the base's config properly and a test reads it back, so what the parent asks for is pinned
+on this side; that the platform turns that `label` into the dialog's name remains the base's.
+
 ### Criterion 9 — operable from the keyboard alone, and closing with Escape adds nothing
 
 Two halves and both are partly the base's, which is why this one is not ticked at all.
@@ -152,6 +169,10 @@ browser-driver questions against a real org, which the spec's *Test entry points
   screen) while asserting the picker's wording is the platform's.
 - **Opening and cancelling reach no `applyLayout` at all**, guarded twice: on the resolved value
   being falsy, and on the payload-equality comparison `handleItemRename` established in slice 06.
+  *(Fix pass: both guards are now asserted, and the first turns out to have a job the second cannot
+  do — an empty id is in the accessible set, so without `if (!tabId)` the layout would gain an
+  `{id: ""}` and the equality comparison would let the write through. A third guard joined them, on
+  the component still being attached; see finding 5.)*
   Slice 03's criterion — no layout record for a user who has only ever looked — is driven against a
   user with *no* layout, so a write would be a `createLayout`, which is the row that must not exist.
   Making `open()` schedule a save fails **3**.
@@ -285,7 +306,36 @@ once (the picker composes from the base modal's own header, body and footer). Th
 the narrow claim the design makes about composing from base components, and it is *not* evidence
 that a real modal renders — which is precisely why criteria 2 and 9 are left unticked.
 
-**Verification.** `npm test` is **393 passed across 6 suites**, before and after every mutation and
+**The fix pass re-ran all 31 rows against the fixed code.** The suite is now **407 across 6 suites**
+and green either side of every row; the runner still aborts loudly on a pattern that is missing or
+non-unique, and it aborted three times before the patterns were widened (rows 6, 11 and 25 each
+match a second, unrelated call site — `renameItem`'s `storedSource`, `itemdragstart`'s
+`sectionIndex`, and `handleItemMoveTo`'s grab release — so each is now anchored on its own
+surrounding statement). **No count fell.** Every row bites at or above the number the table records:
+
+| # | recorded | now | | # | recorded | now | | # | recorded | now |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 16 | 16 | | 12 | 5 | 6 | | 23 | 1 | 1 |
+| 2 | 7 | 25 | | 13 | 2 | 2 | | 24 | 1 | 1 |
+| 3 | 8 | 10 | | 14 | 2 | 2 | | 25 | 1 | 1 |
+| 4 | 1 | 2 | | 15 | 22 | 24 | | 26 | 1 | 1 |
+| 5 | 3 | 4 | | 16 | 1 | 2 | | 27 | 1 | 1 |
+| 6 | 3 | 4 | | 17 | 1 | 1 | | 28 | 13 | 15 |
+| 7 | 5 | 13 | | 18 | 5 | 5 | | 29 | 1 | 1 |
+| 8 | 3 | 5 | | 19 | 14 | 14 | | 30 | 1 | 1 |
+| 9 | 3 | 3 | | 20 | 3 | 4 | | 31 | 1 | 1 |
+| 10 | 22 | 26 | | 21 | 7 | 7 | | | | |
+| 11 | 4 | 4 | | 22 | 1 | 1 | | | | |
+
+The rises are the fourteen tests this pass added biting on rows they overlap — rows 10 and 15 gain
+the new accessible-name and live-region assertions, rows 2, 3 and 28 gain the four live-region
+tests, rows 5, 8, 12 and 20 gain the two write-guard tests and the dialog-name test, and row 7 gains
+the two new model purity tests. Rows 2, 4 and 7 also differ from the build's numbers for the reason
+the critic recorded: the mutation is worded differently (a hard `() => false` filter, Escape applied
+in the mock, a memo inside `availableTabs`), not because coverage moved.
+
+**Verification.** `npm test` was **393 passed across 6 suites** at build; it is **407** after this
+fix pass, before and after every mutation and
 after the deploy. `npm run lint`, `npm run lint:slds-gate` (all six assertions ok) and
 `npm run prettier:verify` are clean. `grep -rn 'splice' force-app | grep -v __tests__` returns
 exactly the two lines inside `reorder`. `sf project deploy start` reported the four-bundle
@@ -295,9 +345,31 @@ files, and `--ignore-conflicts` then deployed 18 files `Succeeded`, Deploy ID `0
 this slice — and the untracked `sketches/` directory belonging to a parallel session, which was
 neither edited nor staged.
 
+**The fix pass re-deployed.** `sf project deploy start` (no `--target-org`) reported the same
+source-tracking conflict, on the three bundles this pass touched. All 12 org-side files were
+retrieved to a scratchpad with `--target-metadata-dir … --unzip` — the form that cannot touch the
+working tree — and diffed against `git show HEAD:<path>`. Every one differs only by the trailing
+newline the platform strips on retrieve, so `--ignore-conflicts` was used; the deploy reported 12
+`Changed`, `Status: Succeeded`, Deploy ID `0AfO800000ZSPFSKA5`. `npm run lint`,
+`npm run lint:slds-gate` (all six assertions ok) and `npm run prettier:verify` are clean;
+`grep -rn 'splice' force-app | grep -v __tests__` still returns exactly the two lines inside
+`reorder`; and `aria-grabbed`, `aria-dropeffect`, `if:true` and `if:false` still appear nowhere in
+`force-app` outside the tests asserting their absence. The untracked `sketches/` directory was again
+neither edited nor staged.
+
 ## Critique findings
 
-- [ ] **The Add items button has the same accessible name on every card, so criterion 2's one verified
+- [x] fixed — the section name moved into the button's `label` (`label={addItemsLabel}`, `title`
+      retained for the pointer tooltip), and a new test
+      `names the section in the button's own label, which is what a screen reader reads` asserts it
+      there. It was watched red first:
+      `expect(received).toBe(expected) … Expected: "Add items to Support" / Received: "Add items"`
+      at `navigatorSection.test.js:1150`. The pre-existing
+      `offers an Add items button in its header` then failed with
+      `Expected: "Add items" / Received: "Add items to Selling"` and its assertion was updated to the
+      new name rather than removed. The `.title` assertion is kept — the tooltip is still set. See
+      `## Deviations` for what this does to criterion 2's *verified* clause.
+      **The Add items button has the same accessible name on every card, so criterion 2's one verified
       clause is weaker than it reads.** `navigatorSection.html` gives it `title={addItemsLabel}` while
       its visible text is the literal `label="Add items"`. A `<button>`'s accessible name comes from
       its content before its `title` (HTML-AAM), so `title` is a mouse tooltip and nothing else: every
@@ -311,7 +383,22 @@ neither edited nor staged.
       passthrough, so `title` cannot be made to do this job. Re-assert on the computed accessible name,
       not on `title`: mutating `title={addItemsLabel}` to a constant `title="Add items"` fails exactly
       1 test today, which is the tooltip assertion and not an accessibility one.
-- [ ] **Two guards this slice's Deviations calls load-bearing are asserted by nothing — both survive
+- [x] fixed — both guards now have a test, and both were watched red by applying the deletion.
+      (a) `writes nothing when the picker closes with a falsy value that is not undefined` drives an
+      entry whose `data-id` is `""` — the shape the payload-equality guard *cannot* swallow, because
+      an empty id is in the accessible set and `addItemToSection` would store `{id: ""}`. Deleting
+      `if (!tabId) { return; }` fails exactly that test:
+      `expect(received).toEqual(expected) … - Expected - 0 / + Received + 1` on
+      `itemLabelsBySection`, with `createLayout`/`updateLayout` then called. It is driven against a
+      *stored* layout rather than a seeded one because `buildSeededLayout` places every reachable
+      tab, so a user with no layout is offered nothing at all and the route cannot exist for them.
+      (b) `writes nothing when a removal names no item on screen` fires `itemremove` with
+      `{sectionIndex: 0, index: 9}` against a user `getLayouts` returns nothing for. Deleting
+      `if (serializeLayout(next) === serializeLayout(this.layout))` from `handleItemRemove` fails it:
+      `expect(jest.fn()).not.toHaveBeenCalled() … Expected number of calls: 0 / Received number of
+      calls: 1` on `createLayout`. Each mutation failed exactly 1 test; both were restored and the
+      suite is green.
+      **Two guards this slice's Deviations calls load-bearing are asserted by nothing — both survive
       deletion with the suite fully green at 393.** (a) `salesforceNavigator.addChosenItem`'s
       `if (!tabId) { return; }`: removing it leaves 393 passing, because `addItemToSection` refuses an
       id absent from `tabs` and the payload-equality comparison then swallows the no-op. The Deviations
@@ -324,7 +411,19 @@ neither edited nor staged.
       tests are wanted, both against a user `getLayouts` returns nothing for, both asserting
       `createLayout` is never called: one firing `itemremove` with an index that names no rendered item,
       and one closing the picker with a falsy-but-not-`undefined` value.
-- [ ] **Row 30's general form is still open on two older model functions, which is the direct answer to
+- [x] fixed — `deleteSection` and `addSection` each gained the same three-level assertion `removeItem`
+      carries: per section, per `items` array, per *item* (`expect(source.items).not.toContain(item)`,
+      which is what catches a container-identity-only check), plus a write-through. Both were watched
+      red under the deletion. Dropping `.map(copySection)` from `deleteSection`'s `filter` fails
+      `deleteSection hands back copies …` with
+      `expect(received).not.toBe(expected) … Expected: not {"columns": 3, "items": [{"id": "Contact"}],
+      "name": "Second"}`. Dropping it from `addSection`'s spread fails
+      `addSection hands back copies …` with
+      `Expected: not {"columns": 2, "items": [{"id": "Account"}], "name": "First"}`. The item-level
+      mutation — `copySection` returning `items: itemsOf(section).slice()` — now fails **8** rather
+      than the 6 the critic measured, which is these two joining it. Production code unchanged; the
+      hole was in the suite.
+      **Row 30's general form is still open on two older model functions, which is the direct answer to
       "do the older purity assertions share the hole".** The per-*item* half is now closed — making
       `copySection` return `items: itemsOf(section).slice()` (new array, the caller's own item objects)
       fails 6. But `deleteSection` and `addSection` have no `hands back copies` test at all, and each
@@ -336,7 +435,18 @@ neither edited nor staged.
       output into `applyLayout` and into `availableTabs`. Give each of them the same three-level
       assertion `removeItem` now carries — per section, per `items` array, and per item, plus a
       write-through check.
-- [ ] **The picker tells a screen-reader user nothing about what the search found.** There is no live
+- [x] fixed — the picker's body gained a polite atomic live region
+      (`span.rstk-nav-picker__announcer`, `aria-live="polite"`, `aria-atomic="true"`) fed by a new
+      `searchStatus` getter: "174 items available." with no term, "11 items match “Tab 13”." /
+      "1 item matches “Tab 137”." with one, and each empty state's own sentence when there is nothing
+      to list. The nothing-left-to-add wording moved out of the template into an `emptyLayoutMessage`
+      getter so the `<p>` and the region cannot drift apart. Four tests, watched red first; the
+      region-shape one is the clean red —
+      `expect(received).not.toBeNull() … Received: null` on
+      `element.shadowRoot.querySelector("[aria-live]")` — and the three wording ones failed off the
+      same missing element. They assert the region's `aria-live`/`aria-atomic` the way the section
+      and navigator announcers are asserted, not merely that the text is somewhere in the shadow root.
+      **The picker tells a screen-reader user nothing about what the search found.** There is no live
       region anywhere in `navigatorItemPicker.html`. Typing narrows the list silently, and both empty
       states — `{noMatchMessage}` and "Every tab you can reach is already in this layout." — are plain
       `<p>`s that appear and disappear with no announcement. A sighted user watches 174 entries become
@@ -345,7 +455,15 @@ neither edited nor staged.
       carrying the match count and, when there are none, the relevant empty-state sentence. Assert it as
       a region a user is *told* about, the way the section and navigator announcers are asserted, not
       merely as text present in the shadow root.
-- [ ] **A picker resolved after the Navigator is disconnected schedules an autosave timer nothing will
+- [x] fixed — an `isAttached` field, set in `connectedCallback` and cleared in
+      `disconnectedCallback`, now guards `addChosenItem` as its first statement, so a choice arriving
+      after the user has left the tab reaches no `applyLayout` and starts no timer. The new test
+      `schedules no autosave when the picker resolves after the Navigator has gone` removes the
+      Navigator from the document between `open()` and the entry click and asserts on
+      `jest.getTimerCount()` as well as on the Apex mocks — the hazard is the orphaned timer, not
+      only the call. It was watched red: `expect(received).toBe(expected) … Expected: 0 / Received: 1`
+      at `salesforceNavigator.test.js:3239`, which is exactly the 1s `setTimeout` left running.
+      **A picker resolved after the Navigator is disconnected schedules an autosave timer nothing will
       flush.** `LightningModal.open` mounts the picker outside this component's tree, so it outlives the
       Navigator; `handleSectionAddItems`'s `.then((tabId) => this.addChosenItem(sectionIndex, tabId))`
       has no connected check and no `.catch`. A user who leaves the Navigator tab with the picker open
@@ -356,7 +474,18 @@ neither edited nor staged.
       `scheduleSave` argues is closed. No test covers it. Guard `addChosenItem` (or the `.then`) on the
       component still being connected, and add a test that disconnects the element between `open()` and
       the click.
-- [ ] **The modal mock silently drops two of the three config values the parent passes it, and one of
+- [x] fixed — the mock now separates the base's own config (`label`, `size`, `description`,
+      `disableClose`) from the subclass's `@api` properties: `open()` records the four in a `configs`
+      WeakMap keyed on the host instead of assigning them onto it, and `connectedCallback` adopts
+      them onto the instance. That is the same bridge shape `handles` already uses, and for the same
+      parser reason `@api` cannot be written in this file. A new `configOf(host)` export lets a test
+      read what a component asked for. Three tests in the picker suite plus one in the navigator
+      suite (`names the dialog after the section it was opened from`, driven on section **1** so
+      "names the section" is distinguishable from "names the first one"). Watched red:
+      `expect(received).toHaveLength(expected) … Expected length: 1 / Received length: 0` — Escape
+      closed the modal despite `disableClose: true`, exactly as the critic demonstrated. Dropping
+      `label` from `handleSectionAddItems` now fails 1.
+      **The modal mock silently drops two of the three config values the parent passes it, and one of
       them is the dialog's accessible name.** `open()` applies config with `element[key] = config[key]`,
       which in LWC only reaches the component for `@api` properties. `availableItems` and `sectionName`
       are `@api` on the picker and do reflect; `label`, `size` and `disableClose` are plain fields on the

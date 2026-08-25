@@ -37,13 +37,16 @@
            overflow menu beside it, because it is the section's primary
            action and the only way an item that has been removed comes back —
            and because the empty state below names it, which it could not do
-           if it were hidden behind a menu. `title` names the section: every
-           card carries one of these, and a row of buttons all announced as
-           "Add items" leaves the user unable to tell which section they are
-           filling. -->
+           if it were hidden behind a menu. The section's name is in the
+           `label`, not only the `title`: a button's accessible name comes
+           from its content before its `title` (HTML-AAM), so a `title` alone
+           is a mouse tooltip and every card in the layout would announce the
+           identical "Add items". `lightning-button` exposes no `aria-label`
+           passthrough, so `label` is the only place the name can go. `title`
+           keeps it too, for the pointer user's tooltip. -->
       <lightning-button
         class="rstk-nav-section__add"
-        label="Add items"
+        label={addItemsLabel}
         title={addItemsLabel}
         onclick={handleAddItems}
       ></lightning-button>

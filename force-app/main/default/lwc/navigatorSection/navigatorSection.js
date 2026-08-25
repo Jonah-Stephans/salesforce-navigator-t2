@@ -258,11 +258,16 @@ export default class NavigatorSection extends LightningElement {
   }
 
   /**
-   * What the Add items button is called to a screen reader. Every card in the
-   * layout carries one, so a button announced only as "Add items" leaves the
-   * user with a column of identically-named buttons and no way to tell which
-   * section they are about to fill — the same reasoning as `menuLabel` on an
-   * item, and as `cardLabel` above.
+   * What the Add items button is called. Every card in the layout carries
+   * one, so a button announced only as "Add items" leaves the user with a
+   * column of identically-named buttons and no way to tell which section they
+   * are about to fill — the same reasoning as `menuLabel` on an item, and as
+   * `cardLabel` above.
+   *
+   * This is the button's `label`, not merely its `title`: a button's
+   * accessible name comes from its content before its `title`, so a `title`
+   * carrying the section name is a pointer tooltip and reaches a screen
+   * reader user not at all.
    */
   get addItemsLabel() {
     return `Add items to ${this.cardLabel}`;

@@ -1,6 +1,11 @@
 import { createElement } from "lwc";
 import NavigatorItemPicker from "c/navigatorItemPicker";
-import { trackModal } from "lightning/modal";
+import {
+  trackModal,
+  getOpenModals,
+  configOf,
+  resetModals
+} from "lightning/modal";
 import fs from "fs";
 import path from "path";
 
@@ -158,6 +163,64 @@ describe("c-navigator-item-picker", () => {
 
     expect(entriesOf(element)).toHaveLength(0);
     expect(element.shadowRoot.textContent).toContain("zzzz");
+  });
+
+  describe("what the search tells a screen-reader user", () => {
+    function liveRegionOf(element) {
+      return element.shadowRoot.querySelector("[aria-live]");
+    }
+
+    function liveTextOf(element) {
+      return liveRegionOf(element).textContent.trim();
+    }
+
+    it("carries a polite live region, so a narrowing list is not silent", async () => {
+      // A sighted user watches 174 entries become one. Without a live region
+      // a screen-reader user gets nothing from the one control the criterion
+      // says makes 174 items usable, and has to tab into the list to find out
+      // whether anything matched at all. Polite rather than assertive: this
+      // is feedback on typing, not on a gesture just completed.
+      const element = createPicker();
+      await flush();
+
+      const region = liveRegionOf(element);
+      expect(region).not.toBeNull();
+      expect(region.getAttribute("aria-live")).toBe("polite");
+      // Atomic, or a reader may voice only the digit that changed.
+      expect(region.getAttribute("aria-atomic")).toBe("true");
+    });
+
+    it("counts what the search found, and updates as the list narrows", async () => {
+      const element = createPicker({ availableItems: bulkAvailable(174) });
+      await flush();
+      expect(liveTextOf(element)).toBe("174 items available.");
+
+      await typeSearch(element, "Tab 13");
+
+      expect(liveTextOf(element)).toBe("11 items match “Tab 13”.");
+
+      await typeSearch(element, "Tab 137");
+
+      expect(liveTextOf(element)).toBe("1 item matches “Tab 137”.");
+    });
+
+    it("puts the no-match sentence in the live region, not only on screen", async () => {
+      const element = createPicker();
+      await flush();
+
+      await typeSearch(element, "zzzz");
+
+      expect(liveTextOf(element)).toBe("No item matches “zzzz”.");
+    });
+
+    it("puts the nothing-left-to-add sentence there too", async () => {
+      const element = createPicker({ availableItems: [] });
+      await flush();
+
+      expect(liveTextOf(element)).toBe(
+        "Every tab you can reach is already in this layout."
+      );
+    });
   });
 
   it("puts every item back when the search box is emptied", async () => {
@@ -341,5 +404,71 @@ describe("c-navigator-item-picker", () => {
     // and then behave like a hard-coded colour in dark mode.
     expect(css).not.toMatch(/--slds-g-color-palette-/);
     expect(css).not.toMatch(/--slds-g-color-[a-z-]*base-(50|100)/);
+  });
+
+  describe("what open() actually hands the base component", () => {
+    afterEach(() => {
+      resetModals();
+    });
+
+    async function openPicker(config = {}) {
+      NavigatorItemPicker.open({
+        size: "small",
+        label: "Add items to Selling",
+        availableItems: AVAILABLE,
+        sectionName: "Selling",
+        ...config
+      });
+      await flush();
+      return getOpenModals()[0];
+    }
+
+    function escape(element) {
+      element.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          composed: true
+        })
+      );
+    }
+
+    it("carries the base's own config through, not only the @api properties", async () => {
+      // `open()` used to apply every key with `element[key] = config[key]`,
+      // which in LWC reaches the component only for `@api` properties.
+      // `availableItems` and `sectionName` are `@api` and did reflect; `label`
+      // — the dialog's accessible name in the real platform, and one
+      // `handleSectionAddItems` does pass — landed as an unknown own-property
+      // on the host and the component never saw it.
+      const picker = await openPicker();
+
+      expect(configOf(picker)).toEqual({
+        size: "small",
+        label: "Add items to Selling"
+      });
+      expect(picker.availableItems).toHaveLength(AVAILABLE.length);
+    });
+
+    it("honours disableClose, so Escape is not silently ignored under test", async () => {
+      // Demonstrated rather than reasoned: this used to close anyway, which
+      // means a future `disableClose` would work in the org and be ignored
+      // here — the mock passing for the wrong reason.
+      const picker = await openPicker({ disableClose: true });
+
+      escape(picker);
+      await flush();
+
+      expect(getOpenModals()).toHaveLength(1);
+      expect(picker.parentNode).not.toBeNull();
+    });
+
+    it("still closes on Escape when disableClose was not asked for", async () => {
+      const picker = await openPicker();
+
+      escape(picker);
+      await flush();
+
+      expect(getOpenModals()).toHaveLength(0);
+    });
   });
 });
