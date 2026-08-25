@@ -201,6 +201,22 @@ export default class SalesforceNavigator extends LightningElement {
 
   saveTimer;
 
+  /**
+   * The change waiting for its debounce, as `{layoutId, name, layoutJson}`,
+   * captured **when the change was made** rather than when the timer fires.
+   *
+   * That difference is the whole of it. `this.layoutId` and `this.storedLayout`
+   * both move when an activation, a create or a delete resolves, and an
+   * activation round trip that completes inside the 1s window is the *ordinary*
+   * case rather than the rare one. A target read at timer-fire time would
+   * therefore describe the layout the user had just been moved to, carrying the
+   * payload of the layout they had moved from — losing the edit and overwriting
+   * a second layout with foreign content in the same call. Capturing here means
+   * a change belongs to the layout it was made on from the instant it is made,
+   * whatever resolves in between.
+   */
+  pendingSave;
+
   // Whether this instance is still in the document. Every other write path in
   // this file is driven by a template event and so cannot fire after
   // disconnect; the picker is the exception, because `LightningModal.open`
@@ -344,7 +360,7 @@ export default class SalesforceNavigator extends LightningElement {
     const readable = layouts.filter((row) => row.isReadable !== false);
     this.layouts = readable.map(SalesforceNavigator.cachedLayout);
 
-    const active = readable.find((row) => row.isActive) || readable[0];
+    const active = SalesforceNavigator.activeRowIn(readable);
     if (!active) {
       return;
     }
@@ -359,6 +375,27 @@ export default class SalesforceNavigator extends LightningElement {
     this.layoutId = active.layoutId;
     this.layoutName = active.name || DEFAULT_LAYOUT_NAME;
     this.storedLayout = deserializeLayout(active.layoutJson);
+  }
+
+  /**
+   * Which of the store's readable rows this component shows. **One definition,
+   * shared by the load path and the switch/delete path**, so the two cannot
+   * disagree about a store that has readable rows with none of them flagged.
+   *
+   * The controller no longer produces that state itself — `createLayout`
+   * activates the row it creates when the owner has no active one, so "exactly
+   * one active" holds in the store. It is still reachable *here*, though, and
+   * by a route the server cannot close: when the active row is one this package
+   * cannot read, it is filtered out before this runs and the rows left carry no
+   * flag. Falling back to the first of them shows the user a layout they own
+   * rather than the seeded arrangement they do not.
+   *
+   * `readable[0]` is undefined for an empty list, which is the first-open state
+   * and is the caller's to interpret — `adoptFromStore` adopts it as one and
+   * `adoptActiveLayout` leaves the seeded layout computed.
+   */
+  static activeRowIn(readable) {
+    return readable.find((row) => row.isActive) || readable[0];
   }
 
   /**
@@ -601,35 +638,61 @@ export default class SalesforceNavigator extends LightningElement {
    * their layout is a real change — so it goes through the ordinary autosave,
    * which creates the row under the new name. Cancelling still writes nothing,
    * because a cancel never reaches here.
+   *
+   * **A rename the server refuses is taken back off the screen.** The new name
+   * is shown immediately, because a rename that waited a round trip to appear
+   * would feel broken — but left standing after a rejection it would be a name
+   * the store does not hold, in the button and in the menu, and the next
+   * unrelated autosave would carry it to `updateLayout` and make it real. So
+   * the previous name is restored on failure, and the store's own answer is
+   * adopted on success, which is what every other path in this file does.
    */
   renameCurrentLayout(name) {
     if (!name || name === this.layoutName) {
       return;
     }
-    this.layoutName = name;
 
     if (!this.layoutId) {
+      this.layoutName = name;
       this.applyLayout(this.layout);
       this.announce(`Layout renamed to ${name}.`);
       return;
     }
 
     const layoutId = this.layoutId;
-    this.layouts = this.layouts.map((row) => {
-      return row.layoutId === layoutId ? { ...row, name } : row;
-    });
+    const previousName = this.layoutName;
+    this.adoptLayoutName(layoutId, name);
     this.saveChain = this.saveChain
       .then(() => renameLayout({ layoutId, name }))
-      .then(() => {
+      .then((saved) => {
         this.saveErrorMessage = undefined;
+        this.adoptLayoutName(layoutId, (saved && saved.name) || name);
         this.announce(`Layout renamed to ${name}.`);
       })
       .catch((error) => {
+        this.adoptLayoutName(layoutId, previousName);
         this.saveErrorMessage = SalesforceNavigator.reduceError(
           error,
           SAVE_ERROR_MESSAGE
         );
       });
+  }
+
+  /**
+   * Puts one layout's name to `name` — everywhere this component holds it.
+   *
+   * The menu button follows **only while that layout is still the one on
+   * screen**. If the user has switched since, `this.layoutName` is a different
+   * layout's name and is not this rename's to touch, whether the rename
+   * succeeded or was refused.
+   */
+  adoptLayoutName(layoutId, name) {
+    this.layouts = this.layouts.map((row) => {
+      return row.layoutId === layoutId ? { ...row, name } : row;
+    });
+    if (this.layoutId === layoutId) {
+      this.layoutName = name;
+    }
   }
 
   /**
@@ -677,7 +740,7 @@ export default class SalesforceNavigator extends LightningElement {
     const readable = (rows || []).filter((row) => row.isReadable !== false);
     this.layouts = readable.map(SalesforceNavigator.cachedLayout);
 
-    const active = readable.find((row) => row.isActive);
+    const active = SalesforceNavigator.activeRowIn(readable);
     if (!active) {
       this.layoutId = undefined;
       this.layoutName = DEFAULT_LAYOUT_NAME;
@@ -1300,6 +1363,15 @@ export default class SalesforceNavigator extends LightningElement {
     if (this.hasLayoutLoadError) {
       return;
     }
+    // **Which layout is being written is decided here — at the moment of the
+    // change — and carried to the call.** See `pendingSave`. A burst
+    // overwrites it, which is exactly what the debounce coalescing means: the
+    // last change in a burst is the state the layout is in.
+    this.pendingSave = {
+      layoutId: this.layoutId,
+      name: this.layoutName,
+      layoutJson: serializeLayout(this.layout)
+    };
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
     }
@@ -1341,26 +1413,27 @@ export default class SalesforceNavigator extends LightningElement {
       clearTimeout(this.saveTimer);
       this.saveTimer = undefined;
     }
+    this.pendingSave = undefined;
   }
 
   /**
-   * **Which layout is being written is decided here, with the payload, and
-   * carried to the call.**
+   * Puts the change that is waiting onto the save chain.
    *
    * This is the exact seam the previous project's bug lived at. Reading
-   * `this.layoutId` inside the chained callback instead would mean a save
-   * queued while looking at one layout, and resolving after the user switched,
-   * writes the first layout's sections onto the second — the same "one row, two
-   * meanings" failure the controller closed on its own side, reopened from the
-   * client. The id, the name and the payload are one value taken at one moment,
-   * so a switch that happens in between cannot reach it.
+   * `this.layoutId` here — or inside the chained callback — instead of taking
+   * the target `scheduleSave` captured would mean a save queued while looking
+   * at one layout, and firing after the user switched, writes the first
+   * layout's sections onto the second: the same "one row, two meanings"
+   * failure the controller closed on its own side, reopened from the client.
+   * The id, the name and the payload are one value taken at one moment, and
+   * that moment is when the user made the change.
    */
   save() {
-    const target = {
-      layoutId: this.layoutId,
-      name: this.layoutName,
-      layoutJson: serializeLayout(this.layout)
-    };
+    const target = this.pendingSave;
+    this.pendingSave = undefined;
+    if (!target) {
+      return this.saveChain;
+    }
     this.saveChain = this.saveChain.then(() => this.persist(target));
     return this.saveChain;
   }

@@ -1156,6 +1156,113 @@ private with sharing class NavigatorLayoutControllerTest {
     );
   }
 
+  /**
+   * The same rule, on the row that actually holds the flag — which is the only
+   * fixture that can tell "leave the flag as it is" from "clear it".
+   *
+   * The test above updates `First`, and `First` is not the active layout in
+   * `seedThree()`, so setting its flag to false is a no-op and both rules pass
+   * it: *a fixture that cannot distinguish two rules will pass both*, recurring
+   * inside the test written to close the defect it caused. Updating `Second`
+   * discriminates — under `row.Is_Active__c = makeActive == true` the user is
+   * left with no active layout at all, which is the failure mode this class's
+   * `makeActive == false` semantics exist to prevent.
+   */
+  @IsTest
+  static void anUpdateOnTheActiveLayoutThatClaimsNoFlagLeavesItActive() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+    Id secondId = layoutIdNamed('Second');
+
+    Test.startTest();
+    System.runAs(owner) {
+      NavigatorLayoutController.updateLayout(
+        secondId,
+        'Second',
+        '{"schemaVersion":2,"sections":[{"name":"Rewritten","columns":3,"items":[]}]}',
+        false
+      );
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      'Rewritten',
+      sectionNameOf('Second'),
+      'The payload must still be written'
+    );
+    Assert.areEqual(
+      1,
+      activeCount(),
+      'An ordinary autosave on the layout the user is looking at must never leave them with no active layout'
+    );
+    Assert.areEqual(
+      'Second',
+      activeName(),
+      'The layout the save was for must still be the active one'
+    );
+  }
+
+  /**
+   * The "exactly one active" invariant at the create seam.
+   *
+   * `createLayout(name, json, false)` is reachable through the `@AuraEnabled`
+   * surface, and on an owner with nothing else active it used to store a row
+   * that no read could ever land on — `activateLayout` is the only thing that
+   * sets a flag, and it is unreachable without an active layout to render the
+   * menu beside. Criterion 5 says no sequence leaves none active, so the
+   * controller does not permit the state rather than asking the client to cope
+   * with it.
+   */
+  @IsTest
+  static void aCreateThatClaimsNoFlagStillLeavesTheUserWithAnActiveLayout() {
+    User owner = userWith(OWNER_ALIAS);
+
+    Test.startTest();
+    System.runAs(owner) {
+      NavigatorLayoutController.createLayout('Only', V2_PAYLOAD, false);
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      1,
+      activeCount(),
+      'A user whose only layout was created without claiming the flag must still have an active layout'
+    );
+    Assert.areEqual(
+      'Only',
+      activeName(),
+      'The one layout the user owns must be the active one'
+    );
+  }
+
+  /**
+   * The other half of the same rule, and the one that keeps it from becoming
+   * "a create always steals the flag": an owner who already has an active
+   * layout keeps it.
+   */
+  @IsTest
+  static void aCreateThatClaimsNoFlagDoesNotTakeItFromTheLayoutThatHasIt() {
+    seedThree();
+    User owner = userWith(OWNER_ALIAS);
+
+    Test.startTest();
+    System.runAs(owner) {
+      NavigatorLayoutController.createLayout('Fourth', V2_PAYLOAD, false);
+    }
+    Test.stopTest();
+
+    Assert.areEqual(
+      1,
+      activeCount(),
+      'Creating a layout beside an active one must leave exactly one active'
+    );
+    Assert.areEqual(
+      'Second',
+      activeName(),
+      'A create that claims no flag must leave the flag on the layout that already held it'
+    );
+  }
+
   @IsTest
   static void activateRefusesANullLayoutId() {
     seedThree();

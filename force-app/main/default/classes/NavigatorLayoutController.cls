@@ -149,10 +149,23 @@ public with sharing class NavigatorLayoutController {
   ) {
     List<Navigator_Layout__c> existing = ownLayouts();
 
+    // **The invariant is "exactly one active", so this class never leaves an
+    // owner with rows and no active one.** `createLayout(name, json, false)` is
+    // reachable through the `@AuraEnabled` surface, and on an owner with
+    // nothing else active it would otherwise store a row that no read can ever
+    // land on: `activateLayout` is the only thing that sets a flag, and it can
+    // only be reached from a menu the user cannot get to without an active
+    // layout to render it beside. Claiming the flag when nothing holds it costs
+    // nothing — `deactivations` below still writes no displacement, because
+    // there is none — and it keeps the client's two adoption paths describing
+    // the same store. `makeActive == false` on an owner who *does* have an
+    // active layout still leaves that layout's flag exactly where it is.
+    Boolean isOnlyCandidate = !anyActiveIn(existing);
+
     Navigator_Layout__c row = new Navigator_Layout__c(
       OwnerId = UserInfo.getUserId(),
       Name = name,
-      Is_Active__c = makeActive == true,
+      Is_Active__c = makeActive == true || isOnlyCandidate,
       Sort_Order__c = nextSortOrder(existing),
       Schema_Version__c = CURRENT_SCHEMA_VERSION,
       Layout_JSON__c = fromClient(layoutJson)
@@ -427,6 +440,16 @@ public with sharing class NavigatorLayoutController {
       }
     }
     return stale;
+  }
+
+  /** Whether any of the owner's rows currently holds the active flag. */
+  private static Boolean anyActiveIn(List<Navigator_Layout__c> existing) {
+    for (Navigator_Layout__c row : existing) {
+      if (row.Is_Active__c == true) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

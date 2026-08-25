@@ -3508,6 +3508,25 @@ describe("c-salesforce-navigator", () => {
         return release;
       };
 
+      /**
+       * The same, for a create. A change made *while a create is in flight* is
+       * the one interleaving that reaches `rememberSaved`'s create-adoption
+       * guard: the change belongs to a user who had no row, so it is a create
+       * of its own, and by the time it lands the layout on screen is the one
+       * the other create made.
+       */
+      store.deferNextCreate = () => {
+        const answer = createLayout.getMockImplementation();
+        let release;
+        const gate = new Promise((resolve) => {
+          release = resolve;
+        });
+        createLayout.mockImplementationOnce((args) =>
+          gate.then(() => answer(args))
+        );
+        return release;
+      };
+
       renameLayout.mockImplementation(({ layoutId, name }) => {
         const row = store.of(layoutId);
         if (!row) {
@@ -3765,6 +3784,184 @@ describe("c-salesforce-navigator", () => {
       expect(sectionNames(element)).toEqual(["Admin"]);
     });
 
+    /**
+     * The same ordering the other way round, and it is the **ordinary** case
+     * rather than the rare one: the activation round trip completes *inside*
+     * the 1s debounce window, so `this.layoutId` and `this.storedLayout` have
+     * both already moved by the time the timer fires.
+     *
+     * The order below is the order a browser uses — a resolved promise's
+     * continuations run before any timer does — and it is deliberately not the
+     * order `settleAutosave` uses, which advances the timer first and so can
+     * never see an Apex call land ahead of a pending debounce.
+     */
+    it("a change made while a switch is in flight survives the switch landing before the debounce fires", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      const releaseSwitch = store.deferNextActivation();
+
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await flush();
+
+      // Still looking at Support, because the switch has not landed.
+      expect(sectionNames(element)).toEqual(["Support"]);
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      // The switch lands first. Microtasks, then timers.
+      releaseSwitch();
+      await flush();
+      await flush();
+      expect(sectionNames(element)).toEqual(["Admin"]);
+
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+      await flush();
+      await flush();
+
+      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
+        6
+      );
+      expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
+      expect(store.activeName()).toBe("Admin");
+    });
+
+    /**
+     * What flushing the pending save at the *start* of a switch buys, now that
+     * the change carries its own layout's id whenever it fires. A change made
+     * on the layout switched *to*, still inside the first change's debounce
+     * window, replaces the pending change — so an unflushed one is not merely
+     * late, it is gone with no trace and no error.
+     */
+    it("a change still in the debounce is written before the switch, so a change made on the layout switched to cannot displace it", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      // Switched inside the debounce window, before the save has fired.
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await flush();
+      await flush();
+      await flush();
+      expect(sectionNames(element)).toEqual(["Admin"]);
+
+      // A second change, still inside the first one's window.
+      selectSectionMenuItem(element, 0, "columns-2");
+      await flush();
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+      await flush();
+      await flush();
+
+      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
+        6
+      );
+      expect(JSON.parse(store.payloadOf(THIRD_ID)).sections[0].columns).toBe(2);
+    });
+
+    /**
+     * The one state in which the store has rows the client can read and none of
+     * them flagged. The controller does not produce it — `createLayout`
+     * activates the row it creates when the owner has nothing else active — but
+     * no server rule can close this route, because the flag is on a row *this
+     * package cannot read*, and unreadable rows are filtered out on this side
+     * before the flag is looked for. The load path and the switch/delete path
+     * have to agree about it, or the same store paints two different screens.
+     */
+    it("a store whose active layout is one this version cannot read still shows a layout the user owns, not the seeded one", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      deleteLayout.mockResolvedValueOnce([
+        {
+          layoutId: FIRST_ID,
+          name: "Selling",
+          isActive: false,
+          isReadable: true,
+          layoutJson: SELLING
+        },
+        {
+          layoutId: THIRD_ID,
+          name: "Admin",
+          isActive: true,
+          isReadable: false,
+          unreadableReason: "schema version 9"
+        }
+      ]);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await settleAutosave();
+
+      expect(sectionNames(element)).toEqual(["Selling"]);
+      expect(layoutMenu(element).label).toBe("Selling");
+    });
+
+    /**
+     * Why the delete path *discards* a pending change where the switch path
+     * flushes one: a payload written to a row that is about to be deleted is
+     * work with no reader, and a failure would report a save error about a
+     * layout that no longer exists.
+     */
+    it("a change still in the debounce when its layout is deleted is dropped rather than written", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await settleAutosave();
+
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(store.names()).toEqual(["Selling", "Admin"]);
+      expect(store.activeName()).toBe("Admin");
+    });
+
+    /**
+     * `rememberSaved`'s create-adoption guard, which needs both of its
+     * conditions and can only be reached by making a change while a *create* is
+     * in flight. The change belongs to a user who owned no row, so it creates
+     * one — correctly, that is what a first change does — but the layout on
+     * screen by the time it lands is the one *New layout* made, and adopting
+     * the id would point every later save at a layout the change was never
+     * made on.
+     */
+    it("a change made while a new layout is being created gets its own row, and the new layout stays the one on screen", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      const releaseCreate = store.deferNextCreate();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+      await flush();
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+
+      expect(store.names()).toEqual(["Weekly review", "My Navigator"]);
+      expect(
+        layoutMenuEntries(element)
+          .filter((entry) => entry.checked)
+          .map((entry) => entry.label)
+      ).toEqual(["Weekly review"]);
+    });
+
     it("the chosen layout is still the active one after a reload", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
@@ -3862,6 +4059,41 @@ describe("c-salesforce-navigator", () => {
       expect(store.payloadOf(SECOND_ID)).toBe(SUPPORT);
       expect(store.activeName()).toBe("Cases");
       expect(layoutMenu(element).label).toBe("Cases");
+    });
+
+    /**
+     * A rename the server refused must not survive on screen. Left standing it
+     * is a name the store does not hold, in the button and in the menu — and
+     * the next unrelated autosave carries `this.layoutName` to `updateLayout`,
+     * so a refused rename would be made real by an edit that had nothing to do
+     * with it.
+     */
+    it("a rename the store refuses is taken back off the screen, and the next unrelated change does not carry it", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      renameLayout.mockRejectedValueOnce(new Error("Refused"));
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Cases");
+
+      expect(layoutMenu(element).label).toBe("Support");
+      expect(layoutMenuEntries(element).map((entry) => entry.label)).toEqual([
+        "Selling",
+        "Support",
+        "Admin",
+        "New layout…",
+        "Rename layout…",
+        "Delete layout…"
+      ]);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await settleAutosave();
+
+      expect(updateLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ layoutId: SECOND_ID, name: "Support" })
+      );
+      expect(store.names()).toEqual(["Selling", "Support", "Admin"]);
     });
 
     // ---------------------------------------------------------------
