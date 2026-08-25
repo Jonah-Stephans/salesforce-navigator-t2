@@ -400,6 +400,115 @@ same two private helpers rather than by getting it right here.
       `splice` still appears exactly twice outside `__tests__`, both inside `reorder`; `aria-grabbed`
       and `aria-dropeffect` appear nowhere outside the tests asserting their absence; no `if:true` /
       `if:false` anywhere.
+- [ ] **Criterion 6, as reworded above, is over-claimed for a payload that already stores a `rename`
+      equal to the platform label.** The Deviations section now says criterion 6 "holds for every
+      item *shown under the platform label*, not only for those that never had a rename". It does
+      not. The fix is on the *write* path only — `renameItem` refuses to store wording equal to the
+      live platform label — and nothing on the *read* path normalises a `rename` that is already
+      there. Driven against the shipped module: a stored
+      `{sections: [{name: "S", columns: 3, items: [{id: "Account", rename: "Accounts"}]}]}` with
+      `Account` labelled `Accounts` resolves to the label `Accounts`, so it *is* "shown under the
+      platform label"; relabel the tab to `Accts` and `resolveLayout` still renders `Accounts`. A
+      `serializeLayout`/`deserializeLayout` round trip preserves the `rename` key untouched, so
+      neither `adoptActiveLayout` nor the serialiser drops it. That payload shape is reachable: it is
+      exactly what the pre-fix build wrote, and the pre-fix build was deployed to the org (Deploy ID
+      recorded under *Decisions taken during the build*) before this fix pass deployed over it — so
+      any user who renamed an item to its own platform label in that window has an item frozen
+      against org relabelling, with nothing to tell them and no gesture that repairs it short of
+      renaming to something else and back. It is also what a hand-edited row can carry. Note the
+      *acceptance criterion's own words* ("an item with **no rename** picks up a subsequent change to
+      the org's tab label") are still satisfied and its tick is honest; it is the widened claim in
+      the Deviations prose that outruns the code. Two ways to close it, and the choice is a product
+      call rather than a mechanical one: **either** narrow the prose back to what the write-path fix
+      actually delivers (items *stored* without a rename, whichever route reached that state),
+      **or** normalise on read — drop `item.rename` when it equals the live platform label, which
+      has to happen where `tabs` is available, so in `resolveLayout` (render-time, no write, but it
+      only takes effect for the *current* label and cannot repair an item after the org has already
+      relabelled) or in `adoptActiveLayout` (which would need `this.items`, and would schedule a
+      write for a user who has only ever looked — the hazard slice 03's criterion and this slice's
+      own finding 4 both exist to prevent). If the read-side route is taken it needs a test with the
+      relabelling happening *after* the payload is adopted, because a test that relabels first cannot
+      tell the two rules apart.
+- [x] false positive — "the fix pass's account of the operator error is unverified, and the finding-5
+      fix may not be in the committed tree". It is. `git show HEAD:...navigatorLayoutModel.js`
+      contains `platformLabelOf` at line 307 and its call inside `renameItem` at line 532, and the
+      working tree matches HEAD exactly. Mutating the fold-into-empty branch away
+      (`typed === platformLabelOf(...) ? "" : typed` → `typed`) fails 2; mutating `platformLabelOf`
+      to always return `""` — the shape it would take if the lookup could not find the tab — also
+      fails 2, so both directions are pinned.
+- [x] false positive — "a rename can be silently cleared because the platform label could not be
+      found, the lost-access shape". Unreachable by construction rather than by care: `renameItem`
+      only ever renames the item at `storedAt`, and `storedAt` comes from
+      `storedSource(renderedPositions(items, accessibleIdsOf(tabs)), itemIndex)`, so the id it then
+      hands to `platformLabelOf` is drawn from the accessible set the same call built. There is no
+      input on which `platformLabelOf` returns `""` for the item being renamed. The neighbouring
+      inaccessible ids are untouched, which the model test
+      `renames the item the user picked when an earlier one is out of reach` and its end-to-end twin
+      both assert on the written payload.
+- [x] false positive — "the `serializeLayout` comparison in `handleItemRename` is an unsound stand-in
+      for *did anything change*". Checked on all four grounds the brief names. **Key order:** the
+      serialiser builds every object literal itself — `{schemaVersion, sections}`, then
+      `{name, columns, items}`, then `storedItem`'s `{id}` with `rename` appended only when truthy —
+      so the input's own key order never reaches `JSON.stringify`; driven directly, a layout whose
+      section keys are written `{items, columns, name}` and whose item is `{rename, id}` serialises
+      byte-identically to the canonical one. **Determinism:** no `Map`/`Set` iteration, no `Date`, no
+      floats — `clampColumns` truncates and `textOf` stringifies. **`undefined` versus absent:**
+      `storedItem` gates on truthiness, so `{id}` and `{id, rename: undefined}` both emit `{"id":…}`,
+      which is the *correct* answer here because the payload is what is being compared. **Two
+      materially different layouts colliding:** the serialised form *is* the stored contract — a
+      collision means the two layouts persist identically, so skipping the write is right by
+      definition; and `renameItem` can only ever alter `rename`, so equality is exactly "the rename
+      did not change". Also checked that the guard does not swallow a *pending* save: a no-op commit
+      made 400ms into another change's debounce leaves that debounce running and the earlier change
+      is still written. Replacing the payload comparison with a wording comparison still fails 1, so
+      the guard is pinned rather than incidental.
+- [x] false positive — "the `isRenaming` state guard leaks under a real interleaving". Six sequences
+      driven against the shipped component, all correct: Escape then commit dispatches nothing and
+      leaves the wording on screen; commit then Escape dispatches once and puts the anchor back; two
+      commits in a row dispatch once, not twice; a commit re-fired on the detached input after the
+      component has re-rendered dispatches nothing; Escape then a *second* rename opens on the live
+      label rather than on the blanked draft and commits normally, so the blanking does not leak
+      forward; and a platform relabel arriving while the box is open is reported as a change rather
+      than swallowed. The item-that-has-moved case cannot arise — a cross-section move destroys the
+      item component in the section it left, so there is no open box to commit from — and the
+      item-gone-inaccessible case destroys it the same way, because `resolveLayout` drops the id on
+      the next render. A stale *index* cannot arise either: `navigatorSection.html` keys items on
+      `item.id`, so a component with an open box keeps its identity across a list change and has its
+      `index` reassigned, and the commit carries the current rendered position.
+- [x] false positive — "row 9's fall from 7 to 6 is coverage lost rather than the trade the fix pass
+      diagnosed". The diagnosis is exact. Row 9 re-run alone: **6 failed**, every one in
+      `navigatorItem` — `reports the wording upward with its own position, on commit`,
+      `does not fire a rename while the user is still typing`,
+      `keeps the wording it had when a rename is abandoned with Escape`, both
+      `asks for the rename to be cleared when the input is committed as …` cases, and
+      `reports nothing when a commit arrives after the rename was abandoned`. Row 9 re-run with the
+      finding-4 guard removed from `handleItemRename` at the same time: **9 failed**, the extra three
+      being the parent's. So the three the guard masks are masked because under that mutation the
+      commit is genuinely a no-op, which is the property finding 4 asked the guard to enforce. The
+      claim that the row is still pinned by the test that names the property holds — it is the second
+      of the six.
+- [x] false positive — "criterion 6 is over-claimed for an item whose rename was *cleared* by typing
+      the platform label". That half is sound and was driven end to end: open the renamed `Account`
+      shown as `Clients`, type `Accounts`, commit — the payload written is `{id: "Account"}` with no
+      `rename` key, and a subsequent `getNavItems` emission relabelling `Account` to `Accts` and
+      `Contact` to `Ppl` renders both under the new wording with no `updateLayout` and no
+      `createLayout`. The cleared item and the item that never had a rename behave identically
+      afterwards, which is what the criterion promises. (The shape that *is* over-claimed is a
+      `rename` already stored equal to the platform label — recorded as the open finding above.)
+- [x] false positive — "the fix silently killed a row of the 22-row table, as a correct fix has twice
+      before on this spec". All 22 rows were re-applied to the committed tree by a pattern-checked
+      runner that fails loudly on a non-unique or missing match, the whole suite run, and every file
+      restored from an in-memory original. **Every row still bites and every count matches the
+      Re-run column exactly:** 1 **12**, 2 **20**, 3 **7**, 4 **3**, 5 **6**, 6 **2**, 7 **7**,
+      8 **2**, 9 **6**, 10 **2**, 11 **1**, 12 **5**, 13 **1**, 14 **2**, 15 **14**, 16 **2**,
+      17 **7**, 18 **2**, 19 **1**, 20 **2**, 21 **1**, 22 **1**. The strict form of row 1
+      (`storedItem(wording, undefined)`) fails **19**, as the fix pass recorded. Deleting the
+      focus-follows-rename branch of `renderedCallback` outright — not merely stopping the `focus()`
+      call — still fails 1, so finding 1's new test covers the whole block and not just its last
+      line. `npm test` is 312 passed across 5 suites either side of every row; `npm run lint`,
+      `npm run lint:slds-gate` and `npm run prettier:verify` are clean;
+      `grep -rn splice force-app | grep -v __tests__` returns exactly the two lines inside `reorder`;
+      and `git status` shows no production file modified.
 
 **Verification.** Every mutation above was applied to shipped code by a runner that exits non-zero
 when its pattern does not match, the whole suite was run, and the file was restored from the
@@ -425,4 +534,4 @@ it. It was caught immediately by the suite (2 failed), reapplied, and re-verifie
 that `git checkout` is the wrong restore tool while a fix is uncommitted in the same file. The
 mutation runner's own scratchpad-copy restore, used everywhere else, has no such hazard.
 
-fix_cycles: 0
+fix_cycles: 1
