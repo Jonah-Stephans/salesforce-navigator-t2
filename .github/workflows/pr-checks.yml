@@ -30,10 +30,16 @@ jobs:
           # The slug comes from the pull request's head ref, never from
           # `git branch --show-current` — this runs on a detached HEAD, where
           # that returns empty and the path collapses to an unscoped sweep of
-          # dev-path/, failing this spec on a neighbour's open boxes.
+          # devpath/, failing this spec on a neighbour's open boxes.
           # `test -d` is what makes a wrong slug red: grep -r on a missing
           # directory exits 2, and a leading `!` would turn that into a pass.
-          SPEC="dev-path/${GITHUB_HEAD_REF:?not a pull request build}"
+          #
+          # devpath/, no hyphen: the installed plugin (0.4.0) fixes this as the
+          # spec directory, hardcoded in its own hooks in .claude/settings.json.
+          # The first spec on this repo predates that convention and still
+          # lives under dev-path/ (hyphenated) — this check only needs to match
+          # what new specs land at, not migrate the old one.
+          SPEC="devpath/${GITHUB_HEAD_REF:?not a pull request build}"
           test -d "$SPEC" && ! grep -rn '^- \[ \]' "$SPEC/"
 
   lwc-tests:
