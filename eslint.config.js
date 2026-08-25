@@ -67,6 +67,10 @@ module.exports = defineConfig([
       globals: {
         ...globals.node,
         ...globals.es2021,
+        // These mocks run under jsdom, and `lightning/modal`'s replacement
+        // mounts the real component into the document rather than standing in
+        // for it — so `document` is as much a global here as `jest` is.
+        ...globals.browser,
         ...jestPlugin.environments.globals.globals
       }
     },

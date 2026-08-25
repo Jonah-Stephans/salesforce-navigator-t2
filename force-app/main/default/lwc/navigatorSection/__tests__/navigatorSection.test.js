@@ -1117,4 +1117,166 @@ describe("c-navigator-section", () => {
 
     expect(handler).not.toHaveBeenCalled();
   });
+
+  describe("adding and removing items", () => {
+    function addButtonOf(element) {
+      return element.shadowRoot.querySelector(
+        "lightning-button.rstk-nav-section__add"
+      );
+    }
+
+    it("offers an Add items button in its header, where a user can find it", () => {
+      const element = createSection();
+
+      const button = addButtonOf(element);
+      expect(button).not.toBeNull();
+      expect(button.label).toBe("Add items");
+    });
+
+    it("names the section on the Add items button, so a column of them is not identical", () => {
+      const element = createSection(resolvedSection({ name: "Support" }));
+
+      expect(addButtonOf(element).title).toBe("Add items to Support");
+    });
+
+    it("asks the parent to open the picker for its own section", () => {
+      const element = createSection();
+      const handler = jest.fn();
+      element.addEventListener("sectionadditems", handler);
+
+      addButtonOf(element).dispatchEvent(new CustomEvent("click"));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].detail).toEqual({ index: 0 });
+    });
+
+    it("asks for the picker with its own section index and not a constant", () => {
+      // Slice 05's row 13: a first-section fixture cannot tell "reports
+      // itself" from "reports zero". This card is built at index 1.
+      const resolved = resolveLayout(
+        {
+          sections: [
+            { name: "Selling", columns: 3, items: [] },
+            { name: "Support", columns: 3, items: [{ id: "Account" }] }
+          ]
+        },
+        TABS
+      )[1];
+      const element = createSection(resolved);
+      const handler = jest.fn();
+      element.addEventListener("sectionadditems", handler);
+
+      addButtonOf(element).dispatchEvent(new CustomEvent("click"));
+
+      expect(handler.mock.calls[0][0].detail).toEqual({ index: 1 });
+    });
+
+    it("tells an empty section's user that it is empty and how to fill it", () => {
+      // Not a blank card, and not a bare "nothing here" either — the message
+      // has to name the way out, which is the button in this card's own
+      // header.
+      const element = createSection(resolvedSection({ itemIds: [] }));
+
+      const empty = element.shadowRoot.querySelector(
+        ".rstk-nav-section__empty"
+      );
+      expect(empty).not.toBeNull();
+      expect(empty.textContent).toContain("no items");
+      expect(empty.textContent).toContain("Add items");
+      // And the route it names is actually on screen.
+      expect(addButtonOf(element)).not.toBeNull();
+    });
+
+    it("forwards an item's removal upward with the section it is in", () => {
+      const element = createSection();
+      const handler = jest.fn();
+      element.addEventListener("itemremove", handler);
+
+      itemsOf(element)[1].dispatchEvent(
+        new CustomEvent("itemremove", { detail: { index: 1 } })
+      );
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        sectionIndex: 0,
+        index: 1
+      });
+    });
+
+    it("forwards a removal with its own section index and not a constant", () => {
+      const resolved = resolveLayout(
+        {
+          sections: [
+            { name: "Selling", columns: 3, items: [] },
+            {
+              name: "Support",
+              columns: 3,
+              items: [{ id: "Account" }, { id: "Contact" }]
+            }
+          ]
+        },
+        TABS
+      )[1];
+      const element = createSection(resolved);
+      const handler = jest.fn();
+      element.addEventListener("itemremove", handler);
+
+      itemsOf(element)[0].dispatchEvent(
+        new CustomEvent("itemremove", { detail: { index: 0 } })
+      );
+
+      expect(handler.mock.calls[0][0].detail).toEqual({
+        sectionIndex: 1,
+        index: 0
+      });
+    });
+
+    it("ends a keyboard grab on the item being removed, silently", async () => {
+      // The same hazard `releaseGrabForDepartingItem` was added for on the
+      // cross-section move: without it `reseatOrReleaseGrab` would find the
+      // item gone on the next render and announce "Move cancelled. X is no
+      // longer available." on an assertive region — a second, alarming
+      // sentence about a removal the parent has already announced.
+      const element = createThree();
+      const items = itemsOf(element);
+      fire(items[1], "itemgrab", { index: 1 });
+      await Promise.resolve();
+      expect(spoken(announcement(element))).toBe(
+        "Contacts grabbed. Position 2 of 3."
+      );
+
+      fire(items[1], "itemremove", { index: 1 });
+      element.section = sectionOf(TABS_3, ["Account", "standard-OurSite"]);
+      await Promise.resolve();
+
+      // The section says nothing further — the parent is the one voice on a
+      // removal, exactly as it is on a cross-section move.
+      expect(spoken(announcement(element))).toBe(
+        "Contacts grabbed. Position 2 of 3."
+      );
+      expect(itemsOf(element).map((item) => item.grabbed)).toEqual([
+        false,
+        false
+      ]);
+    });
+
+    it("keeps a grab on its own item when a *sibling* is removed", async () => {
+      // The mirror: another item leaving is not this drag's business, and
+      // dropping a grab the user is still holding would strand them mid-move.
+      const element = createThree();
+      const items = itemsOf(element);
+      fire(items[2], "itemgrab", { index: 2 });
+      await Promise.resolve();
+
+      fire(items[0], "itemremove", { index: 0 });
+      element.section = sectionOf(TABS_3, ["Contact", "standard-OurSite"]);
+      await Promise.resolve();
+
+      expect(
+        itemsOf(element)
+          .filter((item) => item.grabbed)
+          .map((item) => item.label)
+      ).toEqual(["Our Site"]);
+    });
+  });
 });

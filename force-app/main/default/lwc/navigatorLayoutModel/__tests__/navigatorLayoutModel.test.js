@@ -16,7 +16,10 @@ import {
   moveItemWithinSection,
   moveItemBetweenSections,
   moveSection,
-  renameItem
+  renameItem,
+  removeItem,
+  availableTabs,
+  addItemToSection
 } from "c/navigatorLayoutModel";
 
 // Three tabs in the shape navigatorTabSource normalises the platform into.
@@ -1258,5 +1261,379 @@ describe("renameItem", () => {
     expect(renameItem(base, REACHABLE, 0, -1, "Clients")).toEqual(base);
     // Nothing is reachable, so no rendered position names anything.
     expect(renameItem(base, [], 0, 0, "Clients")).toEqual(base);
+  });
+});
+
+describe("removeItem", () => {
+  const REACHABLE = tabsFor("Account", "Contact", "standard-OurSite");
+  let base;
+
+  beforeEach(() => {
+    base = {
+      sections: [
+        {
+          name: "Selling",
+          columns: 3,
+          items: [{ id: "Account" }, { id: "Contact", rename: "People" }]
+        },
+        { name: "Support", columns: 2, items: [{ id: "standard-OurSite" }] }
+      ]
+    };
+  });
+
+  it("takes the item out of its section and leaves the others alone", () => {
+    const next = removeItem(base, REACHABLE, 0, 0);
+
+    expect(next.sections[0].items).toEqual([
+      { id: "Contact", rename: "People" }
+    ]);
+    expect(next.sections[1].items).toEqual([{ id: "standard-OurSite" }]);
+  });
+
+  it("removes the item the user can see when an earlier one is out of reach", () => {
+    // The fixture shape slice 05's critique established the suite had
+    // nowhere: a stored id the running user cannot reach, sitting *before*
+    // the one being removed, so the rendered index and the stored index
+    // disagree. That is the seam slice 05 shipped a corruption on.
+    const layout = {
+      sections: [
+        {
+          name: "Selling",
+          columns: 3,
+          items: [
+            { id: "Account" },
+            { id: "Contact" },
+            { id: "standard-OurSite" }
+          ]
+        }
+      ]
+    };
+    const reachable = tabsFor("Contact", "standard-OurSite");
+
+    // Position 0 on screen is `Contact`, not the stored `Account`.
+    const next = removeItem(layout, reachable, 0, 0);
+
+    expect(next.sections[0].items).toEqual([
+      { id: "Account" },
+      { id: "standard-OurSite" }
+    ]);
+  });
+
+  it("leaves an item the user cannot see exactly where it was stored", () => {
+    const layout = {
+      sections: [
+        {
+          name: "Selling",
+          columns: 3,
+          items: [
+            { id: "Contact" },
+            { id: "Account" },
+            { id: "standard-OurSite" }
+          ]
+        }
+      ]
+    };
+    const reachable = tabsFor("Contact", "standard-OurSite");
+
+    // Removes `standard-OurSite`, which is rendered second. `Account` is
+    // unreachable and must keep its stored position between the two.
+    const next = removeItem(layout, reachable, 0, 1);
+
+    expect(next.sections[0].items).toEqual([
+      { id: "Contact" },
+      { id: "Account" }
+    ]);
+  });
+
+  it("removes one copy when a section holds the same id twice", () => {
+    const layout = {
+      sections: [
+        {
+          name: "Selling",
+          columns: 3,
+          items: [{ id: "Account" }, { id: "Contact" }, { id: "Account" }]
+        }
+      ]
+    };
+
+    expect(removeItem(layout, REACHABLE, 0, 2).sections[0].items).toEqual([
+      { id: "Account" },
+      { id: "Contact" }
+    ]);
+  });
+
+  it("leaves the layout alone when it names a section or an item that is not there", () => {
+    expect(removeItem(base, REACHABLE, 7, 0)).toEqual(base);
+    expect(removeItem(base, REACHABLE, 0, 9)).toEqual(base);
+    expect(removeItem(base, REACHABLE, 0, -1)).toEqual(base);
+    expect(removeItem(base, [], 0, 0)).toEqual(base);
+  });
+
+  it("hands back copies, not the caller's own section and item objects", () => {
+    const next = removeItem(base, REACHABLE, 0, 0);
+
+    next.sections.forEach((section, at) => {
+      expect(section).not.toBe(base.sections[at]);
+      expect(section.items).not.toBe(base.sections[at].items);
+      // Per *item* too, and not only per array. A `filter` over the caller's
+      // own list produces a new array holding the caller's own objects, which
+      // passes the two assertions above and shares every item — so writing to
+      // one of them reaches back into the layout the caller still holds.
+      section.items.forEach((item) => {
+        expect(base.sections[at].items).not.toContain(item);
+      });
+    });
+
+    next.sections[1].items[0].rename = "Written through";
+    expect(base.sections[1].items[0]).toEqual({ id: "standard-OurSite" });
+    expect(base.sections[0].items).toHaveLength(2);
+  });
+
+  it("survives a round trip through the payload, so the removal is what reloads", () => {
+    const removed = removeItem(base, REACHABLE, 0, 0);
+
+    expect(deserializeLayout(serializeLayout(removed)).sections).toEqual([
+      {
+        name: "Selling",
+        columns: 3,
+        items: [{ id: "Contact", rename: "People" }]
+      },
+      { name: "Support", columns: 2, items: [{ id: "standard-OurSite" }] }
+    ]);
+  });
+});
+
+describe("availableTabs", () => {
+  it("offers every reachable tab that is in no section of the layout", () => {
+    const layout = {
+      sections: [{ name: "Selling", columns: 3, items: [{ id: "Account" }] }]
+    };
+
+    expect(availableTabs(layout, ALL_TABS)).toEqual([
+      { id: "Contact", label: "Contacts" },
+      { id: "standard-OurSite", label: "Our Site" }
+    ]);
+  });
+
+  it("never offers a tab the running user cannot reach", () => {
+    const layout = { sections: [{ name: "Selling", columns: 3, items: [] }] };
+
+    // `Our Site` is stored nowhere and is also not in the accessible list, so
+    // it is not the picker's to offer — the whole component is scoped to the
+    // running user's access and never wider.
+    expect(availableTabs(layout, [ACCOUNT, CONTACT])).toEqual([
+      { id: "Account", label: "Accounts" },
+      { id: "Contact", label: "Contacts" }
+    ]);
+  });
+
+  it("looks across every section, not only the first", () => {
+    const layout = {
+      sections: [
+        { name: "Selling", columns: 3, items: [{ id: "Account" }] },
+        { name: "Support", columns: 2, items: [{ id: "standard-OurSite" }] }
+      ]
+    };
+
+    expect(availableTabs(layout, ALL_TABS)).toEqual([
+      { id: "Contact", label: "Contacts" }
+    ]);
+  });
+
+  it("offers a tab back once the section holding it is deleted", () => {
+    const layout = {
+      sections: [
+        { name: "Selling", columns: 3, items: [{ id: "Account" }] },
+        {
+          name: "Support",
+          columns: 2,
+          items: [{ id: "Contact" }, { id: "standard-OurSite" }]
+        }
+      ]
+    };
+
+    expect(availableTabs(layout, ALL_TABS)).toEqual([]);
+    expect(availableTabs(deleteSection(layout, 1), ALL_TABS)).toEqual([
+      { id: "Contact", label: "Contacts" },
+      { id: "standard-OurSite", label: "Our Site" }
+    ]);
+  });
+
+  it("offers a removed item back", () => {
+    const layout = {
+      sections: [
+        {
+          name: "Selling",
+          columns: 3,
+          items: [
+            { id: "Account" },
+            { id: "Contact" },
+            { id: "standard-OurSite" }
+          ]
+        }
+      ]
+    };
+
+    expect(availableTabs(layout, ALL_TABS)).toEqual([]);
+    expect(availableTabs(removeItem(layout, ALL_TABS, 0, 1), ALL_TABS)).toEqual(
+      [{ id: "Contact", label: "Contacts" }]
+    );
+  });
+
+  it("lists a tab under its Salesforce label, never under a rename in the layout", () => {
+    // A rename belongs to a layout *entry*, and a tab that is not in the
+    // layout has no entry and therefore no rename. This pins the direction
+    // that is expressible: the id renamed in a section is not offered at all,
+    // and the one that is offered carries the platform's current wording even
+    // though a rename sits in the same payload.
+    const layout = {
+      sections: [
+        {
+          name: "Selling",
+          columns: 3,
+          items: [{ id: "Account", rename: "Clients" }]
+        }
+      ]
+    };
+    const relabelled = [
+      { ...ACCOUNT, label: "Accts" },
+      { ...CONTACT, label: "Ppl" }
+    ];
+
+    expect(availableTabs(layout, relabelled)).toEqual([
+      { id: "Contact", label: "Ppl" }
+    ]);
+  });
+
+  it("offers everything when the layout has no sections at all", () => {
+    expect(availableTabs({ sections: [] }, ALL_TABS)).toEqual([
+      { id: "Account", label: "Accounts" },
+      { id: "Contact", label: "Contacts" },
+      { id: "standard-OurSite", label: "Our Site" }
+    ]);
+    expect(availableTabs(undefined, ALL_TABS)).toHaveLength(3);
+    expect(availableTabs({ sections: [] }, undefined)).toEqual([]);
+  });
+});
+
+describe("addItemToSection", () => {
+  let base;
+
+  beforeEach(() => {
+    base = {
+      sections: [
+        { name: "Selling", columns: 3, items: [{ id: "Account" }] },
+        { name: "Support", columns: 2, items: [{ id: "Contact" }] }
+      ]
+    };
+  });
+
+  it("puts the tab in the section it was asked for, at the end", () => {
+    const next = addItemToSection(base, ALL_TABS, 1, "standard-OurSite");
+
+    expect(next.sections[0].items).toEqual([{ id: "Account" }]);
+    expect(next.sections[1].items).toEqual([
+      { id: "Contact" },
+      { id: "standard-OurSite" }
+    ]);
+  });
+
+  it("puts it in the first section as readily as in the second", () => {
+    // The mirror of slice 05's row 13: a fixture that only ever adds to one
+    // section cannot tell "the section it was asked for" from a constant.
+    const next = addItemToSection(base, ALL_TABS, 0, "standard-OurSite");
+
+    expect(next.sections[0].items).toEqual([
+      { id: "Account" },
+      { id: "standard-OurSite" }
+    ]);
+    expect(next.sections[1].items).toEqual([{ id: "Contact" }]);
+  });
+
+  it("stores {id} and nothing else — no label, no rename, no pageReference", () => {
+    const next = addItemToSection(base, ALL_TABS, 0, "standard-OurSite");
+
+    expect(Object.keys(next.sections[0].items[1])).toEqual(["id"]);
+  });
+
+  it("refuses a tab the running user cannot reach", () => {
+    expect(
+      addItemToSection(base, [ACCOUNT, CONTACT], 0, "standard-OurSite")
+    ).toEqual(base);
+  });
+
+  it("refuses a tab that is already somewhere in the layout", () => {
+    // Two entries with the same id in one section is a duplicated LWC `key`,
+    // which the framework refuses to render; across two sections it is a
+    // shape no gesture this Navigator ships should be able to create.
+    expect(addItemToSection(base, ALL_TABS, 0, "Account")).toEqual(base);
+    expect(addItemToSection(base, ALL_TABS, 0, "Contact")).toEqual(base);
+  });
+
+  it("leaves the layout alone when the section is not there", () => {
+    expect(addItemToSection(base, ALL_TABS, 7, "standard-OurSite")).toEqual(
+      base
+    );
+    expect(addItemToSection(base, ALL_TABS, -1, "standard-OurSite")).toEqual(
+      base
+    );
+    expect(addItemToSection(base, ALL_TABS, 0, undefined)).toEqual(base);
+  });
+
+  it("leaves an item the user cannot see exactly where it was stored", () => {
+    const layout = {
+      sections: [
+        {
+          name: "Selling",
+          columns: 3,
+          items: [{ id: "standard-OurSite" }, { id: "Account" }]
+        }
+      ]
+    };
+
+    // `standard-OurSite` is stored but unreachable, so it does not render —
+    // and adding must not renumber or drop it.
+    const next = addItemToSection(layout, [ACCOUNT, CONTACT], 0, "Contact");
+
+    expect(next.sections[0].items).toEqual([
+      { id: "standard-OurSite" },
+      { id: "Account" },
+      { id: "Contact" }
+    ]);
+  });
+
+  it("hands back copies, not the caller's own section and item objects", () => {
+    const next = addItemToSection(base, ALL_TABS, 0, "standard-OurSite");
+
+    next.sections.forEach((section, at) => {
+      expect(section).not.toBe(base.sections[at]);
+      expect(section.items).not.toBe(base.sections[at].items);
+      section.items.forEach((item) => {
+        expect(base.sections[at].items).not.toContain(item);
+      });
+    });
+
+    next.sections[1].items[0].rename = "Written through";
+    expect(base.sections[1].items[0]).toEqual({ id: "Contact" });
+    expect(base.sections[0].items).toHaveLength(1);
+  });
+
+  it("survives a round trip through the payload, so the addition is what reloads", () => {
+    const added = addItemToSection(base, ALL_TABS, 1, "standard-OurSite");
+
+    expect(deserializeLayout(serializeLayout(added)).sections[1].items).toEqual(
+      [{ id: "Contact" }, { id: "standard-OurSite" }]
+    );
+  });
+
+  it("is the inverse of removeItem — an item removed can be added back", () => {
+    const removed = removeItem(base, ALL_TABS, 0, 0);
+    expect(availableTabs(removed, ALL_TABS)).toContainEqual({
+      id: "Account",
+      label: "Accounts"
+    });
+
+    const restored = addItemToSection(removed, ALL_TABS, 0, "Account");
+    expect(restored.sections[0].items).toEqual([{ id: "Account" }]);
   });
 });

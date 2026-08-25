@@ -33,6 +33,21 @@
         <h2 class="rstk-nav-section__title">{name}</h2>
       </template>
 
+      <!-- The one route into the picker. A button rather than an entry in the
+           overflow menu beside it, because it is the section's primary
+           action and the only way an item that has been removed comes back —
+           and because the empty state below names it, which it could not do
+           if it were hidden behind a menu. `title` names the section: every
+           card carries one of these, and a row of buttons all announced as
+           "Add items" leaves the user unable to tell which section they are
+           filling. -->
+      <lightning-button
+        class="rstk-nav-section__add"
+        label="Add items"
+        title={addItemsLabel}
+        onclick={handleAddItems}
+      ></lightning-button>
+
       <lightning-button-menu
         alternative-text={name}
         icon-size="x-small"
@@ -82,13 +97,22 @@
             onitemkeycancel={handleItemKeyCancel}
             onitemmoveto={handleItemMoveTo}
             onitemrename={handleItemRename}
+            onitemremove={handleItemRemove}
           ></c-navigator-item>
         </li>
       </template>
     </ul>
 
+    <!-- A user who removes every item from a section must not be left looking
+         at a blank card wondering whether they have broken something. The
+         message says both halves: that the section is empty, and the way out
+         of it — which is the Add items button in this card's own header, named
+         so the sentence points at something the user can see. -->
     <template lwc:if={isEmpty}>
-      <p class="rstk-nav-section__empty">This section has no items yet.</p>
+      <p class="rstk-nav-section__empty">
+        This section has no items. Use Add items to put tabs you can reach into
+        it.
+      </p>
     </template>
 
     <!-- Assertive rather than polite: a move the user has just made and is

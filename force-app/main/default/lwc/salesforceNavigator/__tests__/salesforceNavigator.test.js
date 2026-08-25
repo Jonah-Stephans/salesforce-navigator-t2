@@ -2,6 +2,12 @@ import { createElement } from "lwc";
 import SalesforceNavigator from "c/salesforceNavigator";
 import { getNavItems } from "lightning/uiAppsApi";
 import { getNavigateCalledWith } from "lightning/navigation";
+// The picker is a `lightning-modal`, and that module has no stub at all in
+// sfdx-lwc-jest. The mock at test/jest-mocks/lightning/modal.js **mounts the
+// real component** rather than standing in for it, so the assertions below
+// about what the picker lists, what a search finds and what a click on an
+// entry does are driven against the component that ships.
+import { getOpenModals, resetModals } from "lightning/modal";
 import { MAX_PAGE_SIZE, NAV_ITEMS_CONFIG } from "c/navigatorTabSource";
 import { SCHEMA_VERSION, reorder } from "c/navigatorLayoutModel";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
@@ -2720,6 +2726,487 @@ describe("c-salesforce-navigator", () => {
         "Contacts",
         "Action Plans"
       ]);
+    });
+  });
+
+  describe("removing an item and adding it back", () => {
+    const THREE = [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM];
+
+    function storedLayout(sections) {
+      return {
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "My Navigator",
+        isActive: true,
+        layoutJson: JSON.stringify({ schemaVersion: SCHEMA_VERSION, sections })
+      };
+    }
+
+    /**
+     * Two sections, so "which section did it land in" is a real question —
+     * and one reachable tab, `Contact`, deliberately left out of both, so the
+     * picker has something to offer. A fixture in which everything is already
+     * placed cannot tell a picker that lists the right thing from one that
+     * lists nothing at all.
+     */
+    const TWO_SECTIONS = storedLayout([
+      { name: "Selling", columns: 3, items: [{ id: "Account" }] },
+      { name: "Support", columns: 2, items: [{ id: "standard-ActionHub" }] }
+    ]);
+
+    async function navigatorOn(layout, navItems = THREE) {
+      getLayouts.mockResolvedValue(layout ? [layout] : []);
+      const element = createNavigator();
+      getNavItems.emit({ navItems });
+      await flush();
+      return element;
+    }
+
+    function itemsIn(element, sectionIndex) {
+      return Array.from(
+        querySections(element)[sectionIndex].shadowRoot.querySelectorAll(
+          "c-navigator-item"
+        )
+      );
+    }
+
+    function itemAt(element, sectionIndex, itemIndex) {
+      return itemsIn(element, sectionIndex)[itemIndex];
+    }
+
+    /** Drives one item's own overflow menu, the way a user reaches Remove. */
+    function selectItemMenuItem(element, sectionIndex, itemIndex, value) {
+      itemAt(element, sectionIndex, itemIndex)
+        .shadowRoot.querySelector("lightning-button-menu")
+        .dispatchEvent(new CustomEvent("select", { detail: { value } }));
+    }
+
+    /** The entries the item's menu actually offers, as a user reads them. */
+    function itemMenuEntries(element, sectionIndex, itemIndex) {
+      return Array.from(
+        itemAt(element, sectionIndex, itemIndex).shadowRoot.querySelectorAll(
+          "lightning-menu-item"
+        )
+      ).map((entry) => [entry.value, entry.label]);
+    }
+
+    function addButtonOf(element, sectionIndex) {
+      return querySections(element)[sectionIndex].shadowRoot.querySelector(
+        "lightning-button.rstk-nav-section__add"
+      );
+    }
+
+    /** The picker the parent mounted, if it mounted one. */
+    function pickerOf() {
+      const modals = getOpenModals();
+      return modals[modals.length - 1];
+    }
+
+    function pickerEntries(picker) {
+      return Array.from(
+        picker.shadowRoot.querySelectorAll("button.rstk-nav-picker__item")
+      );
+    }
+
+    function pickerLabels(picker) {
+      return pickerEntries(picker).map((entry) => entry.textContent.trim());
+    }
+
+    /** Opens the picker the way a user does: the section's own button. */
+    async function openPicker(element, sectionIndex) {
+      addButtonOf(element, sectionIndex).dispatchEvent(
+        new CustomEvent("click")
+      );
+      await flush();
+      return pickerOf();
+    }
+
+    function announcementOf(element) {
+      return spoken(
+        element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+      );
+    }
+
+    afterEach(() => {
+      resetModals();
+    });
+
+    it("takes an item out of the layout when Remove is chosen from its menu", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      // The entry has to be findable, not merely respondable-to — slice 06's
+      // row 16 is the reason this assertion is here and not implied.
+      expect(itemMenuEntries(element, 0, 0)).toContainEqual([
+        "remove",
+        "Remove"
+      ]);
+
+      selectItemMenuItem(element, 0, 0, "remove");
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([[], ["Action Plans"]]);
+    });
+
+    it("removes the item the user chose, out of the second section as readily as the first", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+
+      selectItemMenuItem(element, 1, 0, "remove");
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([["Accounts"], []]);
+    });
+
+    it("writes the removal, and a reload shows the item still gone", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+
+      selectItemMenuItem(element, 1, 0, "remove");
+      await flush();
+      await settleAutosave();
+
+      expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([]);
+
+      // What a reload is: a second Navigator mounted on the payload that was
+      // actually written.
+      const written = updateLayout.mock.calls.at(-1)[0].layoutJson;
+      document.body.removeChild(element);
+      const reloaded = await navigatorOn(
+        storedLayout(JSON.parse(written).sections)
+      );
+
+      expect(itemLabelsBySection(reloaded)).toEqual([["Accounts"], []]);
+    });
+
+    it("announces the removal, naming the item and the section it left", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+
+      selectItemMenuItem(element, 1, 0, "remove");
+      await flush();
+
+      expect(announcementOf(element)).toBe(
+        "Action Plans removed from Support."
+      );
+    });
+
+    it("removes the item the user can see when an earlier one is out of reach", async () => {
+      // The fixture shape the suite had nowhere before slice 05's critique:
+      // a stored id absent from `getNavItems`, sitting before the one being
+      // removed. Removing "visible position 0" must remove what the user can
+      // see, not the stored entry at index 0.
+      const element = await navigatorOn(
+        storedLayout([
+          {
+            name: "Selling",
+            columns: 3,
+            items: [
+              { id: "Contact" },
+              { id: "Account" },
+              { id: "standard-ActionHub" }
+            ]
+          }
+        ]),
+        [ACCOUNT_ITEM, ACTION_HUB_ITEM]
+      );
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Action Plans"]
+      ]);
+
+      selectItemMenuItem(element, 0, 0, "remove");
+      await flush();
+      await settleAutosave();
+
+      // `Contact` is unreachable and must survive untouched, in place.
+      expect(lastSavedLayout(updateLayout).sections[0].items).toEqual([
+        { id: "Contact" },
+        { id: "standard-ActionHub" }
+      ]);
+      expect(itemLabelsBySection(element)).toEqual([["Action Plans"]]);
+    });
+
+    it("tells a user who has emptied a section that it is empty and how to fill it", async () => {
+      const element = await navigatorOn(
+        storedLayout([
+          { name: "Selling", columns: 3, items: [{ id: "Account" }] }
+        ])
+      );
+
+      selectItemMenuItem(element, 0, 0, "remove");
+      await flush();
+
+      const empty = querySections(element)[0].shadowRoot.querySelector(
+        ".rstk-nav-section__empty"
+      );
+      expect(empty).not.toBeNull();
+      expect(empty.textContent).toContain("no items");
+      expect(empty.textContent).toContain("Add items");
+      expect(addButtonOf(element, 0)).not.toBeNull();
+    });
+
+    it("opens a picker from the section header listing every reachable tab not in the layout", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+
+      const picker = await openPicker(element, 0);
+
+      expect(picker).toBeDefined();
+      // `Account` and `standard-ActionHub` are placed — in *different*
+      // sections, so this also pins that the list is built across the whole
+      // layout and not only the section the picker was opened from.
+      expect(pickerLabels(picker)).toEqual(["Contacts"]);
+    });
+
+    it("never lists a tab the running user cannot reach", async () => {
+      // `Contact` is stored nowhere and is also absent from `getNavItems`, so
+      // it is not the picker's to offer. This is Outcome 1's one failure mode
+      // — over-reporting — driven end to end.
+      const element = await navigatorOn(
+        storedLayout([
+          { name: "Selling", columns: 3, items: [{ id: "Account" }] }
+        ]),
+        [ACCOUNT_ITEM, ACTION_HUB_ITEM]
+      );
+
+      const picker = await openPicker(element, 0);
+
+      expect(pickerLabels(picker)).toEqual(["Action Plans"]);
+    });
+
+    it("lists items under their Salesforce label, never under a rename in the layout", async () => {
+      const element = await navigatorOn(
+        storedLayout([
+          {
+            name: "Selling",
+            columns: 3,
+            items: [{ id: "Account", rename: "Clients" }]
+          }
+        ])
+      );
+      // The rename is on screen, so the layout really does carry one.
+      expect(itemLabelsBySection(element)).toEqual([["Clients"]]);
+
+      const picker = await openPicker(element, 0);
+
+      expect(pickerLabels(picker)).toEqual(["Action Plans", "Contacts"]);
+    });
+
+    it("finds an item in the picker by typing part of its label", async () => {
+      const element = await navigatorOn(
+        storedLayout([{ name: "Selling", columns: 3, items: [] }])
+      );
+      const picker = await openPicker(element, 0);
+      expect(pickerLabels(picker)).toHaveLength(3);
+
+      picker.shadowRoot
+        .querySelector("lightning-input")
+        .dispatchEvent(
+          new CustomEvent("change", { detail: { value: "Plan" } })
+        );
+      await flush();
+
+      expect(pickerLabels(picker)).toEqual(["Action Plans"]);
+    });
+
+    it("adds the chosen item to the section the picker was opened from", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 1);
+
+      pickerEntries(picker)[0].click();
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts"],
+        ["Action Plans", "Contacts"]
+      ]);
+    });
+
+    it("adds to the first section as readily as to the second", async () => {
+      // A parent that always added to section 0 would pass every assertion
+      // driven from section 0 — slice 05's row 13 on this axis.
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 0);
+
+      pickerEntries(picker)[0].click();
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Contacts"],
+        ["Action Plans"]
+      ]);
+    });
+
+    it("writes the addition, and a reload shows the item still there", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 1);
+
+      pickerEntries(picker)[0].click();
+      await flush();
+      await settleAutosave();
+
+      expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([
+        { id: "standard-ActionHub" },
+        { id: "Contact" }
+      ]);
+
+      const written = updateLayout.mock.calls.at(-1)[0].layoutJson;
+      document.body.removeChild(element);
+      const reloaded = await navigatorOn(
+        storedLayout(JSON.parse(written).sections)
+      );
+
+      expect(itemLabelsBySection(reloaded)).toEqual([
+        ["Accounts"],
+        ["Action Plans", "Contacts"]
+      ]);
+    });
+
+    it("announces the addition, naming the item and the section it landed in", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 1);
+
+      pickerEntries(picker)[0].click();
+      await flush();
+
+      expect(announcementOf(element)).toBe("Contacts added to Support.");
+    });
+
+    it("offers an item removed earlier back, and adds it to where it is asked for", async () => {
+      // The round trip the criterion names, driven as one gesture chain.
+      const element = await navigatorOn(TWO_SECTIONS);
+      selectItemMenuItem(element, 0, 0, "remove");
+      await flush();
+      expect(itemLabelsBySection(element)).toEqual([[], ["Action Plans"]]);
+
+      const picker = await openPicker(element, 1);
+      // The removed item is back on offer, alongside the one that was never
+      // placed.
+      expect(pickerLabels(picker)).toEqual(["Accounts", "Contacts"]);
+
+      pickerEntries(picker)[0].click();
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([
+        [],
+        ["Action Plans", "Accounts"]
+      ]);
+    });
+
+    it("offers a deleted section's items back rather than discarding them", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+
+      selectSectionMenuItem(element, 1, "delete");
+      await flush();
+      expect(sectionNames(element)).toEqual(["Selling"]);
+
+      const picker = await openPicker(element, 0);
+
+      // `Action Plans` was Support's only item. Deleting Support did not
+      // discard it — it is on offer again.
+      expect(pickerLabels(picker)).toEqual(["Action Plans", "Contacts"]);
+    });
+
+    it("adds a deleted section's item back into a surviving section", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      selectSectionMenuItem(element, 1, "delete");
+      await flush();
+
+      const picker = await openPicker(element, 0);
+      pickerEntries(picker)[0].click();
+      await flush();
+      await settleAutosave();
+
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Action Plans"]
+      ]);
+      expect(lastSavedLayout(updateLayout).sections).toHaveLength(1);
+      expect(lastSavedLayout(updateLayout).sections[0].items).toEqual([
+        { id: "Account" },
+        { id: "standard-ActionHub" }
+      ]);
+    });
+
+    it("writes nothing when the picker is merely opened", async () => {
+      // Slice 03's criterion: no layout record exists for a user who has only
+      // ever looked. Opening a picker is looking. `getLayouts` returns nothing
+      // here, so a write would be a `createLayout` — the exact gesture that
+      // generates a row for a user who never customised anything.
+      const element = await navigatorOn(undefined);
+
+      const picker = await openPicker(element, 0);
+      await settleAutosave();
+
+      expect(picker).toBeDefined();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when the picker is cancelled", async () => {
+      const element = await navigatorOn(undefined);
+      const picker = await openPicker(element, 0);
+
+      picker.shadowRoot
+        .querySelector("lightning-button.rstk-nav-picker__cancel")
+        .dispatchEvent(new CustomEvent("click"));
+      await flush();
+      await settleAutosave();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("adds nothing and writes nothing when Escape closes the picker", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      const before = itemLabelsBySection(element);
+      const picker = await openPicker(element, 0);
+
+      picker.shadowRoot.querySelector("lightning-input").dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          composed: true
+        })
+      );
+      await flush();
+      await settleAutosave();
+
+      expect(itemLabelsBySection(element)).toEqual(before);
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("says there is nothing to add when every reachable tab is already placed", async () => {
+      const element = await navigatorOn(
+        storedLayout([
+          {
+            name: "Selling",
+            columns: 3,
+            items: [
+              { id: "Account" },
+              { id: "Contact" },
+              { id: "standard-ActionHub" }
+            ]
+          }
+        ])
+      );
+
+      const picker = await openPicker(element, 0);
+
+      expect(pickerEntries(picker)).toHaveLength(0);
+      expect(picker.shadowRoot.textContent).toContain("already");
+    });
+
+    it("puts the picker in a real lightning-modal rather than a hand-rolled panel", async () => {
+      // The design says compose from base components where one exists —
+      // they adopt SLDS 2 automatically, and the dialog semantics, the focus
+      // trap and Escape are the platform's rather than ours. A div dressed up
+      // as a dialog would pass every click-driven assertion above.
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 0);
+
+      expect(
+        picker.shadowRoot.querySelector("lightning-modal-header")
+      ).not.toBeNull();
+      expect(
+        picker.shadowRoot.querySelector("lightning-modal-body")
+      ).not.toBeNull();
+      expect(
+        picker.shadowRoot.querySelector("lightning-modal-footer")
+      ).not.toBeNull();
     });
   });
 });

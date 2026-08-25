@@ -25,8 +25,12 @@ import {
   moveItemWithinSection,
   moveItemBetweenSections,
   moveSection,
-  renameItem
+  renameItem,
+  removeItem,
+  availableTabs,
+  addItemToSection
 } from "c/navigatorLayoutModel";
+import NavigatorItemPicker from "c/navigatorItemPicker";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
 import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
 import updateLayout from "@salesforce/apex/NavigatorLayoutController.updateLayout";
@@ -576,6 +580,106 @@ export default class SalesforceNavigator extends LightningElement {
     this.announce(
       `${before} renamed to ${this.itemLabelAt(sectionIndex, index)}.`
     );
+  }
+
+  // -------------------------------------------------------------------
+  // Taking an item out of the layout, and putting one back.
+  //
+  // The two are inverses and neither keeps a record of anything: an item
+  // lives in a layout and nowhere else, so removing it is a deletion from one
+  // section and adding it is an insertion into another, with `availableTabs`
+  // — the accessible set minus whatever is already placed — as the whole of
+  // the "what is there to add" question. That is also why deleting a section
+  // returns its items to the picker for free rather than needing a rule of
+  // its own: the ids it held stop being anywhere, which is exactly the
+  // condition `availableTabs` selects on.
+  // -------------------------------------------------------------------
+
+  /**
+   * The one call site for taking an item out of the layout.
+   *
+   * `index` is a position on screen, so `this.items` travels with the layout
+   * and `removeItem` does the translation — see `moveItemWithin`. It matters
+   * more here than anywhere else on that axis: removing "the item at visible
+   * position 2" has to remove the item the user is looking at, and a stored
+   * id they cannot currently reach must survive untouched in its own stored
+   * position, which is what makes restoring access restore it in place.
+   *
+   * Both labels are read *before* `applyLayout`, because after it the item is
+   * not in the resolved list to be named from.
+   */
+  handleItemRemove(event) {
+    const { sectionIndex, index } = event.detail;
+    const label = this.itemLabelAt(sectionIndex, index);
+    const from = this.sectionNameAt(sectionIndex);
+
+    const next = removeItem(this.layout, this.items, sectionIndex, index);
+    // The same payload-equality guard the rename uses, and for the same
+    // reason: a gesture that stores nothing must not schedule a write, or a
+    // user who has only ever looked gets a layout row out of it. A removal
+    // that names no item on screen is exactly that gesture.
+    if (serializeLayout(next) === serializeLayout(this.layout)) {
+      return;
+    }
+    this.applyLayout(next);
+    this.announce(`${label} removed from ${from}.`);
+  }
+
+  /**
+   * Opens the picker for one section, and adds whatever it comes back with.
+   *
+   * **The section index is captured here and used when the modal resolves**,
+   * rather than re-derived at that point: the picker is told the section's
+   * *name*, for the heading and for what it calls its entries, and nothing
+   * about where the item lands travels through it. So there is no route by
+   * which the picker could place an item in a section other than the one it
+   * was opened from.
+   *
+   * **Opening writes nothing, and neither does cancelling.** `open()` resolves
+   * with `undefined` when the user cancels or presses Escape — the base
+   * component's own gesture — and the guard below is on the resolved value,
+   * so the whole of "the user looked and changed their mind" reaches no
+   * `applyLayout` at all. That is slice 03's criterion, which a picker that
+   * applied unconditionally would break from a new direction.
+   */
+  handleSectionAddItems(event) {
+    const sectionIndex = event.detail.index;
+    const sectionName = this.sectionNameAt(sectionIndex);
+
+    NavigatorItemPicker.open({
+      size: "small",
+      label: `Add items to ${sectionName}`,
+      // Built here because this is the only component that holds both the
+      // layout and the live accessible tab list. The picker is handed a list
+      // and cannot widen it.
+      availableItems: availableTabs(this.layout, this.items),
+      sectionName
+    }).then((tabId) => {
+      this.addChosenItem(sectionIndex, tabId);
+    });
+  }
+
+  /** The one call site for putting an item into a section. */
+  addChosenItem(sectionIndex, tabId) {
+    if (!tabId) {
+      return;
+    }
+    const next = addItemToSection(this.layout, this.items, sectionIndex, tabId);
+    if (serializeLayout(next) === serializeLayout(this.layout)) {
+      return;
+    }
+    this.applyLayout(next);
+    // Read *after* the change, because the item is not in the resolved list
+    // until it has been added — the mirror of the removal above.
+    this.announce(
+      `${this.tabLabelOf(tabId)} added to ${this.sectionNameAt(sectionIndex)}.`
+    );
+  }
+
+  /** What Salesforce currently calls a tab, read from the live source. */
+  tabLabelOf(tabId) {
+    const tab = this.items.find((candidate) => candidate.id === tabId);
+    return tab ? tab.label : "";
   }
 
   itemLabelAt(sectionIndex, itemIndex) {

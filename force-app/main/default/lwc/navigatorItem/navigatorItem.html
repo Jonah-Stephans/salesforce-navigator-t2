@@ -62,6 +62,10 @@
       onselect={handleMenuSelect}
     >
       <lightning-menu-item value="rename" label="Rename…"></lightning-menu-item>
+      <!-- Unconditional for the same reason Rename… is: the seeded layout is
+           a single section, so an entry withheld when there is nowhere to move
+           to would put removal out of reach of every user on first open. -->
+      <lightning-menu-item value="remove" label="Remove"></lightning-menu-item>
       <template lwc:if={hasMoveTargets}>
         <lightning-menu-divider></lightning-menu-divider>
         <lightning-menu-subheader label="Move to…"></lightning-menu-subheader>

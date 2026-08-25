@@ -257,6 +257,52 @@ export default class NavigatorSection extends LightningElement {
     return this.section ? this.section.index : 0;
   }
 
+  /**
+   * What the Add items button is called to a screen reader. Every card in the
+   * layout carries one, so a button announced only as "Add items" leaves the
+   * user with a column of identically-named buttons and no way to tell which
+   * section they are about to fill — the same reasoning as `menuLabel` on an
+   * item, and as `cardLabel` above.
+   */
+  get addItemsLabel() {
+    return `Add items to ${this.cardLabel}`;
+  }
+
+  /**
+   * Asks the parent to open the picker for *this* section. The section cannot
+   * open it itself and should not try: which tabs are on offer is a fact about
+   * the whole layout intersected with the running user's access, and a section
+   * knows neither. All it contributes is which section the chosen item lands
+   * in, which is the one fact the parent's listener could not supply.
+   */
+  handleAddItems() {
+    this.dispatch("sectionadditems", { index: this.sectionIndex });
+  }
+
+  /**
+   * An item asking to be taken out of the layout, on its way to the parent.
+   * Adds the one fact neither the item nor the parent's listener could supply
+   * — which section it is in — and nothing else.
+   *
+   * The grab is ended on the way out for the same reason `handleItemMoveTo`
+   * ends it: the item is about to leave this list, and `reseatOrReleaseGrab`
+   * cannot tell that from the tab being withdrawn. Left to it, the card would
+   * announce "Move cancelled. X is no longer available." on an assertive
+   * region while the parent announced "X removed from Selling." — two regions
+   * saying contradictory things about the same gesture, and the false one is
+   * the more alarming. It is silent because the parent announces the removal
+   * itself, and it releases only the grabbed item's own departure: a
+   * *sibling* being removed is not this drag's business, and
+   * `reseatOrReleaseGrab` already re-seats the grab across that.
+   */
+  handleItemRemove(event) {
+    this.releaseGrabForDepartingItem(event.detail.index);
+    this.dispatch("itemremove", {
+      sectionIndex: this.sectionIndex,
+      index: event.detail.index
+    });
+  }
+
   handleMenuSelect(event) {
     const value = event.detail.value;
 

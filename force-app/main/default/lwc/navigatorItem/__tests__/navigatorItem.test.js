@@ -1035,4 +1035,120 @@ describe("c-navigator-item", () => {
       expect(getNavigateCalledWith()).toBeUndefined();
     });
   });
+
+  describe("removing the item", () => {
+    const TARGETS = [
+      { value: "1", label: "Selling" },
+      { value: "2", label: "Support" }
+    ];
+
+    function menuOf(element) {
+      return element.shadowRoot.querySelector("lightning-button-menu");
+    }
+
+    function menuEntries(element) {
+      return Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).map((entry) => [entry.value, entry.label]);
+    }
+
+    function selectMenuItem(element, value) {
+      menuOf(element).dispatchEvent(
+        new CustomEvent("select", { detail: { value } })
+      );
+    }
+
+    it("offers Remove in the overflow menu, where a user can find it", async () => {
+      // Asserted as an entry the user can *find*, not only as a value the
+      // handler responds to. Slice 06's row 16 is the lesson: every test
+      // fires the menu's own `select` event, and a menu with nothing in it
+      // emits that just as happily as a full one — so the entry could be
+      // deleted outright with the suite green.
+      const element = await settled(createNavigatorItem({ index: 0 }));
+
+      expect(menuEntries(element)).toContainEqual(["remove", "Remove"]);
+    });
+
+    it("offers Remove even when there is nowhere to move to", async () => {
+      // The seeded layout is a single section, so an entry gated on having a
+      // destination would put removal out of reach of exactly the user who
+      // has never customised anything — every user, on first open. Same
+      // reasoning as slice 06's always-present menu.
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: [] })
+      );
+
+      expect(menuEntries(element)).toContainEqual(["remove", "Remove"]);
+    });
+
+    it("asks for its own removal, carrying its own position", async () => {
+      const element = await settled(createNavigatorItem({ index: 2 }));
+      const removed = jest.fn();
+      element.addEventListener("itemremove", removed);
+
+      selectMenuItem(element, "remove");
+
+      expect(removed).toHaveBeenCalledTimes(1);
+      expect(removed.mock.calls[0][0].detail).toEqual({ index: 2 });
+    });
+
+    it("reports its own position and not a constant", async () => {
+      // An item that reported `index: 0` would be indistinguishable from one
+      // that reported itself in every fixture built at position 0.
+      const element = await settled(createNavigatorItem({ index: 4 }));
+      const removed = jest.fn();
+      element.addEventListener("itemremove", removed);
+
+      selectMenuItem(element, "remove");
+
+      expect(removed.mock.calls[0][0].detail.index).toBe(4);
+    });
+
+    it("does not confuse Remove with Rename or with a destination", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+      );
+      const removed = jest.fn();
+      const moved = jest.fn();
+      element.addEventListener("itemremove", removed);
+      element.addEventListener("itemmoveto", moved);
+
+      selectMenuItem(element, "rename");
+      selectMenuItem(element, "move-to-1");
+
+      expect(removed).not.toHaveBeenCalled();
+      expect(moved).toHaveBeenCalledTimes(1);
+    });
+
+    it("abandons an open rename on its way out, so no stale wording is committed after it", async () => {
+      // The menu is a sibling of the rename box and stays clickable while it
+      // is open, so Remove is reachable mid-edit. Removing the component
+      // destroys the input, and `lightning-input` fires `commit` on blur —
+      // an unabandoned edit would arrive as an `itemrename` on a position
+      // that by then names a different item. Abandoning first is what makes
+      // the existing `isRenaming` guard swallow it.
+      const element = await settled(createNavigatorItem({ index: 0 }));
+      selectMenuItem(element, "rename");
+      await Promise.resolve();
+      const input = element.shadowRoot.querySelector("lightning-input");
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Half typed" } })
+      );
+
+      const removed = jest.fn();
+      const renamed = jest.fn();
+      element.addEventListener("itemremove", removed);
+      element.addEventListener("itemrename", renamed);
+
+      selectMenuItem(element, "remove");
+      await Promise.resolve();
+
+      expect(removed).toHaveBeenCalledTimes(1);
+      // The box is gone and the blur-driven commit it would fire reports
+      // nothing.
+      expect(element.shadowRoot.querySelector("lightning-input")).toBeNull();
+      input.dispatchEvent(new CustomEvent("commit"));
+      expect(renamed).not.toHaveBeenCalled();
+    });
+  });
 });

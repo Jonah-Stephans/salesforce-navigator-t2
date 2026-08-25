@@ -37,6 +37,22 @@ const MOVE_TO_PREFIX = "move-to-";
 const RENAME = "rename";
 
 /**
+ * The overflow menu's third entry: take this item out of the layout.
+ *
+ * Like `RENAME` it is unconditional — the seeded layout is a single section,
+ * so an entry gated on having somewhere to move to would put removal out of
+ * reach of exactly the user who has never customised anything. And like
+ * `RENAME` it is a bare value rather than a prefixed one, because it carries
+ * no argument: the item's own position is what travels, in the payload.
+ *
+ * Nothing is recorded about a removed item anywhere, and nothing needs to be.
+ * An item lives in a layout and nowhere else, so one that is in no section is
+ * simply one the picker offers back — which is what makes "add it again later"
+ * a property of the store's shape rather than a bin someone has to maintain.
+ */
+const REMOVE = "remove";
+
+/**
  * One tab: a real anchor, navigated with `NavigationMixin` against the
  * stored `pageReference` verbatim — no branching, no derivation. That is
  * what makes a rename (added by a later slice) structurally unable to
@@ -231,6 +247,18 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
     const value = event.detail.value;
     if (value === RENAME) {
       this.startRename();
+      return;
+    }
+    if (value === REMOVE) {
+      // The menu is a sibling of the rename box and stays clickable while it
+      // is open, so Remove is reachable mid-edit — and removing this item
+      // destroys the input, which `lightning-input` blurs and therefore
+      // `commit`s. An unabandoned edit would arrive at the parent as a rename
+      // of whatever position this one has become. Abandoning first is what
+      // makes `handleRenameCommit`'s `isRenaming` guard swallow it.
+      this.isRenaming = false;
+      this.draftName = "";
+      this.dispatch("itemremove", { index: this.index });
       return;
     }
     if (!value || !value.startsWith(MOVE_TO_PREFIX)) {

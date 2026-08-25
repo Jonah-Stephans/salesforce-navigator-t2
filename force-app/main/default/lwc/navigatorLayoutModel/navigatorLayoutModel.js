@@ -542,6 +542,131 @@ export function renameItem(layout, tabs, sectionIndex, itemIndex, rename) {
   });
 }
 
+/**
+ * Takes one item out of a section.
+ *
+ * `itemIndex` is a position in the list the user is looking at, and `tabs` is
+ * what turns it into a position in the stored list — see the note on the seam
+ * above `moveItemWithinSection`. This is the whole of the settled rule applied
+ * to a new operation, and it matters here more than anywhere: removing "the
+ * item at visible position 2" must remove the item the user can see, not the
+ * stored entry that happens to sit at index 2 behind an id they cannot reach.
+ *
+ * Removal is by stored *position* rather than by identity, for the reason
+ * `moveItemBetweenSections` gives: a section holding two copies of one id must
+ * lose the copy the user pointed at, not both.
+ *
+ * **Nothing about the removed item is recorded anywhere.** An item lives in a
+ * layout and nowhere else, so an item that is in no section is simply one
+ * `availableTabs` will offer back — which is what makes "add it again later"
+ * fall out of the store's shape rather than needing a bin to be kept.
+ */
+export function removeItem(layout, tabs, sectionIndex, itemIndex) {
+  const sections = sectionsOf(layout);
+  const unchanged = { sections: sections.map(copySection) };
+  if (!isPresent(sections, sectionIndex)) {
+    return unchanged;
+  }
+
+  const positions = renderedPositions(
+    itemsOf(sections[sectionIndex]),
+    accessibleIdsOf(tabs)
+  );
+  const storedAt = storedSource(positions, itemIndex);
+  if (storedAt === undefined) {
+    return unchanged;
+  }
+
+  return replaceSection(layout, sectionIndex, (section) => {
+    const copy = copySection(section);
+    return {
+      ...copy,
+      items: copy.items.filter((_item, at) => at !== storedAt)
+    };
+  });
+}
+
+/**
+ * What the picker offers: every tab the running user can reach that is not
+ * already somewhere in this layout, in the tab source's own order.
+ *
+ * Two properties, and both are load-bearing rather than incidental.
+ *
+ * **It is a subset of `tabs`, never wider.** The list is built by filtering
+ * the accessible tabs, not by walking the stored layout, so there is no input
+ * on which it can name a tab the user cannot reach — an id stored in a section
+ * they have lost access to is simply not in `tabs` and so cannot appear here
+ * either. That is the same intersection `resolveLayout` performs, in the same
+ * direction, and it is Outcome 1's one failure mode closed by construction.
+ *
+ * **The label is the platform's, and there is nowhere for a rename to come
+ * from.** A rename is a property of a layout *entry*, and by definition every
+ * tab in this list has no entry — that is what "not already in the layout"
+ * means. So the picker lists Salesforce's own wording not by a rule someone
+ * has to remember but because the alternative does not exist to be reached.
+ *
+ * And "in no section" is read across the whole layout, so deleting a section
+ * returns its items here for free: `deleteSection` drops the section and the
+ * ids it held stop being anywhere, which is precisely the condition below.
+ */
+export function availableTabs(layout, tabs) {
+  const placed = new Set();
+  sectionsOf(layout).forEach((section) => {
+    itemsOf(section).forEach((item) => placed.add(item.id));
+  });
+
+  return (tabs || [])
+    .filter((tab) => !placed.has(tab.id))
+    .map((tab) => ({ id: tab.id, label: textOf(tab.label) }));
+}
+
+/**
+ * Puts a tab into a section, at the end of it.
+ *
+ * Takes an **id and not an index**, which is what keeps it clear of the
+ * resolved-versus-stored seam entirely: the picker names a tab, never a
+ * position, so there is no index to translate and no way to get one wrong.
+ * `tabs` is still taken, and for a reason that is not translation — it is the
+ * accessible set, and a tab that is not in it is refused. Adding an id the
+ * running user cannot reach would put an item in their layout that never
+ * renders, which is the render-time intersection working exactly backwards.
+ *
+ * **An id already somewhere in the layout is refused.** Within one section
+ * that would be two entries with the same `key`, which LWC will not render;
+ * across two it is the precondition `moveItemBetweenSections` has to
+ * deduplicate around. The picker does not offer such a tab in the first place
+ * — `availableTabs` has already excluded it — so this is the same fact
+ * enforced at the write rather than trusted from the caller.
+ *
+ * The stored item is built by `storedItem`, so it is `{id}` and nothing else:
+ * no label, no `pageReference`, and no `rename`, because the user has not
+ * given one. Everything derivable from the platform is derived at render time.
+ */
+export function addItemToSection(layout, tabs, sectionIndex, tabId) {
+  const sections = sectionsOf(layout);
+  const unchanged = { sections: sections.map(copySection) };
+  if (!isPresent(sections, sectionIndex)) {
+    return unchanged;
+  }
+  if (!accessibleIdsOf(tabs).has(tabId)) {
+    return unchanged;
+  }
+  const alreadyPlaced = sections.some((section) =>
+    itemsOf(section).some((item) => item.id === tabId)
+  );
+  if (alreadyPlaced) {
+    return unchanged;
+  }
+
+  return replaceSection(layout, sectionIndex, (section) => {
+    const copy = copySection(section);
+    return {
+      ...copy,
+      items: copy.items.concat([storedItem(tabId, undefined)])
+    };
+  });
+}
+
 /** Reorders the sections themselves — the same `reorder`, a different axis. */
 export function moveSection(layout, from, to) {
   return { sections: reorder(sectionsOf(layout).map(copySection), from, to) };
