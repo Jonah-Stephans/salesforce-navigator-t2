@@ -1162,6 +1162,19 @@ describe("c-navigator-section", () => {
       );
     });
 
+    it("still names the button's target when the section name is blank", () => {
+      // Same arrival the card's own `aria-label` guards against: nothing
+      // scrubs a blank name already stored in `Layout_JSON__c`, which anything
+      // with write access can fill. A button announced as "Add items to" with
+      // nothing after it names no target at all, so the assistive text takes
+      // the same generic fallback the card label does.
+      const element = createSection(resolvedSection({ name: "   " }));
+
+      expect(accessibleNameOf(addButtonOf(element))).toBe(
+        "Add items to Unnamed section"
+      );
+    });
+
     it("keeps the visible wording short while the name carries the section", () => {
       // The header already prints the section's name in its own <h2>. A
       // button that printed it again would say it twice in a row and roughly

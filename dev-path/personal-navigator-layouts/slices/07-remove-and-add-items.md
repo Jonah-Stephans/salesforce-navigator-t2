@@ -422,6 +422,23 @@ two lines inside `reorder`; and `aria-grabbed`, `aria-dropeffect`, `if:true` and
 appear nowhere in `force-app` outside the tests asserting their absence. The untracked `sketches/`
 directory was neither edited nor staged.
 
+### The last fix pass was not re-reviewed by a critic
+
+Engineer's decision, 2026-08-24, taken at the fix cap when asked. That pass added one test and changed
+no production code, and the engineer chose to skip the critic pass that would normally follow it. This
+is the same route they took on slice 02, and it is recorded here for the same reason: it is a departure
+from the build-review loop, and a reviewer should know which change did not get an independent read.
+
+The orchestrator verified the added test in place of a critic, by hand rather than on the worker's
+account: it applied the mutation the finding named — `addItemsAssistive` interpolating `this.name`
+instead of `this.cardLabel` — ran the full suite, and saw `1 failed, 409 passed`, the single failure
+being the new test. It then restored the getter from a backup taken before the mutation, confirmed line
+304 reads `` return ` to ${this.cardLabel}`; `` again, and re-ran to `410 passed`.
+
+That establishes the test bites on the defect it was written for. It is **not** equivalent to a critic
+pass, which would also have looked for what the test does not cover — and on this slice the previous
+three critic passes each found exactly that.
+
 ## Critique findings
 
 - [x] fixed — the section name moved into the button's `label` (`label={addItemsLabel}`, `title`
@@ -745,7 +762,29 @@ directory was neither edited nor staged.
       convention. `aria-live="polite"` with `aria-atomic="true"` is the right pair for a status that
       narrows as you type: assertive would interrupt the keystroke the user is still making, and
       non-atomic risks a reader voicing only the digit that changed.
-- [ ] The Add items button's accessible name silently loses the "Unnamed section" fallback under
+- [x] fixed — one test added and no production code touched. `still names the button's target when
+      the section name is blank`, in the `adding and removing items` describe beside the other two
+      accessible-name tests, builds a section with `name: "   "` and asserts
+      `accessibleNameOf(addButtonOf(element))` — the computed name, via the helper already in the
+      file, not the span's text — is `"Add items to Unnamed section"`. It passes on the shipped code,
+      as it must. **Then the mutation was applied to confirm it can fail:** `addItemsAssistive`
+      changed to `` ` to ${this.name}` `` fails exactly this one test with
+      `expect(received).toBe(expected) // Object.is equality / Expected: "Add items to Unnamed
+      section" / Received: "Add items to"` at `navigatorSection.test.js:1173` — the control named
+      after nothing, exactly as the critic described. The getter was restored and the suite is green
+      at **410 across 6 suites**.
+      **The card's own `aria-label` does not share the gap**, checked rather than assumed with the
+      adjacent mutation: emptying `cardLabel`'s fallback to a bare `return this.name;` fails **2** —
+      the pre-existing `still names a card whose section name is empty` with
+      `Expected: "Unnamed section" / Received: "   "`, and the new button test. So the fallback is
+      now pinned at its source and on both of its two consumers, and no widening of this fix was
+      needed. `npm test` 410 passed, `npm run lint` and `npm run prettier:verify` clean; no deploy,
+      because a test file is not deployed metadata.
+      **The engineer chose to skip the critic re-review on this pass** — a deliberate decision, not
+      an omission: the scope was a single test file, production code is provably unchanged
+      (`git diff --stat` shows only `navigatorSection.test.js`, +13), and the finding's own mutation
+      is the acceptance check, which was run.
+      The Add items button's accessible name silently loses the "Unnamed section" fallback under
       mutation: changing `navigatorSection.addItemsAssistive` from `` ` to ${this.cardLabel}` `` to
       `` ` to ${this.name}` `` leaves the suite fully green at **409**. The shipped code is correct —
       it reads `cardLabel`, which is the slice 04 fallback — but nothing asserts it, so the one input
