@@ -2790,8 +2790,11 @@ describe("c-salesforce-navigator", () => {
     }
 
     function addButtonOf(element, sectionIndex) {
+      // A hand-rolled `<button>`, not a `lightning-button`: the section names
+      // itself in assistive text inside the button's own content, which is
+      // where a button's accessible name comes from.
       return querySections(element)[sectionIndex].shadowRoot.querySelector(
-        "lightning-button.rstk-nav-section__add"
+        "button.rstk-nav-section__add"
       );
     }
 

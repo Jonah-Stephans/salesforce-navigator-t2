@@ -106,11 +106,48 @@ real browser. That is the base component's, and it is the one step the mock supp
 above was true of the button's `title` and false of its accessible name. A `<button>`'s name comes
 from its content before its `title` (HTML-AAM), so the section name sat in a mouse tooltip and every
 card in the layout announced the identical "Add items"; the test that looked like it covered this
-asserted `.title`. The name is now in the button's `label`, which is both its visible text and its
-accessible name, and is asserted there. So this clause is *verified again* — but it was not before
-the fix, and the visible wording of the button changed with it, from "Add items" to "Add items to
-&lt;section&gt;". Criterion 2 stays unticked for the reason it always was: `open()` mounting a real
-modal is the platform's.
+asserted `.title`. So this clause is *verified again* — but it was not before the fix. Criterion 2
+stays unticked for the reason it always was: `open()` mounting a real modal is the platform's.
+
+**Amended again by the second fix pass — where the name lives now, and what it cost.** The first fix
+put the section name in `lightning-button`'s `label`, which is both the visible text and the
+accessible name, and that changed what a sighted user reads from "Add items" to "Add items to
+&lt;section&gt;" — the section's name printed twice in a row in a header that already carries it in
+its `<h2>`, in a card that does not grow. **The engineer's decision was to take the route the critic
+named: a hand-rolled `<button>` whose visible text is "Add items" and whose accessible name is
+completed by an assistive-text span inside it, `` ` to ${cardLabel}` ``.** An assistive-text span is
+still the button's *content*, so it contributes to the accessible name exactly as `label` did, while
+`slds-assistive-text` keeps it off the screen. That is the same hand-rolled-`<button>` pattern the
+picker's own entries use, and for the same reason.
+
+So the earlier sentence "`label` is the only place the name can go" was true only of a
+`lightning-button`, and is superseded: what is genuinely forced is that `title` cannot carry an
+accessible name, not that the name has to be visible. **The accepted cost, taken deliberately and
+not by oversight: this one control stops being a base component, so its SLDS 2 adoption is ours
+rather than inherited.** It is styled as the neutral button in `navigatorSection.css` from
+`--slds-g-*` semantic hooks in `var(--hook, fallback)` form — surface-container background,
+on-surface-2 text, the *functional* `border-2` because it is interactive, the dense 4px radius,
+semibold — with `--slds-g-shadow-outline-focus-1` for the focus ring rather than a hand-rolled
+outline, and no `prefers-color-scheme` and no colour-mode branch in JS. A stylesheet test pins all
+of that, because jsdom applies no CSS and the class assertions alone cannot see an empty rule.
+
+**Two things travelled with it.** The `title` is gone: with the name in the button's content, a
+`title` would have been byte-identical to what the button already announces, and where an AT voices
+`title` as the accessible *description* the user hears the same sentence twice — it is not paying
+for itself on a control whose own words are already on screen and whose section is named in the same
+header. And the empty-section message and the button's wording now come from a single `ADD_ITEMS`
+constant: they drifted apart once already, when the button's wording changed under a sentence that
+still said "Use Add items", and the test that was supposed to catch it asserted only that the button
+*existed*. It now asserts that the sentence quotes the button's own visible text.
+
+**The header truncates now, which is right independently of the label.** `justify-content:
+space-between` over an `<h2>`, the button and the menu, with no `min-width: 0` anywhere, cannot
+shrink any of them below its own content — so a long stored section name pushes the header wider
+than its card, worst at six columns where the card is narrowest. The heading is the part that gives
+way (`flex: 1 1 auto; min-width: 0` and an ellipsis); the button and the menu do not, because a
+button whose words clipped would be worse than a truncated name. The full name stays reachable: a
+`title` on the heading for a pointer, and the card's own `aria-label`, which was already there, for
+a screen reader.
 
 **Also amended: the dialog's own name.** `handleSectionAddItems` passes `label: "Add items to
 &lt;section&gt;"`, which in the real platform is the dialog's accessible name — and it travelled a
@@ -357,6 +394,34 @@ newline the platform strips on retrieve, so `--ignore-conflicts` was used; the d
 `force-app` outside the tests asserting their absence. The untracked `sketches/` directory was again
 neither edited nor staged.
 
+**The second fix pass — the assistive-text button — re-ran all 31 rows and no count fell.** The
+suite is now **409 across 6 suites** (407 plus the two stylesheet tests this pass added; the three
+pre-existing button assertions were rewritten onto the accessible name and the visible text rather
+than removed, so no `it` was deleted or weakened). Two rows had to be re-anchored because this pass
+changed the code they mutate — row 10 now deletes the hand-rolled `<button>` block, and row 14 now
+empties the `emptyMessage` getter, since the sentence moved out of the template into JS — and the
+runner still aborts loudly on a pattern that is missing or non-unique. Every row bites at or above
+the number the previous pass recorded: 1:16, 2:25, 3:10, 4:2, 5:4, 6:3, 7:13, 8:5, 9:3, 10:26,
+11:4, 12:6, 13:2, 14:2, 15:24, 16:2, 17:1, 18:5, 19:14, 20:4, 21:7, 22:1, 23:1, 24:1, 25:1, 26:1,
+27:1, 28:15, 29:1, 30:1, 31:1. **Row 6 is the only one below its "now" column (3 rather than 4), and
+it is not a fall in coverage:** this runner is the previous critic's, whose row 6 runs the resolved
+index into the `filter` predicate rather than into `storedSource` — the wording difference that
+critic already recorded, and the 3 it already measured, which is still the number the build
+recorded. Five further rows were added for this pass's own fix and are itemised in the finding
+above.
+
+`sf project deploy start` (no `--target-org`) reported the source-tracking conflict on the one
+bundle this pass touched. All four org-side files were retrieved to a scratchpad with
+`--target-metadata-dir … --unzip` — the form that cannot touch the working tree — and diffed against
+`git show HEAD:<path>`: every one differs only by the trailing newline the platform strips on
+retrieve, so `--ignore-conflicts` was used and the deploy reported 4 `Changed`, `Status: Succeeded`,
+Deploy ID `0AfO800000ZSTMHKA5`. `npm test` is 409 passed across 6 suites before and after every
+mutation and after the deploy; `npm run lint`, `npm run lint:slds-gate` (all six assertions ok) and
+`npm run prettier:verify` are clean; `grep -rn 'splice' force-app | grep -v __tests__` is still the
+two lines inside `reorder`; and `aria-grabbed`, `aria-dropeffect`, `if:true` and `if:false` still
+appear nowhere in `force-app` outside the tests asserting their absence. The untracked `sketches/`
+directory was neither edited nor staged.
+
 ## Critique findings
 
 - [x] fixed — the section name moved into the button's `label` (`label={addItemsLabel}`, `title`
@@ -545,7 +610,47 @@ neither edited nor staged.
       than 3, row 7 (a deleted section's ids stay placed, applied as a memo inside `availableTabs`) 12
       rather than 5, row 16 2 rather than 1. All the rest reproduce at the recorded count, including
       10 at 22, 15 at 22, 19 at 14, 28 at 13, 21 at 7, 1 at 16 and 30/31 at 1.
-- [ ] **The Add items button now prints the section name a second time in the same header, and the
+- [x] fixed — **the engineer chose the assistive-text route, and its cost was accepted with it.**
+      The button is now a hand-rolled `<button type="button" class="rstk-nav-section__add">` reading
+      `{addItemsText}<span class="slds-assistive-text">{addItemsAssistive}</span>`, so the visible
+      text is back to "Add items" while the accessible name is still "Add items to &lt;section&gt;".
+      It differs from the critic's sketch in two places, both deliberate: no `slds-button
+      slds-button_neutral`, because the picker's own hand-rolled entries carry no `slds-button`
+      either and take their appearance from `--slds-g-*` hooks in their own stylesheet — following
+      the pattern this repo already has rather than introducing a second one; and the assistive text
+      comes from a getter rather than being written inline, because template whitespace either side
+      of an expression is collapsed by the compiler and a name reading "Add itemsto Selling" is the
+      failure that would follow. The leading space is in the JS string, where nothing collapses it.
+      **The accepted cost is recorded in `## Deviations`: this control is no longer a base
+      component, so SLDS 2 on it is ours** — neutral-button styling from semantic hooks and a
+      `--slds-g-shadow-outline-focus-1` focus ring, pinned by a stylesheet test.
+      Six assertions were watched red first, all genuine assertion failures rather than setup
+      errors (the old `lightning-button` stub renders an empty template, so its content read as
+      `""`): `expect(received).toBe(expected) … Expected: "Add items" / Received: ""` on the visible
+      text; `Expected: "Add items to Support" / Received: ""` on the accessible name computed from
+      the whole button's content; the same `Expected: "Add items"` on the short-wording test;
+      `expect(received).toContain(expected) … Expected substring: "Use  to" / Received string:
+      "This section has no items. Use Add items to put tabs you can reach into it."` on the
+      empty-message test now quoting the button's own text; `expect(received).not.toBeNull() …
+      Received: null` for the missing `.rstk-nav-section__add` stylesheet rule; and
+      `expect(received).toMatch(expected) … Expected pattern: /min-width:\s*0/` against the
+      untruncated `.rstk-nav-section__title` rule.
+      Then the fix was mutated against itself, five rows, each restored afterwards: deleting the
+      assistive-text span fails **2** (the accessible-name test and the short-wording test's span
+      assertion); making the span visible fails **3**; making the visible wording carry the section
+      name again fails **4**; dropping `min-width: 0` and the ellipsis from the heading fails **1**;
+      and taking the focus ring off the hand-rolled button fails **1**.
+      **The three ripples the critic named are closed.** (a) `title` is dropped rather than kept —
+      it would have been byte-identical to the accessible name, and an AT that voices `title` as the
+      description reads the same sentence twice; the tooltip assertion that pinned it is not deleted
+      but rewritten onto the accessible name, which is the fact worth pinning. (b) The header
+      truncates: the heading is `flex: 1 1 auto; min-width: 0` with an ellipsis and a `title`, the
+      button and the menu do not shrink — judged right independently of the label's length, because
+      a long name at six columns overflowed either way. (c) The empty-section message is correct
+      again *and* pinned: both it and the button's wording come from one `ADD_ITEMS` constant, and
+      the test no longer asserts merely that the button exists but that the sentence quotes what the
+      button actually reads.
+      **The Add items button now prints the section name a second time in the same header, and the
       fix that put it there was sufficient rather than necessary.** This re-opens the *downstream half*
       of finding 1 only — the accessible-name defect finding 1 named is genuinely fixed, and mutating
       `label={addItemsLabel}` to a constant fails 2 tests where the old `title`-only mutation failed 1

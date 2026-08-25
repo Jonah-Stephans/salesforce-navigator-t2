@@ -1120,9 +1120,25 @@ describe("c-navigator-section", () => {
 
   describe("adding and removing items", () => {
     function addButtonOf(element) {
-      return element.shadowRoot.querySelector(
-        "lightning-button.rstk-nav-section__add"
-      );
+      return element.shadowRoot.querySelector(".rstk-nav-section__add");
+    }
+
+    // What a screen reader computes for a <button>: the whole of its rendered
+    // content, assistive-text spans included, with whitespace collapsed the
+    // way the accessible name computation collapses it.
+    function accessibleNameOf(button) {
+      return button.textContent.replace(/\s+/g, " ").trim();
+    }
+
+    // What a sighted user reads: the same content with the assistive-only
+    // parts taken out, which is exactly what `slds-assistive-text` does on
+    // screen and does not do to the name above.
+    function visibleTextOf(button) {
+      const copy = button.cloneNode(true);
+      copy
+        .querySelectorAll(".slds-assistive-text")
+        .forEach((node) => node.remove());
+      return copy.textContent.replace(/\s+/g, " ").trim();
     }
 
     it("offers an Add items button in its header, where a user can find it", () => {
@@ -1130,24 +1146,70 @@ describe("c-navigator-section", () => {
 
       const button = addButtonOf(element);
       expect(button).not.toBeNull();
-      expect(button.label).toBe("Add items to Selling");
+      expect(visibleTextOf(button)).toBe("Add items");
     });
 
-    it("names the section on the Add items button, so a column of them is not identical", () => {
-      const element = createSection(resolvedSection({ name: "Support" }));
-
-      expect(addButtonOf(element).title).toBe("Add items to Support");
-    });
-
-    it("names the section in the button's own label, which is what a screen reader reads", () => {
+    it("names the section in the button's accessible name, which is what a screen reader reads", () => {
       // A <button>'s accessible name comes from its *content* before its
-      // `title` (HTML-AAM), so `title` is a mouse tooltip and nothing else —
-      // pinning it leaves every card in the layout announced as the identical
-      // "Add items". `lightning-button` exposes no `aria-label` passthrough,
-      // so the name has to be in `label`, and this asserts it there.
+      // `title` (HTML-AAM), so a `title` carrying the section name is a mouse
+      // tooltip and nothing else — every card in the layout would then be
+      // announced as the identical "Add items". An assistive-text span inside
+      // the button is content, so it contributes to the name.
       const element = createSection(resolvedSection({ name: "Support" }));
 
-      expect(addButtonOf(element).label).toBe("Add items to Support");
+      expect(accessibleNameOf(addButtonOf(element))).toBe(
+        "Add items to Support"
+      );
+    });
+
+    it("keeps the visible wording short while the name carries the section", () => {
+      // The header already prints the section's name in its own <h2>. A
+      // button that printed it again would say it twice in a row and roughly
+      // double the header's intrinsic width, so the section name is carried
+      // by assistive text rather than by visible text.
+      const element = createSection(resolvedSection({ name: "Support" }));
+      const button = addButtonOf(element);
+
+      expect(visibleTextOf(button)).toBe("Add items");
+      expect(
+        button.querySelector(".slds-assistive-text").textContent.trim()
+      ).toBe("to Support");
+    });
+
+    it("styles the hand-rolled Add items button itself, in both colour modes", () => {
+      // It is not a `lightning-button` any more, so SLDS 2 adoption on this
+      // one control is ours: it has to look like a button and carry a visible
+      // focus ring without a hand-rolled outline or a colour-mode branch.
+      const css = readFileSync(
+        join(__dirname, "..", "navigatorSection.css"),
+        "utf8"
+      );
+      const base = css.match(/\.rstk-nav-section__add\s*\{[^}]*\}/);
+      const focus = css.match(
+        /\.rstk-nav-section__add:focus-visible\s*\{[^}]*\}/
+      );
+
+      expect(base).not.toBeNull();
+      expect(base[0]).toContain("--slds-g-");
+      expect(focus).not.toBeNull();
+      expect(focus[0]).toContain("--slds-g-shadow-outline-focus-1");
+      expect(css).not.toMatch(/prefers-color-scheme|--slds-c-|--lwc-/);
+    });
+
+    it("keeps a long section name from pushing the header wider than its card", () => {
+      // `justify-content: space-between` with no `min-width: 0` cannot shrink
+      // a flex item below its own content, so a long stored name at six
+      // columns widens the header against a card that does not grow. The
+      // heading is the part that gives way; the button and the menu are not.
+      const css = readFileSync(
+        join(__dirname, "..", "navigatorSection.css"),
+        "utf8"
+      );
+      const title = css.match(/\.rstk-nav-section__title\s*\{[^}]*\}/);
+
+      expect(title).not.toBeNull();
+      expect(title[0]).toMatch(/min-width:\s*0/);
+      expect(title[0]).toContain("text-overflow: ellipsis");
     });
 
     it("asks the parent to open the picker for its own section", () => {
@@ -1193,9 +1255,15 @@ describe("c-navigator-section", () => {
       );
       expect(empty).not.toBeNull();
       expect(empty.textContent).toContain("no items");
-      expect(empty.textContent).toContain("Add items");
-      // And the route it names is actually on screen.
-      expect(addButtonOf(element)).not.toBeNull();
+      // And the route it names is actually on screen, *reading the way the
+      // sentence quotes it*. Asserting the button merely exists let the two
+      // drift apart once already, when the button's wording changed and the
+      // sentence did not.
+      const button = addButtonOf(element);
+      expect(button).not.toBeNull();
+      expect(empty.textContent.replace(/\s+/g, " ")).toContain(
+        `Use ${visibleTextOf(button)} to`
+      );
     });
 
     it("forwards an item's removal upward with the section it is in", () => {

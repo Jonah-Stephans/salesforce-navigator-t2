@@ -6,6 +6,13 @@ const DELETE = "delete";
 const COLUMNS_PREFIX = "columns-";
 
 /**
+ * The one copy of the Add items button's visible wording. The button reads it
+ * and so does the empty-section message that points at the button, so the two
+ * cannot say different things.
+ */
+const ADD_ITEMS = "Add items";
+
+/**
  * The distinguisher that makes a repeated announcement a *new* announcement.
  *
  * A live region is read when its content changes, and LWC writes nothing to
@@ -258,19 +265,52 @@ export default class NavigatorSection extends LightningElement {
   }
 
   /**
-   * What the Add items button is called. Every card in the layout carries
-   * one, so a button announced only as "Add items" leaves the user with a
-   * column of identically-named buttons and no way to tell which section they
-   * are about to fill — the same reasoning as `menuLabel` on an item, and as
-   * `cardLabel` above.
+   * The visible wording on the Add items button, and the same words where the
+   * empty-section message points at it.
    *
-   * This is the button's `label`, not merely its `title`: a button's
-   * accessible name comes from its content before its `title`, so a `title`
-   * carrying the section name is a pointer tooltip and reaches a screen
-   * reader user not at all.
+   * One source for both because they drifted apart once: the button's wording
+   * changed and the sentence naming it did not, leaving a message that told
+   * the user to use a control that no longer read that way.
    */
-  get addItemsLabel() {
-    return `Add items to ${this.cardLabel}`;
+  get addItemsText() {
+    return ADD_ITEMS;
+  }
+
+  /**
+   * The rest of the Add items button's accessible name, carried by an
+   * assistive-text span inside the button.
+   *
+   * Every card in the layout has one of these buttons, so a button whose name
+   * is only "Add items" leaves the user with a column of identically-named
+   * buttons and no way to tell which section they are about to fill — the
+   * same reasoning as `menuLabel` on an item and `cardLabel` above. A `title`
+   * cannot do this job: a button's accessible name comes from its content
+   * before its `title` (HTML-AAM), so a `title` is a pointer tooltip and
+   * reaches a screen reader user not at all.
+   *
+   * It is assistive rather than visible because the header already prints the
+   * section's name in its own `<h2>` two elements away: a visible "Add items
+   * to Selling" beside a heading reading "Selling" says it twice in a row and
+   * roughly doubles the header's intrinsic width. A span inside the button is
+   * still the button's content, so the name is "Add items to Selling" either
+   * way.
+   *
+   * The leading space is deliberate and is built here rather than written in
+   * the template: template whitespace either side of an expression is
+   * collapsed by the compiler, and a name reading "Add itemsto Selling" is
+   * the failure that would follow.
+   */
+  get addItemsAssistive() {
+    return ` to ${this.cardLabel}`;
+  }
+
+  /**
+   * What an emptied section says. Both halves of the criterion — that the
+   * section is empty, and the way out of it — and the way out is named with
+   * the button's own wording rather than a second copy of it.
+   */
+  get emptyMessage() {
+    return `This section has no items. Use ${ADD_ITEMS} to put tabs you can reach into it.`;
   }
 
   /**

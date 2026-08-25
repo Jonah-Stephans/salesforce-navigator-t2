@@ -49,15 +49,64 @@
 }
 
 /* on-surface-3 is the title colour, and the weight stays regular — SLDS 2
-   uses colour rather than bold for headings. */
+   uses colour rather than bold for headings.
+
+   The heading is the part of the header that gives way. A flex item's default
+   minimum is its own content, so without `min-width: 0` a long stored section
+   name cannot shrink and `space-between` above pushes the header wider than
+   the card holding it — worst at six columns, where the card is narrowest.
+   The name is still reachable in full: `title` on the heading for a pointer,
+   the card's own `aria-label` for a screen reader. */
 .rstk-nav-section__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: var(--slds-g-font-scale-3, 1.25rem);
   font-weight: var(--slds-g-font-weight-4, 400);
   color: var(--slds-g-color-on-surface-3, #181818);
 }
 
+/* The rename box stands where the heading does and shrinks for the same
+   reason — an input's intrinsic width is wider than the space it may have. */
 .rstk-nav-section__rename {
   flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The Add items button is a real `<button>` rather than a `lightning-button`
+   — see the note in the template for why — so SLDS 2 adoption on this one
+   control is ours rather than inherited. It is the neutral button: a surface
+   container with body text on it, the *functional* border colour (`border-2`,
+   which is the interactive one) rather than the decorative `border-1`, the
+   dense 4px radius that buttons take, and semibold, which is the weight SLDS 2
+   gives button text. It does not shrink: the heading beside it is what gives
+   way, and a button whose label wrapped or clipped would be worse than a
+   truncated name. */
+.rstk-nav-section__add {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: var(--slds-g-spacing-1, 0.25rem) var(--slds-g-spacing-3, 0.75rem);
+  border: var(--slds-g-sizing-border-1, 1px) solid
+    var(--slds-g-color-border-2, #747474);
+  border-radius: var(--slds-g-radius-border-1, 0.25rem);
+  background-color: var(--slds-g-color-surface-container-1, #ffffff);
+  color: var(--slds-g-color-on-surface-2, #2e2e2e);
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+  font-weight: var(--slds-g-font-weight-6, 600);
+  cursor: pointer;
+}
+
+.rstk-nav-section__add:hover {
+  background-color: var(--slds-g-color-surface-container-2, #f3f3f3);
+}
+
+/* The focus ring is the shadow system's, not a hand-rolled outline: an
+   outline picks one colour and fails contrast in one of the two colour modes,
+   and this button is the section's primary action. */
+.rstk-nav-section__add:focus-visible {
+  box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
 }
 
 .rstk-nav-section__empty {
