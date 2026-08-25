@@ -191,3 +191,115 @@ resolved-versus-stored hazard the two move axes had; it is closed the same way, 
 same two private helpers rather than by getting it right here.
 
 ## Critique findings
+
+- [ ] **The focus-follows-rename block in `navigatorItem.renderedCallback` is not tested at all, and
+      deleting it leaves the suite green at 307.** Replacing the body of the `isRenaming` branch with
+      a bare `return` — so the input never receives focus when the menu entry opens it — fails
+      nothing. The comment above it states the consequence exactly: the menu entry that opened the
+      input is gone from the DOM by the time it renders, so without the focus call a keyboard user is
+      left with focus on nothing and the rename is a mouse-only gesture. This is row 16's shape
+      again: every rename test drives the input by holding a reference to it, which pins "the handler
+      does the right thing when told" and not "a keyboard user can get there". **It is testable in
+      jsdom** — the stub's own `focus()` does not move `shadowRoot.activeElement`, but
+      `jest.spyOn(HTMLElement.prototype, "focus")` before the `select` event records the call and the
+      assertion `expect(focused).toContain("LIGHTNING-INPUT")` passes on shipped code and fails on
+      the mutation. Verified both ways. `navigatorSection`'s identical block is uncovered too, from
+      an earlier slice; this slice added the second instance.
+- [ ] **`does not navigate, grab or drag while the wording is being edited` cannot fail.** It
+      dispatches `keydown(" ")` on the `lightning-input` and asserts no `itemgrab`. The grab handler
+      is bound to the anchor, and a keydown raised on the input never reaches it whether or not the
+      anchor is on screen — sibling nodes in one shadow root, no ancestor handler. Verified by
+      mutation: with the `lwc:else` wrapper removed so the anchor renders *alongside* the input
+      during a rename, exactly one test fails — `opens an input on the wording the item is currently
+      shown under`, on its incidental `expect(anchorOf(element)).toBeNull()`. The property is
+      therefore pinned only by that other test's one line, and the test that claims it in its name
+      pins nothing. To bite, it should assert against the anchor being absent, or drive the Space at
+      the item host / at whatever node a user's focus would actually be on.
+- [ ] **`handleRenameCommit` has no `isRenaming` guard, and `handleRenameKeydown` blanks `draftName`
+      on Escape — so any commit that arrives after Escape clears the user's rename.** Verified by
+      driving the component: Escape, then a `commit` event, dispatches one `itemrename` carrying
+      `rename: ""`, which for an item is destructive (the wording is dropped and the key is removed
+      from the payload) rather than a no-op. `navigatorSection` has the same Escape-blanks-the-draft
+      shape and is safe from it only because `handleRenameCommit` there refuses an empty name — the
+      one place this slice deliberately parts company with that component is exactly what removes
+      that protection. `commit` is what `lightning-input` fires on blur as well as on Enter, and
+      Escape removes a focused input from the DOM; whether a given browser delivers a blur-driven
+      commit on removal is browser-dependent and could not be settled in jsdom, but the handler is
+      unguarded either way. Cheap fix direction: return early from `handleRenameCommit` when
+      `isRenaming` is already false, or stop blanking `draftName` on Escape.
+- [ ] **Committing an empty box on an item that has *no* rename schedules a write that stores
+      nothing.** Verified: the item dispatches `itemrename` with `rename: ""` (the unchanged-commit
+      guard compares the trimmed draft against `this.label`, and `"" !== "Accounts"`), and
+      `salesforceNavigator.handleItemRename` calls `applyLayout` unconditionally, so `scheduleSave`
+      runs — for a user who has never changed anything that *creates* their layout row to persist a
+      payload identical to the seeded one. The live region also says `"Accounts renamed to
+      Accounts."`. This is the same hazard the slice's own "wording committed unchanged reports
+      nothing at all" decision exists to close, reached by the other door.
+- [ ] **Renaming an item to the exact text of the platform label, when it already has a rename,
+      stores that text and quietly costs the item criterion 6.** Verified against the model: an item
+      stored as `{id: "A", rename: "Clients"}` renamed to `"Accounts"` (the live label) is stored as
+      `{id: "A", rename: "Accounts"}`, and a later org relabelling to `"Accts"` no longer reaches it
+      — `resolveLayout` still renders `"Accounts"`. The unchanged-commit guard compares against the
+      wording currently *displayed*, so the identical keystrokes on an item with no rename correctly
+      store nothing. Whether a user who types the platform label means "pin this word" or "put it
+      back" is a product call, but the two paths disagree today and neither the code nor the slice
+      says which is intended.
+- [ ] **The slice records "Three pre-existing tests were adjusted"; four `it` blocks were edited.**
+      Three in `navigatorItem.test.js` (`lists every destination…`, `offers no menu at all…` →
+      `offers nowhere to move to…`, `reports the chosen destination upward…`) and one in
+      `salesforceNavigator.test.js` (`shows no menu at all…` → `offers no destination at all…`).
+      Read old against new: none is weakened. The two `menuItemsOf` → `destinationsOf` /
+      `menuEntries` changes are strictly narrowing filters that select the same nodes they selected
+      before the menu grew a second entry kind, with the assertions untouched; the two rewritten
+      ones trade `menu is null` for `menu is not null` plus `destinations are empty` plus (in the
+      item's case) `no subheader`, which is more assertions, not fewer, about the behaviour that
+      deliberately changed. Only the count in the record is wrong.
+- [x] false positive — "a rename can reach `id` or the `pageReference` by some path". Mutating
+      `renameItem` to write the wording into `id` fails 12 tests; the sharpest test the spec names
+      exists and bites (`shows the user's own wording and still navigates to exactly the same tab`,
+      which asserts the rendered text is `Clients` *and* that clicking it hands
+      `ACCOUNT_ITEM.pageReference` to the navigation mock, plus its live twin that renames in-session
+      and re-clicks). `renameItem` builds through `storedItem`, which takes the id it was already
+      holding and emits only `{id, rename?}`, and `resolveLayout` reads the target from the live tab
+      by `id`. There is no path.
+- [x] false positive — "the resolved-versus-stored seam is closed only for the fixture shape the
+      build happened to write". Probed `renameItem` with the inaccessible item last, several
+      consecutive inaccessible at the front, inaccessible interleaved through the middle, and a
+      rendered index past the end of what is reachable: the wording lands on the item the user can
+      see in every case, the unreachable ids keep their stored positions, and an index that names
+      nothing on screen returns the layout unchanged. Mutating `storedSource(positions, itemIndex)`
+      to `itemIndex` fails 3.
+- [x] false positive — "a cleared rename survives as `\"\"`, `null`, or an own property with an
+      undefined value". `storedItem` gates on truthiness, so the key is absent; the payload is
+      asserted as an exact key set (`Object.keys(...)` `["id"]`) in both the model suite and end to
+      end, and a `serializeLayout`/`deserializeLayout` round trip preserves the distinction.
+      Mutating the gate to `rename !== undefined` — the version that would leave `rename: ""` in the
+      payload — fails 3.
+- [x] false positive — "always rendering the overflow menu breaks a slice 05 criterion, its keyboard
+      path, or `hasMoveTargets`". No slice 05 criterion mentions withholding the menu; the two it
+      ticks that touch the menu (destinations listed, move announced) are unaffected, and its three
+      unticked ones are gesture-ceiling ones. `hasMoveTargets` is unchanged and now gates only the
+      divider, the subheader and the destination list. An *empty* menu is not reachable, because
+      Rename… is unconditional — the pre-change hazard of a button that opens onto nothing is
+      strictly reduced, not reintroduced. Restoring the gate fails 12.
+- [x] false positive — "the announcement can name the wrong thing". `before` is read from the
+      resolved list before `applyLayout` and the destination label from the same getter after it, so
+      a clear names the platform label it returns to and a set rename names both wordings. Mutating
+      it to read `before` after the change, and separately to name `before` on both sides, each
+      fails 2. The label is re-read from `this.sections` on every call rather than captured, so a
+      platform label that changed between renders is picked up.
+- [x] false positive — "the rename could reach a stored index through a new exported function".
+      `navigatorLayoutModel` still exports no function that takes a stored item index —
+      `renameItem(layout, tabs, sectionIndex, itemIndex, rename)` takes `(layout, tabs, …)` like the
+      two move axes and translates through the same private `renderedPositions` / `storedSource`.
+      `splice` still appears exactly twice outside `__tests__`, both inside `reorder`; `aria-grabbed`
+      and `aria-dropeffect` appear nowhere outside the tests asserting their absence; no `if:true` /
+      `if:false` anywhere.
+
+**Verification.** Every mutation above was applied to shipped code by a runner that exits non-zero
+when its pattern does not match, the whole suite was run, and the file was restored from the
+in-memory original. `npm test` is 307 passed across 5 suites before and after; `npm run lint`,
+`npm run lint:slds-gate` and `npm run prettier:verify` are clean; `git status` shows only this slice
+file modified, no production file was left changed and no deploy was needed.
+
+fix_cycles: 0
