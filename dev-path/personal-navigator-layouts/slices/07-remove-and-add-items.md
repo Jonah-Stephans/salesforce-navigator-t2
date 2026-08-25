@@ -21,7 +21,7 @@ touches:
   - test/jest-mocks/lightning/modal.js
   - jest.config.js
   - eslint.config.js
-fix_cycles: 0
+fix_cycles: 1
 done: true
 ---
 
@@ -545,3 +545,98 @@ neither edited nor staged.
       than 3, row 7 (a deleted section's ids stay placed, applied as a memo inside `availableTabs`) 12
       rather than 5, row 16 2 rather than 1. All the rest reproduce at the recorded count, including
       10 at 22, 15 at 22, 19 at 14, 28 at 13, 21 at 7, 1 at 16 and 30/31 at 1.
+- [ ] **The Add items button now prints the section name a second time in the same header, and the
+      fix that put it there was sufficient rather than necessary.** This re-opens the *downstream half*
+      of finding 1 only — the accessible-name defect finding 1 named is genuinely fixed, and mutating
+      `label={addItemsLabel}` to a constant fails 2 tests where the old `title`-only mutation failed 1
+      that was a tooltip assertion. What the fix did not have to do is change what a sighted user reads.
+      `navigatorSection.html`'s header is `display:flex; justify-content:space-between` holding
+      `<h2>{name}</h2>`, the button and the overflow menu, with no `min-width:0` and no truncation on
+      any of them; the button's content is now `Add items to <section>`, so the header reads
+      "Selling   Add items to Selling   [menu]" and a long stored section name roughly doubles the
+      header's intrinsic width against a card that does not grow. Three smaller consequences travel
+      with it: (a) `title={addItemsLabel}` is now byte-identical to the button's own content, so it is
+      a tooltip that repeats the visible text and, where an AT voices `title` as the accessible
+      *description*, the same sentence twice — dropping the `title` attribute entirely today fails
+      exactly 1 test, the tooltip assertion at `navigatorSection.test.js:1136`; (b) the empty-section
+      message still says "Use Add items to put tabs you can reach into it.", which no longer matches
+      the wording on the control it names, and the test at `navigatorSection.test.js:1185` asserts only
+      that the button *exists*, not that what it reads is what the sentence points at; (c) the sentence
+      "Add items to X" is now built independently in three files —
+      `navigatorSection.addItemsLabel`, `navigatorItemPicker.heading` and
+      `salesforceNavigator.handleSectionAddItems`'s `label` — where before the fix the section's copy
+      was a tooltip rather than a visible label. The route that was available: a plain
+      `<button class="slds-button slds-button_neutral">Add items<span class="slds-assistive-text"> to
+      {name}</span></button>`, which gives the accessible name "Add items to <section>" from its own
+      content while the visible text stays "Add items". That is the same hand-rolled-`<button>` pattern
+      the picker's own entries already use, and for the same reason. It costs the base component's
+      automatic SLDS 2 adoption on this one control, which is a real trade and is why this is a
+      judgement to make rather than a defect to correct blindly — but it was not weighed, and
+      `## Deviations` records the visible-text change as forced ("`label` is the only place the name
+      can go") when what is forced is only that `title` cannot carry it. Either take the
+      assistive-text route and restore the visible "Add items", or keep the current label and close
+      (a), (b) and the header's overflow behaviour deliberately.
+- [x] false positive — that the fix pass's re-run of the 31-row table might not reproduce, or that a
+      row might have started surviving. Re-run independently against HEAD with a runner that aborts on
+      a pattern that is missing or non-unique: **nothing survives, every row bites at or above the
+      number the fix pass recorded**, and 30 of the 31 land on its "now" column exactly — 1:16, 2:25,
+      3:10, 4:2, 5:4, 7:13, 8:5, 9:3, 10:26, 11:4, 12:6, 13:2, 14:2, 15:24, 16:2, 17:1, 18:5, 19:14,
+      20:4, 21:7, 22:1, 23:1, 24:1, 25:1, 26:1, 27:1, 28:15, 29:1, 30:1, 31:1. Only row 6 differs (3
+      rather than 4) and only because my wording of it differs — the resolved index is run into the
+      `filter` predicate rather than into `storedSource` — which is still above the 3 the build
+      recorded. The claimed rises were sanity-checked rather than accepted: row 10's 26 is the 22
+      itemised, plus `names the section in the button's own label`, `writes nothing when the picker
+      closes with a falsy value that is not undefined`, `schedules no autosave when the picker resolves
+      after the Navigator has gone` and `names the dialog after the section it was opened from` —
+      exactly the four new tests that touch that button. Row 8's 5 and row 12's 6 decompose the same
+      way. The suite is 407 across 6 suites, `lint`, `lint:slds-gate` (six assertions ok) and
+      `prettier:verify` are clean, and `grep -rn 'splice' force-app | grep -v __tests__` is still the
+      two lines inside `reorder`.
+- [x] false positive — that `addChosenItem`'s `if (!tabId)` guards nothing the equality check cannot,
+      or that the two new write-guard tests are decorative. Both claims are wrong and both were run
+      rather than reasoned. Deleting `if (!tabId) { return; }` fails exactly 1 test, `writes nothing
+      when the picker closes with a falsy value that is not undefined` — so without it the layout
+      genuinely changes, which is only possible because `""` is in the accessible set
+      (`normalizeNavItems` maps `developerName` straight through and filters nothing, so a blank
+      developer name really does reach `availableTabs` as `{id: ""}`) and `storedItem("")` yields
+      `{id: ""}`. Deleting `if (serializeLayout(next) === serializeLayout(this.layout))` from
+      `handleItemRemove` fails exactly 1, `writes nothing when a removal names no item on screen`.
+      Deleting the `isAttached` guard fails exactly 1, `schedules no autosave when the picker resolves
+      after the Navigator has gone`. Three guards, three tests, one failure each.
+- [x] false positive — that finding 3's fix changed behaviour, or that the item-level count was
+      overstated. Confirmed: no production file changed for it, and making `copySection` return
+      `items: itemsOf(section).slice()` now fails **8** — the six that failed before plus
+      `deleteSection hands back copies` and `addSection hands back copies` — where the previous critic
+      measured 6. Rows 30 and 31 each still bite at 1.
+- [x] false positive — that `isAttached` guarding `addChosenItem` alone leaves other post-disconnect
+      paths open. Every asynchronous continuation in `salesforceNavigator` was walked: the autosave
+      `setTimeout` is cleared *and flushed* in `disconnectedCallback`; `connectedCallback`'s
+      `getLayouts().then/.catch` can land after disconnect but assigns reactive fields only — no Apex
+      call, no timer, and no render to run against — and the same is true of `persist`'s `.then/.catch`;
+      the `@wire` is unsubscribed by the framework on disconnect, so a re-emission is not a path.
+      `addChosenItem` really is the only continuation that can reach `applyLayout` and therefore
+      `scheduleSave`, which is the only one that can leave a timer running.
+- [x] false positive — that the modal mock's new machinery models the platform wrongly, or that the
+      picker suite now tests a contract of its own invention. `configs`/`BASE_CONFIG_KEYS` make the
+      mock *less* divergent, not more: in the real platform `open(config)` does set `label`, `size`,
+      `description` and `disableClose` on the base instance, and `element[key] = config[key]` reached
+      none of them, so the WeakMap-plus-`connectedCallback` adoption restores platform behaviour rather
+      than inventing it. Nowhere is the mock stricter than the platform — `disableClose` here suppresses
+      only Escape, where the platform also suppresses the X and the backdrop, so it is still the more
+      permissive of the two and cannot manufacture a failure. `configOf` is imported by the two test
+      files and by nothing under `force-app`: it is a test seam of exactly the kind
+      `@salesforce/sfdx-lwc-jest`'s own `lightning/navigation` mock ships as `getNavigateCalledWith`,
+      not production coupling. The one behaviour the mock still asserts on its own authority — Escape
+      closing with `undefined` — is unchanged by this pass and is already owned by `## Deviations`.
+- [x] false positive — that `searchStatus`, being user-facing prose built by concatenation, is wrong
+      on some input. Walked every case: pluralisation agrees on both axes ("1 item matches", "11 items
+      match", "174 items available"); an empty or all-whitespace query trims to `term === ""` and takes
+      the "N items available." branch, so the quoted form is never rendered around nothing; a query
+      matching everything is just the unfiltered count; count 0 with no term is unreachable, because an
+      empty filter term passes every item, so `count === 0` implies `!hasAvailable` and the
+      nothing-left-to-add sentence; a query carrying quotes or markup is safe because `{searchStatus}`
+      is an LWC text binding, and the U+201C/U+201D smart quotes are deliberate — `noMatchMessage` has
+      used them since the build and the new sentence matches it rather than introducing a second
+      convention. `aria-live="polite"` with `aria-atomic="true"` is the right pair for a status that
+      narrows as you type: assertive would interrupt the keystroke the user is still making, and
+      non-atomic risks a reader voicing only the digit that changed.
