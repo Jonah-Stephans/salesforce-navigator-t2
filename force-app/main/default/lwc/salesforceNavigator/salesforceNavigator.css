@@ -1,0 +1,42 @@
+/* The error state is a genuine feedback message, so the error family is the
+   correct semantic pairing here — not decoration. */
+.rstk-nav-error {
+  padding: var(--slds-g-spacing-4, 1rem);
+  border-radius: var(--slds-g-radius-border-2, 0.25rem);
+  background-color: var(--slds-g-color-error-container-1, #ba0517);
+}
+
+/* Section cards stack with a gap rather than a margin on the card itself, so
+   a section never has to know what sits above or below it. */
+.rstk-nav-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--slds-g-spacing-4, 1rem);
+  padding: var(--slds-g-spacing-4, 1rem);
+}
+
+/* The layout menu's three dialogs. A row, so the commit and the cancel sit
+   beside what they act on rather than below it; `flex-end` because the input
+   carries a label above it and the buttons do not. */
+.rstk-nav-layout-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--slds-g-spacing-2, 0.5rem);
+  padding: var(--slds-g-spacing-4, 1rem);
+}
+
+.rstk-nav-layout-prompt__input {
+  flex: 1 1 auto;
+}
+
+.rstk-nav-layout-prompt__text {
+  flex: 1 1 auto;
+  color: var(--slds-g-color-on-surface-1, #747474);
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+}
+
+.rstk-nav-error__text {
+  color: var(--slds-g-color-on-error-1, #ffffff);
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+}

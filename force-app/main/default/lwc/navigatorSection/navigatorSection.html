@@ -1,0 +1,157 @@
+<template>
+  <!-- The card is the drag source for reordering the sections themselves, and
+       `tabindex` is what lets a keyboard user reach it to do the same thing.
+       Items inside stop their own drag and key events, so picking up an item
+       is never read as picking up the whole card. -->
+  <article
+    class={cardClass}
+    draggable="true"
+    tabindex="0"
+    aria-label={cardLabel}
+    aria-describedby={instructionsId}
+    ondragstart={handleCardDragStart}
+    ondragenter={handleCardDragEnter}
+    ondragleave={handleCardDragLeave}
+    ondragover={handleCardDragOver}
+    ondrop={handleCardDrop}
+    ondragend={handleCardDragEnd}
+    onkeydown={handleCardKeydown}
+  >
+    <header class="rstk-nav-section__header">
+      <template lwc:if={isRenaming}>
+        <lightning-input
+          class="rstk-nav-section__rename"
+          label="Section name"
+          variant="label-hidden"
+          value={draftName}
+          onchange={handleRenameChange}
+          oncommit={handleRenameCommit}
+          onkeydown={handleRenameKeydown}
+        ></lightning-input>
+      </template>
+      <template lwc:else>
+        <!-- `title` because the heading truncates: the stylesheet lets this
+             one flex item shrink so a long stored name cannot push the header
+             wider than its card, and a name the user can no longer read in
+             full needs somewhere to read it. Screen reader users have it on
+             the card's own `aria-label`. -->
+        <h2 class="rstk-nav-section__title" title={cardLabel}>{name}</h2>
+      </template>
+
+      <!-- The one route into the picker. A button rather than an entry in the
+           overflow menu beside it, because it is the section's primary action
+           and the only way an item that has been removed comes back — and
+           because the empty state below names it, which it could not do if it
+           were hidden behind a menu.
+
+           Hand-rolled rather than a `lightning-button`, which is the same
+           pattern — and the same reason — as the picker's own entries. The
+           section's name has to be in the button's *content*: a button's
+           accessible name comes from its content before its `title`
+           (HTML-AAM), and `lightning-button` exposes no `aria-label`
+           passthrough, so its only content is `label`, which is also what a
+           sighted user reads. Putting the name there prints it a second time
+           in a header that already shows it. An assistive-text span inside
+           the button is content too, so the name is "Add items to Selling"
+           while the visible wording stays "Add items". The cost, taken
+           deliberately: SLDS 2 adoption on this one control is now ours, in
+           `navigatorSection.css`. No `title` — it would be byte-identical to
+           the name the button already announces, and where an AT voices
+           `title` as the accessible *description* the user hears the same
+           sentence twice. -->
+      <button
+        type="button"
+        class="rstk-nav-section__add"
+        onclick={handleAddItems}
+      >
+        {addItemsText}<span class="slds-assistive-text"
+          >{addItemsAssistive}</span
+        >
+      </button>
+
+      <lightning-button-menu
+        alternative-text={name}
+        icon-size="x-small"
+        menu-alignment="auto"
+        variant="border-filled"
+        onselect={handleMenuSelect}
+      >
+        <lightning-menu-item
+          value="rename"
+          label="Rename section…"
+        ></lightning-menu-item>
+        <lightning-menu-divider></lightning-menu-divider>
+        <lightning-menu-subheader label="Columns"></lightning-menu-subheader>
+        <template for:each={columnChoices} for:item="choice">
+          <lightning-menu-item
+            key={choice.value}
+            value={choice.value}
+            label={choice.label}
+            checked={choice.checked}
+          ></lightning-menu-item>
+        </template>
+        <lightning-menu-divider></lightning-menu-divider>
+        <lightning-menu-item
+          value="delete"
+          label="Delete section"
+        ></lightning-menu-item>
+      </lightning-button-menu>
+    </header>
+
+    <ul class={gridClass}>
+      <template for:each={renderItems} for:item="item">
+        <li key={item.id} class="rstk-nav-section__cell">
+          <c-navigator-item
+            tab-id={item.id}
+            label={item.label}
+            page-reference={item.pageReference}
+            index={item.index}
+            grabbed={item.isGrabbed}
+            move-targets={moveTargets}
+            onitemdragstart={handleItemDragStart}
+            onitemdragover={handleItemDragOver}
+            onitemdrop={handleItemDrop}
+            onitemdragend={handleItemDragEnd}
+            onitemgrab={handleItemGrab}
+            onitemkeymove={handleItemKeyMove}
+            onitemkeydrop={handleItemKeyDrop}
+            onitemkeycancel={handleItemKeyCancel}
+            onitemmoveto={handleItemMoveTo}
+            onitemrename={handleItemRename}
+            onitemremove={handleItemRemove}
+          ></c-navigator-item>
+        </li>
+      </template>
+    </ul>
+
+    <!-- A user who removes every item from a section must not be left looking
+         at a blank card wondering whether they have broken something. The
+         message says both halves: that the section is empty, and the way out
+         of it — which is the Add items button in this card's own header, named
+         so the sentence points at something the user can see. -->
+    <template lwc:if={isEmpty}>
+      <p class="rstk-nav-section__empty">{emptyMessage}</p>
+    </template>
+
+    <!-- Assertive rather than polite: a move the user has just made and is
+         about to make another of is not something to queue behind whatever
+         else the page is saying. -->
+    <span
+      class="slds-assistive-text rstk-nav-section__announcer"
+      aria-live="assertive"
+      aria-atomic="true"
+      >{announcement}</span
+    >
+
+    <!-- Attached only while this card is grabbed, never permanently. -->
+    <template lwc:if={grabbed}>
+      <span
+        id={instructionsId}
+        class="slds-assistive-text rstk-nav-section__instructions"
+      >
+        Use the arrow keys to move this section, Space to drop it, Escape to
+        cancel.
+      </span>
+    </template>
+  </article>
+</template>

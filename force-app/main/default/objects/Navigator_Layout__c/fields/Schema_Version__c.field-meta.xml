@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Schema_Version__c</fullName>
+    <label>Schema Version</label>
+    <description
+  >The version of the Layout_JSON__c payload shape held on this row. The platform will not migrate the inside of a Long Text Area across a package upgrade, so the reader dispatches on this number rather than guessing at the payload's shape.</description>
+    <type>Number</type>
+    <precision>18</precision>
+    <scale>0</scale>
+    <required>false</required>
+    <unique>false</unique>
+</CustomField>

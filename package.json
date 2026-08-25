@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "description": "Salesforce App",
   "scripts": {
-    "lint": "eslint **/{aura,lwc}/**/*.js",
+    "lint": "eslint . --max-warnings 0",
+    "lint:slds-gate": "./scripts/verify-slds-gate.sh",
     "test": "npm run test:unit",
     "test:unit": "sfdx-lwc-jest",
     "test:unit:watch": "sfdx-lwc-jest --watch",
@@ -18,6 +19,7 @@
   "devDependencies": {
     "@lwc/eslint-plugin-lwc": "^3.1.0",
     "@prettier/plugin-xml": "^3.4.1",
+    "@salesforce-ux/eslint-plugin-slds": "^1.2.1",
     "@salesforce/eslint-config-lwc": "^4.0.0",
     "@salesforce/eslint-plugin-aura": "^3.0.0",
     "@salesforce/eslint-plugin-lightning": "^2.0.0",
@@ -34,8 +36,8 @@
     "**/*.{cls,cmp,component,css,html,js,json,md,page,trigger,xml,yaml,yml}": [
       "prettier --write"
     ],
-    "**/{aura,lwc}/**/*.js": [
-      "eslint"
+    "**/{aura,lwc}/**/*.{js,css,html}": [
+      "eslint --no-warn-ignored --max-warnings 0"
     ],
     "**/lwc/**": [
       "sfdx-lwc-jest -- --bail --findRelatedTests --passWithNoTests"

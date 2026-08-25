@@ -1,0 +1,115 @@
+<template>
+  <!-- The anchor and the overflow menu sit on one row. A menu button cannot
+       live inside the anchor — a button inside a link is invalid and the
+       browser's own activation of the link would swallow it — so the two are
+       siblings, and this row is what keeps them beside each other rather than
+       stacked. -->
+  <div class="rstk-nav-item__row">
+    <!-- The rename takes the anchor's place rather than sitting beside it.
+         Everything the anchor carries — navigation, the drag source, Space to
+         grab — is exactly what must not happen while the user is typing a
+         name into a box, and the surest way to keep a Space out of the drag
+         pattern is for the thing that reads it not to be on screen. -->
+    <template lwc:if={isRenaming}>
+      <lightning-input
+        class="rstk-nav-item__rename"
+        label="Item label"
+        variant="label-hidden"
+        value={draftName}
+        onchange={handleRenameChange}
+        oncommit={handleRenameCommit}
+        onkeydown={handleRenameKeydown}
+      ></lightning-input>
+    </template>
+    <template lwc:else>
+      <a
+        href={url}
+        class={anchorClass}
+        data-tab-id={tabId}
+        draggable="true"
+        aria-label={label}
+        aria-describedby={describedById}
+        tabindex={fallbackTabIndex}
+        role={fallbackRole}
+        onclick={handleClick}
+        onkeydown={handleKeydown}
+        ondragstart={handleDragStart}
+        ondragover={handleDragOver}
+        ondrop={handleDrop}
+        ondragend={handleDragEnd}
+      >
+        <span class="rstk-nav-item__label">{label}</span>
+      </a>
+    </template>
+
+    <!-- This item's own actions. `lightning-button-menu` is keyboard-operable
+         in its own right, so this is the same menu and the same gesture for
+         both kinds of user — which for the cross-section move is the whole
+         mechanism, since arrow keys deliberately do not cross a section
+         boundary.
+
+         The menu is always here, because Rename… is always available: the
+         seeded layout is a single section, so a menu withheld when there is
+         nowhere to move to would put renaming out of reach of exactly the user
+         who has never customised anything. The *destinations* are what come
+         and go, so nobody is offered a list that opens onto nothing. -->
+    <lightning-button-menu
+      class="rstk-nav-item__menu"
+      alternative-text={menuLabel}
+      icon-size="x-small"
+      menu-alignment="auto"
+      variant="border-filled"
+      onselect={handleMenuSelect}
+    >
+      <lightning-menu-item value="rename" label="Rename…"></lightning-menu-item>
+      <!-- Unconditional for the same reason Rename… is: the seeded layout is
+           a single section, so an entry withheld when there is nowhere to move
+           to would put removal out of reach of every user on first open. -->
+      <lightning-menu-item value="remove" label="Remove"></lightning-menu-item>
+      <template lwc:if={hasMoveTargets}>
+        <lightning-menu-divider></lightning-menu-divider>
+        <lightning-menu-subheader label="Move to…"></lightning-menu-subheader>
+        <template for:each={moveMenuItems} for:item="target">
+          <lightning-menu-item
+            key={target.value}
+            value={target.value}
+            label={target.label}
+          ></lightning-menu-item>
+        </template>
+      </template>
+    </lightning-button-menu>
+  </div>
+
+  <!-- Exactly one description node is present at a time, and the anchor's
+       `aria-describedby` above points at whichever it is. The full
+       instruction text is attached only while grabbed, never permanently: a
+       screen reader user who is merely tabbing through their tabs should not
+       be read the whole drag protocol on every item, and it is only true, and
+       only useful, once a drag is under way. Its stand-in while the item is
+       at rest is the terse hint below. -->
+  <template lwc:if={grabbed}>
+    <!-- The id is computed rather than a template literal, and so is the
+         `aria-describedby` above, so that the two are the same string by
+         construction. A static id would be subject to the framework's own
+         id handling while a computed idref would not, and an idref that
+         does not resolve is an association that only looks present. -->
+    <span
+      id={instructionsId}
+      class="slds-assistive-text rstk-nav-item__instructions"
+    >
+      Use the arrow keys to move this item, Space to drop it, Escape to cancel.
+    </span>
+  </template>
+  <!-- Without this a keyboard user has no route to the gesture at all: the
+       instructions above only arrive once they have already guessed that
+       Space does something, and the grab cursor that tells a mouse user is
+       not something a screen reader reads. Kept to four words on purpose —
+       it is spoken on every focus, and a bare org shows around 174 items.
+       It deliberately does not repeat the label; `aria-label` on the anchor
+       already carries that. -->
+  <template lwc:else>
+    <span id={hintId} class="slds-assistive-text rstk-nav-item__hint">
+      Press Space to move.
+    </span>
+  </template>
+</template>

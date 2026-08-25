@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Is_Active__c</fullName>
+    <label>Is Active</label>
+    <description
+  >Marks the one layout the Navigator renders for this user. Exactly-one-active is enforced by NavigatorLayoutController, which clears the flag on the owner's other layouts in the same transaction as it sets this one.</description>
+    <type>Checkbox</type>
+    <defaultValue>false</defaultValue>
+</CustomField>

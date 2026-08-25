@@ -1,0 +1,73 @@
+<template>
+  <!-- Composed from the modal's own header / body / footer rather than a
+       hand-built dialog: they adopt SLDS 2 automatically, and the modal
+       semantics — the dialog role, the focus trap, Escape — are the base
+       component's, not ours. -->
+  <lightning-modal-header label={heading}></lightning-modal-header>
+
+  <lightning-modal-body>
+    <!-- Mandatory, and the criterion says why: with 174 items a scrolling
+         list alone fails. `type="search"` gives the native clear affordance
+         and the right role for free. -->
+    <lightning-input
+      class="rstk-nav-picker__search"
+      type="search"
+      label="Search items"
+      value={searchTerm}
+      onchange={handleSearch}
+    ></lightning-input>
+
+    <!-- Polite rather than assertive: this is feedback on typing, not on a
+         gesture the user has just completed and is about to repeat. Without
+         it the list narrows in silence — a sighted user watches 174 entries
+         become one and a screen-reader user is told nothing, which is the one
+         control the criterion says makes 174 items usable. Atomic, or a
+         reader may voice only the digit that changed. -->
+    <span
+      class="slds-assistive-text rstk-nav-picker__announcer"
+      aria-live="polite"
+      aria-atomic="true"
+      >{searchStatus}</span
+    >
+
+    <template lwc:if={hasMatches}>
+      <ul class="rstk-nav-picker__list">
+        <template for:each={visibleItems} for:item="item">
+          <li key={item.id} class="rstk-nav-picker__cell">
+            <!-- A real <button>, not a clickable div: it is in the tab order
+                 and fires `click` on Enter and Space without this component
+                 writing a key handler at all. `data-id` is what the handler
+                 reads, so a search that has renumbered the list cannot make
+                 it add the wrong tab. -->
+            <button
+              type="button"
+              class="rstk-nav-picker__item"
+              data-id={item.id}
+              aria-label={item.assistiveLabel}
+              onclick={handleAdd}
+            >
+              {item.label}
+            </button>
+          </li>
+        </template>
+      </ul>
+    </template>
+    <!-- Two empty states, because they are two different facts with two
+         different remedies: what you typed matches nothing, or there is
+         nothing left to add at all. -->
+    <template lwc:elseif={hasAvailable}>
+      <p class="rstk-nav-picker__empty">{noMatchMessage}</p>
+    </template>
+    <template lwc:else>
+      <p class="rstk-nav-picker__empty">{emptyLayoutMessage}</p>
+    </template>
+  </lightning-modal-body>
+
+  <lightning-modal-footer>
+    <lightning-button
+      class="rstk-nav-picker__cancel"
+      label="Cancel"
+      onclick={handleCancel}
+    ></lightning-button>
+  </lightning-modal-footer>
+</template>

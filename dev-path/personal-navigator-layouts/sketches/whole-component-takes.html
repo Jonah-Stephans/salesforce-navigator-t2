@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Navigator — three whole-component takes</title>
+<style>
+/* ============================================================================
+   SKETCH ONLY. This file is not component CSS and is never deployed.
+
+   Every colour, radius, spacing and type value below is declared as its real
+   SLDS 2 global styling hook, holding the value that hook actually resolves to
+   under Cosmos — read out of @salesforce-ux/sds-metadata@next
+   (globalStylingHooks.metadata.json) in this repo's own node_modules, not
+   guessed. That is what makes this sketch translatable: whatever take wins,
+   the CSS is already written in hooks.
+
+   The light/dark switch at the top sets `color-scheme` and nothing else. Every
+   value below is a real CSS light-dark(), exactly as Cosmos authors them, so
+   the switch is a faithful demonstration of the spec's claim that dark mode
+   requires no code.
+   ============================================================================ */
+
+:root {
+  color-scheme: light;
+
+  /* — colour ————————————————————————————————————————————————————————— */
+  --slds-g-color-surface-container-1: light-dark(#fff, #242424);
+  --slds-g-color-surface-container-2: light-dark(#f3f3f3, #181818);
+  --slds-g-color-surface-container-3: light-dark(#e5e5e5, #2e2e2e);
+  --slds-g-color-surface-2:           light-dark(#f3f3f3, #181818);
+  --slds-g-color-on-surface-1:        light-dark(#5c5c5c, #aeaeae);
+  --slds-g-color-on-surface-2:        light-dark(#2e2e2e, #e5e5e5);
+  --slds-g-color-on-surface-3:        light-dark(#03234d, #d8e6fe);
+  --slds-g-color-border-1:            light-dark(#c9c9c9, #444);
+  --slds-g-color-border-2:            light-dark(#5c5c5c, #757575);
+  --slds-g-color-accent-2:            light-dark(#0250d9, #7cb1fe);
+  /* Both fixed, deliberately: this is the pair that carries a label on an
+     accent FILL. 4.67:1 in both modes, and they cannot drift apart because
+     neither one flips. See the measurements at the foot of the page. */
+  --slds-g-color-accent-1:            #066afe;
+  --slds-g-color-on-accent-1:         #fff;
+  /* accent-2 is the kit's own blue and flips. Correct for accent as INK or
+     LINE — link text, hover, focus ring, selected border — where it is read
+     against a surface (6.66:1 light, 7.08:1 dark). Wrong under a label. */
+  --slds-g-color-on-accent-2:         light-dark(#fff, #0250d9);
+
+  /* — radius: the kit's 4 / 8 / 12 / 20 ladder, exactly ——————————————— */
+  --slds-g-radius-border-1: 0.25rem;  /* 4px  */
+  --slds-g-radius-border-2: 0.5rem;   /* 8px  */
+  --slds-g-radius-border-3: 0.75rem;  /* 12px */
+  --slds-g-radius-border-4: 1.25rem;  /* 20px */
+
+  /* — spacing ———————————————————————————————————————————————————————— */
+  --slds-g-spacing-1: 0.25rem;
+  --slds-g-spacing-2: 0.5rem;
+  --slds-g-spacing-3: 0.75rem;
+  --slds-g-spacing-4: 1rem;
+  --slds-g-spacing-5: 1.5rem;
+
+  /* — type ——————————————————————————————————————————————————————————— */
+  --slds-g-font-scale-neg-1: 0.75rem;
+  --slds-g-font-scale-1: 0.875rem;
+  --slds-g-font-scale-2: 1rem;
+  --slds-g-font-scale-3: 1.25rem;
+  --slds-g-font-weight-4: 400;
+  --slds-g-font-weight-6: 600;
+  --slds-g-font-weight-7: 700;
+
+  /* — line, elevation ———————————————————————————————————————————————— */
+  --slds-g-sizing-border-1: 1px;
+  --slds-g-sizing-border-2: 2px;
+  --slds-g-shadow-1:
+    0px 0px 2px 0px light-dark(#0000002e, #0000005c),
+    0px 2px 2px 0px light-dark(#0000002e, #0000005c),
+    0px -1px 2px 0px light-dark(#0000001a, #00000033);
+  --slds-g-shadow-outline-focus-1: 0 0 0 2px light-dark(#0250d9, #7cb1fe);
+
+  /* — the two the kit needs and SLDS has no hook for. Named so they are
+       impossible to miss in review, and so a grep finds them. ——————————— */
+  --rstk-nav-radius-pill: 9999px;
+  --rstk-nav-hairline: light-dark(#e5e5e5, #3a3a3a);
+}
+:root[data-mode="dark"] { color-scheme: dark; }
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+  letter-spacing: -0.014em;
+  background: var(--slds-g-color-surface-2);
+  color: var(--slds-g-color-on-surface-2);
+  padding: var(--slds-g-spacing-5);
+  line-height: 1.5;
+}
+
+/* ---- page chrome. Deliberately unlike the component, so nothing here is
+        mistaken for a proposal. ------------------------------------------- */
+.page { max-width: 1180px; margin: 0 auto; }
+.page__head { margin-bottom: var(--slds-g-spacing-5); }
+.page__title {
+  font-size: var(--slds-g-font-scale-3);
+  font-weight: var(--slds-g-font-weight-7);
+  color: var(--slds-g-color-on-surface-3);
+  letter-spacing: -0.02em;
+}
+.page__sub {
+  font-size: var(--slds-g-font-scale-1);
+  color: var(--slds-g-color-on-surface-1);
+  max-width: 68ch;
+  margin-top: var(--slds-g-spacing-2);
+}
+.page__q {
+  margin-top: var(--slds-g-spacing-4);
+  padding: var(--slds-g-spacing-3) var(--slds-g-spacing-4);
+  border-left: 3px solid var(--slds-g-color-accent-2);
+  background: var(--slds-g-color-surface-container-1);
+  border-radius: 0 var(--slds-g-radius-border-2) var(--slds-g-radius-border-2) 0;
+  font-size: var(--slds-g-font-scale-1);
+  max-width: 78ch;
+}
+
+.controls {
+  display: flex; flex-wrap: wrap; gap: var(--slds-g-spacing-2);
+  align-items: center; margin-top: var(--slds-g-spacing-4);
+}
+.ctl {
+  font: inherit; font-size: var(--slds-g-font-scale-1);
+  font-weight: var(--slds-g-font-weight-6);
+  height: 40px; padding: 0 var(--slds-g-spacing-4);
+  border-radius: var(--rstk-nav-radius-pill);
+  border: var(--slds-g-sizing-border-1) solid var(--slds-g-color-border-1);
+  background: var(--slds-g-color-surface-container-1);
+  color: var(--slds-g-color-on-surface-2);
+  cursor: pointer; transition: background-color 140ms, border-color 140ms, color 140ms;
+}
+.ctl:hover { border-color: var(--slds-g-color-accent-2); }
+.ctl[aria-pressed="true"] {
+  background: var(--slds-g-color-accent-1);
+  border-color: var(--slds-g-color-accent-1);
+  color: var(--slds-g-color-on-accent-1);
+}
+.ctl:focus-visible { outline: none; box-shadow: var(--slds-g-shadow-outline-focus-1); }
+
+/* ---- one take ------------------------------------------------------------ */
+.take { margin-top: calc(var(--slds-g-spacing-5) * 2); }
+.take__no {
+  font-size: var(--slds-g-font-scale-neg-1);
+  font-weight: var(--slds-g-font-weight-7);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--slds-g-color-on-surface-1);
+}
+.take__name {
+  font-size: var(--slds-g-font-scale-3);
+  font-weight: var(--slds-g-font-weight-7);
+  color: var(--slds-g-color-on-surface-3);
+  letter-spacing: -0.02em;
+  margin-top: 2px;
+}
+.take__thesis {
+  font-size: var(--slds-g-font-scale-1);
+  color: var(--slds-g-color-on-surface-1);
+  max-width: 74ch; margin-top: var(--slds-g-spacing-2);
+  margin-bottom: var(--slds-g-spacing-4);
+}
+.stage {
+  background: var(--slds-g-color-surface-2);
+  border-radius: var(--slds-g-radius-border-4);
+  padding: var(--slds-g-spacing-5);
+  border: var(--slds-g-sizing-border-1) solid var(--rstk-nav-hairline);
+}
+
+/* ============================================================================
+   THE COMPONENT. Everything from here down is what would become
+   salesforceNavigator.css / navigatorSection.css / navigatorItem.css.
+   ============================================================================ */
+
+/* -- the shell, shared by all three takes ---------------------------------- */
+.nav {
+  background: var(--slds-g-color-surface-container-1);
+  border-radius: var(--slds-g-radius-border-4);
+  border: var(--slds-g-sizing-border-1) solid var(--rstk-nav-hairline);
+}
+.nav__head {
+  display: flex; align-items: center; gap: var(--slds-g-spacing-3);
+  padding: var(--slds-g-spacing-4) var(--slds-g-spacing-5);
+  border-bottom: var(--slds-g-sizing-border-1) solid var(--rstk-nav-hairline);
+}
+.nav__title {
+  font-size: var(--slds-g-font-scale-2);
+  font-weight: var(--slds-g-font-weight-7);
+  color: var(--slds-g-color-on-surface-3);
+  letter-spacing: -0.02em;
+  margin-right: auto;
+}
+.nav__body { padding: var(--slds-g-spacing-5); }
+
+/* the layout switcher — a menu button, per ## Design › Interaction */
+.switcher {
+  display: inline-flex; align-items: center; gap: var(--slds-g-spacing-2);
+  height: 40px; padding: 0 var(--slds-g-spacing-4);
+  border-radius: var(--rstk-nav-radius-pill);
+  border: var(--slds-g-sizing-border-1) solid var(--slds-g-color-border-1);
+  background: var(--slds-g-color-surface-container-1);
+  font-size: var(--slds-g-font-scale-1); font-weight: var(--slds-g-font-weight-7);
+  color: var(--slds-g-color-on-surface-2); cursor: pointer;
+}
+.btn-primary {
+  height: 40px; padding: 0 var(--slds-g-spacing-5);
+  border-radius: var(--rstk-nav-radius-pill); border: none;
+  background: var(--slds-g-color-accent-1); color: var(--slds-g-color-on-accent-1);
+  font: inherit; font-size: var(--slds-g-font-scale-1);
+  font-weight: var(--slds-g-font-weight-7); cursor: pointer;
+}
+.caret { font-size: 11px; opacity: .8; }
+
+/* the overflow menu button that sits on a section header and on every item */
+.menu-btn {
+  flex: 0 0 auto;
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border-radius: var(--slds-g-radius-border-1);
+  border: var(--slds-g-sizing-border-1) solid transparent;
+  background: transparent; color: var(--slds-g-color-on-surface-1);
+  font-size: 11px; cursor: pointer;
+}
+.menu-btn:hover {
+  border-color: var(--slds-g-color-border-1);
+  background: var(--slds-g-color-surface-container-1);
+}
+.menu-btn:focus-visible { outline: none; box-shadow: var(--slds-g-shadow-outline-focus-1); }
+
+.grid { display: grid; gap: var(--slds-g-spacing-2); list-style: none; }
+.cols-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+.cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+.cols-4 { grid-template-columns: repeat(4, minmax(0,1fr)); }
+
+/* the micro-label, straight off the kit: 11 / 700 / +0.08em / uppercase */
+.micro {
+  font-size: var(--slds-g-font-scale-neg-1);
+  font-weight: var(--slds-g-font-weight-7);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--slds-g-color-on-surface-1);
+}
+
+/* ---- TAKE A — nested cards ----------------------------------------------- */
+.a-section {
+  background: var(--slds-g-color-surface-container-1);
+  border: var(--slds-g-sizing-border-1) solid var(--rstk-nav-hairline);
+  border-radius: var(--slds-g-radius-border-3);
+  padding: var(--slds-g-spacing-4);
+  cursor: grab;
+}
+.a-section + .a-section { margin-top: var(--slds-g-spacing-4); }
+.a-section__head {
+  display: flex; align-items: center; gap: var(--slds-g-spacing-3);
+  margin-bottom: var(--slds-g-spacing-3);
+}
+.a-section__name {
+  font-size: var(--slds-g-font-scale-2);
+  font-weight: var(--slds-g-font-weight-7);
+  color: var(--slds-g-color-on-surface-3);
+  letter-spacing: -0.02em; margin-right: auto;
+}
+.a-item {
+  display: flex; align-items: center; gap: var(--slds-g-spacing-2);
+  padding: var(--slds-g-spacing-2) var(--slds-g-spacing-3);
+  border-radius: var(--slds-g-radius-border-2);
+  text-decoration: none; cursor: grab;
+}
+.a-item:hover { background: var(--slds-g-color-surface-container-2); }
+.a-item__label {
+  flex: 1 1 auto; min-width: 0;
+  font-size: var(--slds-g-font-scale-1);
+  color: var(--slds-g-color-on-surface-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.a-item:hover .a-item__label { color: var(--slds-g-color-accent-2); }
+
+/* ---- TAKE B — flat bands -------------------------------------------------- */
+.b-section { cursor: grab; }
+.b-section + .b-section { margin-top: var(--slds-g-spacing-5); }
+.b-band {
+  display: flex; align-items: center; gap: var(--slds-g-spacing-3);
+  background: var(--slds-g-color-surface-container-2);
+  border-radius: var(--slds-g-radius-border-3);
+  padding: var(--slds-g-spacing-2) var(--slds-g-spacing-3);
+  margin-bottom: var(--slds-g-spacing-3);
+}
+.b-band__name { margin-right: auto; }
+.b-add {
+  height: 28px; padding: 0 var(--slds-g-spacing-3);
+  border-radius: var(--rstk-nav-radius-pill);
+  border: var(--slds-g-sizing-border-1) solid var(--slds-g-color-border-1);
+  background: var(--slds-g-color-surface-container-1);
+  font: inherit; font-size: var(--slds-g-font-scale-neg-1);
+  font-weight: var(--slds-g-font-weight-7);
+  color: var(--slds-g-color-on-surface-2); cursor: pointer;
+}
+.b-item {
+  display: flex; align-items: center; gap: var(--slds-g-spacing-2);
+  padding: var(--slds-g-spacing-2) var(--slds-g-spacing-2);
+  border-radius: var(--slds-g-radius-border-2);
+  text-decoration: none; cursor: grab;
+  border-bottom: var(--slds-g-sizing-border-1) solid transparent;
+}
+.b-item:hover { background: var(--slds-g-color-surface-container-2); }
+.b-item__label {
+  flex: 1 1 auto; min-width: 0;
+  font-size: var(--slds-g-font-scale-1);
+  color: var(--slds-g-color-on-surface-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.b-item:hover .b-item__label { color: var(--slds-g-color-accent-2); }
+
+/* ---- TAKE C — pill grid --------------------------------------------------- */
+.c-section { cursor: grab; }
+.c-section + .c-section { margin-top: var(--slds-g-spacing-5); }
+.c-head {
+  display: flex; align-items: center; gap: var(--slds-g-spacing-3);
+  margin-bottom: var(--slds-g-spacing-3);
+}
+.c-head__name { margin-right: auto; }
+.c-flow { display: flex; flex-wrap: wrap; gap: var(--slds-g-spacing-2); list-style: none; }
+.c-pill {
+  display: inline-flex; align-items: center; gap: var(--slds-g-spacing-1);
+  height: 36px; padding: 0 var(--slds-g-spacing-2) 0 var(--slds-g-spacing-4);
+  border-radius: var(--rstk-nav-radius-pill);
+  border: var(--slds-g-sizing-border-1) solid var(--rstk-nav-hairline);
+  background: var(--slds-g-color-surface-container-1);
+  text-decoration: none; cursor: grab;
+  transition: border-color 140ms, color 140ms;
+}
+.c-pill:hover { border-color: var(--slds-g-color-accent-2); }
+.c-pill__label {
+  font-size: var(--slds-g-font-scale-1);
+  color: var(--slds-g-color-on-surface-2);
+  white-space: nowrap;
+}
+.c-pill:hover .c-pill__label { color: var(--slds-g-color-accent-2); }
+/* the cost, made visible: the menu is not there until you are on the pill */
+.c-pill .menu-btn { opacity: 0; width: 22px; }
+.c-pill:hover .menu-btn, .c-pill:focus-within .menu-btn { opacity: 1; }
+
+/* ---- the ledger under each take ------------------------------------------ */
+.ledger {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--slds-g-spacing-4); margin-top: var(--slds-g-spacing-4);
+}
+.ledger__col {
+  background: var(--slds-g-color-surface-container-1);
+  border: var(--slds-g-sizing-border-1) solid var(--rstk-nav-hairline);
+  border-radius: var(--slds-g-radius-border-3);
+  padding: var(--slds-g-spacing-4);
+}
+.ledger__h {
+  font-size: var(--slds-g-font-scale-neg-1);
+  font-weight: var(--slds-g-font-weight-7);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--slds-g-color-on-surface-1);
+  margin-bottom: var(--slds-g-spacing-2);
+}
+.ledger__col ul { margin: 0; padding-left: 1.1em; }
+.ledger__col li { font-size: var(--slds-g-font-scale-1); margin-bottom: var(--slds-g-spacing-2); }
+.ledger__col li:last-child { margin-bottom: 0; }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--slds-g-color-surface-container-2);
+  padding: 1px 5px; border-radius: var(--slds-g-radius-border-1);
+}
+
+/* ---- the density panel ---------------------------------------------------- */
+details.density {
+  margin-top: var(--slds-g-spacing-4);
+  border: var(--slds-g-sizing-border-1) solid var(--rstk-nav-hairline);
+  border-radius: var(--slds-g-radius-border-3);
+  background: var(--slds-g-color-surface-container-1);
+}
+details.density > summary {
+  padding: var(--slds-g-spacing-3) var(--slds-g-spacing-4);
+  cursor: pointer; font-size: var(--slds-g-font-scale-1);
+  font-weight: var(--slds-g-font-weight-6);
+  color: var(--slds-g-color-on-surface-2);
+}
+details.density > summary::marker { color: var(--slds-g-color-on-surface-1); }
+.density__body {
+  padding: 0 var(--slds-g-spacing-4) var(--slds-g-spacing-4);
+  max-height: 380px; overflow-y: auto;
+}
+.density__note {
+  font-size: var(--slds-g-font-scale-neg-1);
+  color: var(--slds-g-color-on-surface-1);
+  padding: 0 var(--slds-g-spacing-4) var(--slds-g-spacing-3);
+}
+
+/* ---- the mapping table ---------------------------------------------------- */
+.map {
+  margin-top: calc(var(--slds-g-spacing-5) * 2);
+  background: var(--slds-g-color-surface-container-1);
+  border: var(--slds-g-sizing-border-1) solid var(--rstk-nav-hairline);
+  border-radius: var(--slds-g-radius-border-4);
+  overflow: hidden;
+}
+.map__head { padding: var(--slds-g-spacing-5) var(--slds-g-spacing-5) var(--slds-g-spacing-3); }
+.map__scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 720px; }
+th, td {
+  text-align: left; padding: var(--slds-g-spacing-3) var(--slds-g-spacing-4);
+  font-size: var(--slds-g-font-scale-1);
+  border-bottom: var(--slds-g-sizing-border-1) solid var(--rstk-nav-hairline);
+}
+thead th {
+  background: var(--slds-g-color-surface-container-2);
+  font-weight: var(--slds-g-font-weight-6);
+  font-size: var(--slds-g-font-scale-neg-1);
+  letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--slds-g-color-on-surface-1);
+}
+tbody tr:last-child td { border-bottom: none; }
+.swatch {
+  display: inline-block; width: 16px; height: 16px; vertical-align: -3px;
+  border-radius: var(--slds-g-radius-border-1);
+  border: var(--slds-g-sizing-border-1) solid var(--rstk-nav-hairline);
+  margin-right: 6px;
+}
+.gap { color: light-dark(#b60554, #ff9ec4); font-weight: var(--slds-g-font-weight-6); }
+.ok { color: light-dark(#2d844a, #7ed9a0); font-weight: var(--slds-g-font-weight-6); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="page__head">
+    <div class="take__no">dev-path sketch · personal-navigator-layouts</div>
+    <h1 class="page__title">Three whole-component takes</h1>
+    <p class="page__sub">
+      The Salesforce Navigator, drawn three ways in the Rootstock UI kit's language. Each take varies
+      structure, density and control placement <em>together</em>, so the choice is one decision rather
+      than three. Not a build: no LWC, no SLDS classes, no base components.
+    </p>
+    <div class="page__q">
+      <strong>The question.</strong> The spec's <code>## Open questions</code> closed at the design gate,
+      and the built component styles itself from SLDS 2 hooks with no visual language of its own. Which
+      whole-component treatment does the Navigator adopt — and what does that cost against the Outcomes
+      that are already built?
+    </div>
+    <div class="controls">
+      <button class="ctl" id="mode" aria-pressed="false">Dark mode</button>
+      <button class="ctl" id="cols" aria-pressed="false">Show 4 columns</button>
+      <span style="font-size:var(--slds-g-font-scale-neg-1);color:var(--slds-g-color-on-surface-1)">
+        The dark switch flips <code>color-scheme</code> and touches nothing else — every value is a real
+        <code>light-dark()</code>, as Cosmos authors them.
+      </span>
+    </div>
+  </header>
+
+  <!-- ===================== TAKE A ===================== -->
+  <section class="take">
+    <div class="take__no">Take A</div>
+    <h2 class="take__name">Nested cards</h2>
+    <p class="take__thesis">
+      What is built today, re-tuned to the kit: a section stays a card, but drops to a 12px radius and a
+      hairline inside the 20px shell, and the item loses its heavy border to become a quiet row that
+      colours blue on hover. The section reads unmistakably as a draggable object.
+    </p>
+
+    <div class="stage">
+      <div class="nav">
+        <div class="nav__head">
+          <span class="nav__title">Salesforce Navigator</span>
+          <button class="switcher">Daily Ops <span class="caret">▾</span></button>
+          <button class="btn-primary">New Section</button>
+        </div>
+        <div class="nav__body">
+
+          <article class="a-section">
+            <header class="a-section__head">
+              <h3 class="a-section__name">Sales</h3>
+              <button class="b-add">+ Add Items</button>
+              <button class="menu-btn" aria-label="Sales section actions">▾</button>
+            </header>
+            <ul class="grid cols-3 js-cols">
+              <li><a class="a-item" href="#"><span class="a-item__label">Accounts</span><button class="menu-btn" aria-label="Accounts actions">▾</button></a></li>
+              <li><a class="a-item" href="#"><span class="a-item__label">Contacts</span><button class="menu-btn" aria-label="Contacts actions">▾</button></a></li>
+              <li><a class="a-item" href="#"><span class="a-item__label">Leads</span><button class="menu-btn" aria-label="Leads actions">▾</button></a></li>
+              <li><a class="a-item" href="#"><span class="a-item__label">Opportunities</span><button class="menu-btn" aria-label="Opportunities actions">▾</button></a></li>
+              <li><a class="a-item" href="#"><span class="a-item__label">Quotes</span><button class="menu-btn" aria-label="Quotes actions">▾</button></a></li>
+              <li><a class="a-item" href="#"><span class="a-item__label">Sales Orders</span><button class="menu-btn" aria-label="Sales Orders actions">▾</button></a></li>
+            </ul>
+          </article>
+
+          <article class="a-section">
+            <header class="a-section__head">
+              <h3 class="a-section__name">Supply</h3>
+              <button class="b-add">+ Add Items</button>
+              <button class="menu-btn" aria-label="Supply section actions">▾</button>
+            </header>
+            <ul class="grid cols-2 js-cols">
+              <li><a class="a-item" href="#"><span class="a-item__label">Purchase Orders</span><button class="menu-btn" aria-label="Purchase Orders actions">▾</button></a></li>
+              <li><a class="a-item" href="#"><span class="a-item__label">Receivers</span><button class="menu-btn" aria-label="Receivers actions">▾</button></a></li>
+              <li><a class="a-item" href="#"><span class="a-item__label">Inventory Transactions</span><button class="menu-btn" aria-label="Inventory Transactions actions">▾</button></a></li>
+              <li><a class="a-item" href="#"><span class="a-item__label">Item Masters</span><button class="menu-btn" aria-label="Item Masters actions">▾</button></a></li>
+            </ul>
+          </article>
+
+        </div>
+      </div>
+    </div>
+
+    <details class="density">
+      <summary>First open, seeded — the density that actually ships</summary>
+      <div class="density__note">
+        A bare org returned 174 nav items. This panel renders that count for real, at this take's
+        density, in the one seeded "All Items" section the spec computes and does not persist.
+      </div>
+      <div class="density__body"><div class="js-density" data-take="a"></div></div>
+    </details>
+
+    <div class="ledger">
+      <div class="ledger__col">
+        <div class="ledger__h">What it buys</div>
+        <ul>
+          <li>A section <em>looks</em> grabbable, which matters — section reorder is a drag, and the card is the drag source.</li>
+          <li>Closest to what exists: <code>navigatorSection.css</code> changes values, not structure.</li>
+          <li>The nested-card rule is in the kit already — 20px shell, smaller radius inside.</li>
+        </ul>
+      </div>
+      <div class="ledger__col">
+        <div class="ledger__h">What it costs</div>
+        <ul>
+          <li>Three nested boxes at the seeded 174 items: shell, card, row. The heaviest of the three.</li>
+          <li>The kit's hairline border contradicts the built CSS comment that <em>"SLDS 2 removes borders from cards"</em>. One of the two has to give.</li>
+          <li>Vertical rhythm eats space a 6-column section wants.</li>
+        </ul>
+      </div>
+      <div class="ledger__col">
+        <div class="ledger__h">What changes</div>
+        <ul>
+          <li><code>navigatorSection.css</code> — radius <code>border-2</code> → <code>border-3</code>, shadow out, hairline in.</li>
+          <li><code>navigatorItem.css</code> — drop <code>border-2</code>, add hover colour.</li>
+          <li>No template changes in any bundle.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== TAKE B ===================== -->
+  <section class="take">
+    <div class="take__no">Take B</div>
+    <h2 class="take__name">Flat bands</h2>
+    <p class="take__thesis">
+      One card, not many. A section becomes the kit's inset band — a <code>#F3F3F3</code> strip carrying
+      the name as a micro-label plus its controls — and its items sit on the white surface beneath it.
+      This is the take that most reads as a better All Items list, which is what the Intent says the
+      component is.
+    </p>
+
+    <div class="stage">
+      <div class="nav">
+        <div class="nav__head">
+          <span class="nav__title">Salesforce Navigator</span>
+          <button class="switcher">Daily Ops <span class="caret">▾</span></button>
+          <button class="btn-primary">New Section</button>
+        </div>
+        <div class="nav__body">
+
+          <section class="b-section">
+            <div class="b-band">
+              <span class="micro b-band__name">Sales</span>
+              <button class="b-add">+ Add Items</button>
+              <button class="menu-btn" aria-label="Sales section actions">▾</button>
+            </div>
+            <ul class="grid cols-3 js-cols">
+              <li><a class="b-item" href="#"><span class="b-item__label">Accounts</span><button class="menu-btn" aria-label="Accounts actions">▾</button></a></li>
+              <li><a class="b-item" href="#"><span class="b-item__label">Contacts</span><button class="menu-btn" aria-label="Contacts actions">▾</button></a></li>
+              <li><a class="b-item" href="#"><span class="b-item__label">Leads</span><button class="menu-btn" aria-label="Leads actions">▾</button></a></li>
+              <li><a class="b-item" href="#"><span class="b-item__label">Opportunities</span><button class="menu-btn" aria-label="Opportunities actions">▾</button></a></li>
+              <li><a class="b-item" href="#"><span class="b-item__label">Quotes</span><button class="menu-btn" aria-label="Quotes actions">▾</button></a></li>
+              <li><a class="b-item" href="#"><span class="b-item__label">Sales Orders</span><button class="menu-btn" aria-label="Sales Orders actions">▾</button></a></li>
+            </ul>
+          </section>
+
+          <section class="b-section">
+            <div class="b-band">
+              <span class="micro b-band__name">Supply</span>
+              <button class="b-add">+ Add Items</button>
+              <button class="menu-btn" aria-label="Supply section actions">▾</button>
+            </div>
+            <ul class="grid cols-2 js-cols">
+              <li><a class="b-item" href="#"><span class="b-item__label">Purchase Orders</span><button class="menu-btn" aria-label="Purchase Orders actions">▾</button></a></li>
+              <li><a class="b-item" href="#"><span class="b-item__label">Receivers</span><button class="menu-btn" aria-label="Receivers actions">▾</button></a></li>
+              <li><a class="b-item" href="#"><span class="b-item__label">Inventory Transactions</span><button class="menu-btn" aria-label="Inventory Transactions actions">▾</button></a></li>
+              <li><a class="b-item" href="#"><span class="b-item__label">Item Masters</span><button class="menu-btn" aria-label="Item Masters actions">▾</button></a></li>
+            </ul>
+          </section>
+
+        </div>
+      </div>
+    </div>
+
+    <details class="density">
+      <summary>First open, seeded — the density that actually ships</summary>
+      <div class="density__note">
+        Same 174 items. Note how much further the list gets before it needs a scroll.
+      </div>
+      <div class="density__body"><div class="js-density" data-take="b"></div></div>
+    </details>
+
+    <div class="ledger">
+      <div class="ledger__col">
+        <div class="ledger__h">What it buys</div>
+        <ul>
+          <li>Lightest of the three at 174 items — one box, not three.</li>
+          <li>The band is a kit primitive used exactly as the kit uses it: labels, headers, totals.</li>
+          <li>The micro-label reads as structure, not as a competing heading.</li>
+        </ul>
+      </div>
+      <div class="ledger__col">
+        <div class="ledger__h">What it costs</div>
+        <ul>
+          <li><strong>The real one.</strong> A section stops looking like an object you can pick up, and section reorder is drag-based. The drag target becomes the band, and that has to be taught.</li>
+          <li>A drop target during a cross-section drag is harder to signal without a card edge to outline — <code>.rstk-nav-section_droptarget</code> currently outlines the card.</li>
+        </ul>
+      </div>
+      <div class="ledger__col">
+        <div class="ledger__h">What changes</div>
+        <ul>
+          <li><code>navigatorSection.html</code> — the <code>&lt;article&gt;</code> keeps <code>draggable</code>, but the visible grab affordance moves to the band.</li>
+          <li><code>navigatorSection.css</code> — card styles out, band styles in; both drag states re-drawn.</li>
+          <li>Re-check the grabbed and drop-target signals against Outcome 6.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== TAKE C ===================== -->
+  <section class="take">
+    <div class="take__no">Take C</div>
+    <h2 class="take__name">Pill grid</h2>
+    <p class="take__thesis">
+      Items become the kit's pills and flow rather than sit in tracks. Densest by a wide margin, and the
+      most obviously "a set of things you chose". The item menu is not drawn until the pill is hovered
+      or focused — which is the whole argument against it.
+    </p>
+
+    <div class="stage">
+      <div class="nav">
+        <div class="nav__head">
+          <span class="nav__title">Salesforce Navigator</span>
+          <button class="switcher">Daily Ops <span class="caret">▾</span></button>
+          <button class="btn-primary">New Section</button>
+        </div>
+        <div class="nav__body">
+
+          <section class="c-section">
+            <div class="c-head">
+              <span class="micro c-head__name">Sales</span>
+              <button class="b-add">+ Add Items</button>
+              <button class="menu-btn" aria-label="Sales section actions">▾</button>
+            </div>
+            <ul class="c-flow">
+              <li><a class="c-pill" href="#"><span class="c-pill__label">Accounts</span><button class="menu-btn" aria-label="Accounts actions">▾</button></a></li>
+              <li><a class="c-pill" href="#"><span class="c-pill__label">Contacts</span><button class="menu-btn" aria-label="Contacts actions">▾</button></a></li>
+              <li><a class="c-pill" href="#"><span class="c-pill__label">Leads</span><button class="menu-btn" aria-label="Leads actions">▾</button></a></li>
+              <li><a class="c-pill" href="#"><span class="c-pill__label">Opportunities</span><button class="menu-btn" aria-label="Opportunities actions">▾</button></a></li>
+              <li><a class="c-pill" href="#"><span class="c-pill__label">Quotes</span><button class="menu-btn" aria-label="Quotes actions">▾</button></a></li>
+              <li><a class="c-pill" href="#"><span class="c-pill__label">Sales Orders</span><button class="menu-btn" aria-label="Sales Orders actions">▾</button></a></li>
+            </ul>
+          </section>
+
+          <section class="c-section">
+            <div class="c-head">
+              <span class="micro c-head__name">Supply</span>
+              <button class="b-add">+ Add Items</button>
+              <button class="menu-btn" aria-label="Supply section actions">▾</button>
+            </div>
+            <ul class="c-flow">
+              <li><a class="c-pill" href="#"><span class="c-pill__label">Purchase Orders</span><button class="menu-btn" aria-label="Purchase Orders actions">▾</button></a></li>
+              <li><a class="c-pill" href="#"><span class="c-pill__label">Receivers</span><button class="menu-btn" aria-label="Receivers actions">▾</button></a></li>
+              <li><a class="c-pill" href="#"><span class="c-pill__label">Inventory Transactions</span><button class="menu-btn" aria-label="Inventory Transactions actions">▾</button></a></li>
+              <li><a class="c-pill" href="#"><span class="c-pill__label">Item Masters</span><button class="menu-btn" aria-label="Item Masters actions">▾</button></a></li>
+            </ul>
+          </section>
+
+        </div>
+      </div>
+    </div>
+
+    <details class="density">
+      <summary>First open, seeded — the density that actually ships</summary>
+      <div class="density__note">
+        Same 174 items. This is the take the seeded card flatters most, and the one whose column-count
+        Outcome disappears.
+      </div>
+      <div class="density__body"><div class="js-density" data-take="c"></div></div>
+    </details>
+
+    <div class="ledger">
+      <div class="ledger__col">
+        <div class="ledger__h">What it buys</div>
+        <ul>
+          <li>By far the densest at 174 items, and the least box-in-box.</li>
+          <li>Label length stops mattering — no track to overflow, no <code>text-overflow</code>.</li>
+          <li>Most distinct from the flat list it replaces.</li>
+        </ul>
+      </div>
+      <div class="ledger__col">
+        <div class="ledger__h">What it costs</div>
+        <ul>
+          <li><strong>Two Outcomes take damage.</strong> A flowing wrap has no columns, so <em>"set its column count between one and six"</em> has nothing to set. And a hover-revealed menu is the cross-section move mechanism for keyboard users — it must still be reachable by Tab, so the reveal has to be <code>:focus-within</code>, never hover alone.</li>
+          <li>The pill radius is the one kit value with no SLDS hook.</li>
+        </ul>
+      </div>
+      <div class="ledger__col">
+        <div class="ledger__h">What changes</div>
+        <ul>
+          <li><code>navigatorSection</code> — the <code>cols-1…6</code> grid classes and the column menu come out. That is Outcome 4 and slice 03.</li>
+          <li><code>navigatorItem.css</code> — full rewrite.</li>
+          <li>Re-verify the arrow-key move pattern: "next item" in a wrap is not "next item" in a grid.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== THE MAPPING ===================== -->
+  <div class="map">
+    <div class="map__head">
+      <h2 class="take__name">The kit, in hooks</h2>
+      <p class="take__thesis" style="margin-bottom:0">
+        Read out of <code>@salesforce-ux/sds-metadata@next</code> in this repo's <code>node_modules</code>.
+        This is the part that makes any of the three takes shippable under Outcome 9: the kit is
+        expressible in semantic hooks almost end to end, and the four places it is not are listed at the
+        bottom rather than quietly hard-coded.
+      </p>
+    </div>
+    <div class="map__scroll">
+    <table>
+      <thead>
+        <tr><th>Kit value</th><th>Hook</th><th>Resolves under Cosmos</th><th>Fit</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><span class="swatch" style="background:#fff"></span>#FFFFFF cards</td><td><code>--slds-g-color-surface-container-1</code></td><td><code>light-dark(#fff, #242424)</code></td><td class="ok">exact</td></tr>
+        <tr><td><span class="swatch" style="background:#f3f3f3"></span>#F3F3F3 page</td><td><code>--slds-g-color-surface-container-2</code></td><td><code>light-dark(#f3f3f3, #181818)</code></td><td class="ok">exact</td></tr>
+        <tr><td><span class="swatch" style="background:#fafaf9"></span>#FAFAF9 inset band</td><td><code>--slds-g-color-surface-container-2</code></td><td><code>light-dark(#f3f3f3, #181818)</code></td><td>near — band shifts one step darker</td></tr>
+        <tr><td><span class="swatch" style="background:#001e5b"></span>#001E5B titles</td><td><code>--slds-g-color-on-surface-3</code></td><td><code>light-dark(#03234d, #d8e6fe)</code></td><td class="ok">exact — and it is <em>already navy</em></td></tr>
+        <tr><td><span class="swatch" style="background:#181818"></span>#181818 body</td><td><code>--slds-g-color-on-surface-2</code></td><td><code>light-dark(#2e2e2e, #e5e5e5)</code></td><td>near</td></tr>
+        <tr><td><span class="swatch" style="background:#5c5c5c"></span>#5C5C5C secondary</td><td><code>--slds-g-color-on-surface-1</code></td><td><code>light-dark(#5c5c5c, #aeaeae)</code></td><td class="ok">exact</td></tr>
+        <tr><td><span class="swatch" style="background:#0050d9"></span>#0050D9 action blue</td><td><code>--slds-g-color-accent-2</code></td><td><code>light-dark(#0250d9, #7cb1fe)</code></td><td class="ok">exact — the kit's blue <em>is</em> Cosmos brand-40</td></tr>
+        <tr><td>20px card radius</td><td><code>--slds-g-radius-border-4</code></td><td><code>1.25rem</code></td><td class="ok">exact</td></tr>
+        <tr><td>12px inset radius</td><td><code>--slds-g-radius-border-3</code></td><td><code>0.75rem</code></td><td class="ok">exact</td></tr>
+        <tr><td>8px input radius</td><td><code>--slds-g-radius-border-2</code></td><td><code>0.5rem</code></td><td class="ok">exact</td></tr>
+        <tr><td>4px checkbox radius</td><td><code>--slds-g-radius-border-1</code></td><td><code>0.25rem</code></td><td class="ok">exact</td></tr>
+        <tr><td>4 · 8 · 12 · 16 · 24 spacing</td><td><code>--slds-g-spacing-1…5</code></td><td><code>0.25 / 0.5 / 0.75 / 1 / 1.5rem</code></td><td class="ok">exact</td></tr>
+        <tr><td>700 / 600 / 400 weights</td><td><code>--slds-g-font-weight-7 / -6 / -4</code></td><td><code>700 / 600 / 400</code></td><td class="ok">exact</td></tr>
+        <tr><td><span class="swatch" style="background:#e5e5e5"></span>#E5E5E5 hairline</td><td class="gap">no border-role hook carries it</td><td><code>--slds-g-color-border-1</code> is <code>light-dark(#c9c9c9, #444)</code></td><td class="gap">gap — nearest is a shade heavier</td></tr>
+        <tr><td>9999px pill</td><td class="gap">none</td><td><code>--slds-g-radius-border-circle</code> is <code>100%</code>, not a pill</td><td class="gap">gap</td></tr>
+        <tr><td><span class="swatch" style="background:#f8faff"></span>#F8FAFF selected fill</td><td class="gap">none</td><td>—</td><td class="gap">gap</td></tr>
+        <tr><td><span class="swatch" style="background:#2d844a"></span>#2D844A success</td><td class="gap">none by value</td><td>use the <code>success</code> hook family by role, not this hex</td><td class="gap">gap</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  <div class="map" style="margin-top:var(--slds-g-spacing-5)">
+    <div class="map__head" style="padding-bottom:var(--slds-g-spacing-5)">
+      <h2 class="take__name">Three things worth knowing before you pick</h2>
+      <ul style="margin-top:var(--slds-g-spacing-3);padding-left:1.1em">
+        <li style="margin-bottom:var(--slds-g-spacing-3);font-size:var(--slds-g-font-scale-1)">
+          <strong>Mapping the kit by <em>value</em> is a trap, and it is the exact trap the spec names.</strong>
+          Ask the metadata which hook holds <code>#181818</code> and it answers
+          <code>--slds-g-color-palette-neutral-10</code> and <code>--slds-g-color-neutral-base-10</code> —
+          both in the family of 38 the spec flags as having no <code>light-dark()</code>. They pass a
+          "uses a hook" check and then sit fixed and unreadable in dark mode. Every row above is mapped
+          by <em>role</em> instead, which is why every one of them flips.
+        </li>
+        <li style="margin-bottom:var(--slds-g-spacing-3);font-size:var(--slds-g-font-scale-1)">
+          <strong>A contrast failure this sketch caught by being switchable, and would not have caught
+          otherwise — with a rule that outlives whichever take you pick.</strong>
+          The first draft filled the primary button with <code>--slds-g-color-accent-2</code>, the kit's
+          own blue, and set its label to <code>--slds-g-color-on-accent-1</code>. Light mode: white on
+          <code>#0250d9</code>, <strong>6.66:1</strong>, fine. Flip to dark and <code>accent-2</code>
+          becomes <code>#7cb1fe</code> while <code>on-accent-1</code> stays a fixed <code>#fff</code> —
+          <strong>2.19:1</strong>. Pairing by index instead (<code>on-accent-2</code>, which flips) only
+          reaches <strong>3.04:1</strong>: enough for large text, and a 14px bold button label is not
+          large text.
+          <br><br>
+          <strong>The rule, measured rather than assumed.</strong> Accent has two jobs and they take
+          different hooks.
+          <em>As a fill under a label</em> — buttons, selected chips — use
+          <code>accent-1</code> + <code>on-accent-1</code>: both are fixed, so they cannot drift apart,
+          and the pair holds <strong>4.67:1 in both modes</strong>. That is what every filled control on
+          this page now uses. The cost is honest: <code>#066afe</code> is a step brighter than the kit's
+          <code>#0050D9</code>, and that step is what buys the contrast.
+          <em>As ink or line</em> — link text, hover colour, focus ring, selected border — use
+          <code>accent-2</code>, which is the kit's blue exactly and reads
+          <strong>6.66:1 light / 7.08:1 dark</strong> against the card.
+        </li>
+        <li style="font-size:var(--slds-g-font-scale-1)">
+          <strong>One inaccuracy in the built CSS, found on the way here.</strong>
+          <code>navigatorSection.css</code> has <code>color: var(--slds-g-color-on-surface-3, #181818)</code>
+          with the comment that this is the title colour. The hook is right; the fallback is not — under
+          Cosmos it resolves to <code>#03234d</code>. The fallback only shows if the hook is ever missing,
+          so nothing is visibly wrong today, but it means the file records the wrong intent.
+        </li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* The seeded first-open card, at 174 items — the real count observed in a bare
+   org — so the density panels show the thing that actually ships rather than a
+   flattering handful. */
+var NAMES = [
+  "Accounts","Contacts","Leads","Opportunities","Quotes","Orders","Contracts","Campaigns",
+  "Cases","Solutions","Reports","Dashboards","Files","Products","Price Books","Assets",
+  "Tasks","Events","Calendar","Chatter","Groups","People","Notes","Forecasts",
+  "Sales Orders","Purchase Orders","Work Orders","Inventory Transactions","Item Masters",
+  "Payments","Invoices","Vouchers","Receivers","Shipments","Routings","Bills of Material",
+  "Divisions","Sites","Containers","Cost Centers","Buyers","Planners","Carriers","Terms",
+  "Lot Numbers","Serial Numbers","Locations","Warehouses","Inspections","Engineering Changes"
+];
+
+function label(i) {
+  var base = NAMES[i % NAMES.length];
+  return i < NAMES.length ? base : base + " (" + (Math.floor(i / NAMES.length) + 1) + ")";
+}
+
+var TOTAL = 174;
+
+function build(host, take) {
+  var wrap = document.createElement(take === "c" ? "ul" : "ul");
+  wrap.className = take === "c" ? "c-flow" : "grid cols-3 js-cols";
+  var itemClass = take === "a" ? "a-item" : take === "b" ? "b-item" : "c-pill";
+  var labelClass = take === "a" ? "a-item__label" : take === "b" ? "b-item__label" : "c-pill__label";
+  var frag = document.createDocumentFragment();
+  for (var i = 0; i < TOTAL; i++) {
+    var li = document.createElement("li");
+    var a = document.createElement("a");
+    a.className = itemClass; a.href = "#";
+    var s = document.createElement("span");
+    s.className = labelClass; s.textContent = label(i);
+    var b = document.createElement("button");
+    b.className = "menu-btn"; b.setAttribute("aria-label", label(i) + " actions");
+    b.textContent = "▾";
+    a.appendChild(s); a.appendChild(b); li.appendChild(a); frag.appendChild(li);
+  }
+  wrap.appendChild(frag);
+
+  var band;
+  if (take === "b") {
+    band = document.createElement("div");
+    band.className = "b-band";
+    band.innerHTML = '<span class="micro b-band__name">All Items</span>' +
+      '<button class="b-add">+ Add Items</button>' +
+      '<button class="menu-btn" aria-label="All Items section actions">▾</button>';
+  } else {
+    band = document.createElement("div");
+    band.className = take === "a" ? "a-section__head" : "c-head";
+    band.innerHTML = (take === "a"
+      ? '<h3 class="a-section__name">All Items</h3>'
+      : '<span class="micro c-head__name">All Items</span>') +
+      '<button class="b-add">+ Add Items</button>' +
+      '<button class="menu-btn" aria-label="All Items section actions">▾</button>';
+  }
+  host.appendChild(band);
+  host.appendChild(wrap);
+}
+
+document.querySelectorAll(".js-density").forEach(function (host) {
+  build(host, host.getAttribute("data-take"));
+});
+
+/* Light / dark. Sets color-scheme, nothing else. */
+var modeBtn = document.getElementById("mode");
+modeBtn.addEventListener("click", function () {
+  var dark = document.documentElement.getAttribute("data-mode") === "dark";
+  document.documentElement.setAttribute("data-mode", dark ? "light" : "dark");
+  modeBtn.setAttribute("aria-pressed", String(!dark));
+  modeBtn.textContent = dark ? "Dark mode" : "Light mode";
+});
+
+/* Column count — Outcome 4 is 1 through 6, and this shows the two that matter
+   for judging a take. Take C has no columns, which is the point. */
+var colsBtn = document.getElementById("cols");
+colsBtn.addEventListener("click", function () {
+  var four = colsBtn.getAttribute("aria-pressed") === "true";
+  document.querySelectorAll(".js-cols").forEach(function (el) {
+    el.classList.remove("cols-2", "cols-3", "cols-4");
+    el.classList.add(four ? "cols-3" : "cols-4");
+  });
+  colsBtn.setAttribute("aria-pressed", String(!four));
+  colsBtn.textContent = four ? "Show 4 columns" : "Show 3 columns";
+});
+</script>
+</body>
+</html>

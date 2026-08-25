@@ -1,0 +1,4267 @@
+import { createElement } from "lwc";
+import SalesforceNavigator from "c/salesforceNavigator";
+import { getNavItems } from "lightning/uiAppsApi";
+import { getNavigateCalledWith } from "lightning/navigation";
+// The picker is a `lightning-modal`, and that module has no stub at all in
+// sfdx-lwc-jest. The mock at test/jest-mocks/lightning/modal.js **mounts the
+// real component** rather than standing in for it, so the assertions below
+// about what the picker lists, what a search finds and what a click on an
+// entry does are driven against the component that ships.
+import { getOpenModals, resetModals, configOf } from "lightning/modal";
+import { MAX_PAGE_SIZE, NAV_ITEMS_CONFIG } from "c/navigatorTabSource";
+import { SCHEMA_VERSION, reorder } from "c/navigatorLayoutModel";
+import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
+import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
+import updateLayout from "@salesforce/apex/NavigatorLayoutController.updateLayout";
+import activateLayout from "@salesforce/apex/NavigatorLayoutController.activateLayout";
+import renameLayout from "@salesforce/apex/NavigatorLayoutController.renameLayout";
+import deleteLayout from "@salesforce/apex/NavigatorLayoutController.deleteLayout";
+
+// The Apex seam. Without these, `@lwc/jest-transformer` substitutes a plain
+// function returning `Promise.resolve()` that records nothing — the same
+// shape of gap the repo already closed for `lightning/navigation`, and it
+// would make every assertion below about *what was saved* unwritable.
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.getLayouts",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.createLayout",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.updateLayout",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.activateLayout",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.renameLayout",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+jest.mock(
+  "@salesforce/apex/NavigatorLayoutController.deleteLayout",
+  () => ({ default: jest.fn() }),
+  { virtual: true }
+);
+
+// Five distinct pageReference types were verified against a live org (174
+// nav items, API v66.0), two of which — standard__cmsPage and
+// standard__directCmpReference — are not on the documented PageReference
+// Types page at all. Only one item is exercised end to end here; the point
+// is that whichever type the platform sent is what gets navigated to.
+const ACCOUNT_ITEM = {
+  developerName: "Account",
+  label: "Accounts",
+  pageReference: {
+    type: "standard__objectPage",
+    attributes: { objectApiName: "Account", actionName: "home" },
+    state: {}
+  }
+};
+
+const ACTION_HUB_ITEM = {
+  developerName: "standard-ActionHub",
+  label: "Action Plans",
+  pageReference: {
+    type: "standard__navItemPage",
+    attributes: { apiName: "standard-ActionHub" },
+    state: {}
+  }
+};
+
+const CONTACT_ITEM = {
+  developerName: "Contact",
+  label: "Contacts",
+  pageReference: {
+    type: "standard__objectPage",
+    attributes: { objectApiName: "Contact", actionName: "home" },
+    state: {}
+  }
+};
+
+const EXISTING_LAYOUT_ID = "a0X000000000001AAA";
+const CREATED_LAYOUT_ID = "a0X000000000002AAA";
+
+// One second, matching the component's debounce. Named here rather than
+// repeated so a test cannot silently start advancing past a debounce it was
+// meant to be sitting inside.
+const AUTOSAVE_DELAY_MS = 1000;
+
+function buildItem(index) {
+  return {
+    developerName: `Custom_Tab_${index}`,
+    label: `Custom Tab ${index}`,
+    pageReference: {
+      type: "standard__navItemPage",
+      attributes: { apiName: `Custom_Tab_${index}` },
+      state: {}
+    }
+  };
+}
+
+function createNavigator() {
+  const element = createElement("c-salesforce-navigator", {
+    is: SalesforceNavigator
+  });
+  document.body.appendChild(element);
+  return element;
+}
+
+async function flush() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+/**
+ * Items now live inside `c-navigator-section`, and under
+ * `@lwc/synthetic-shadow` — which the jest preset loads, so retargeting
+ * reproduces faithfully — a parent's `shadowRoot` query cannot see into a
+ * child's. This walks the section shadow roots so the assertions themselves
+ * stay exactly what they were when items were rendered flat.
+ */
+function queryItems(element) {
+  return Array.from(
+    element.shadowRoot.querySelectorAll("c-navigator-section")
+  ).flatMap((section) =>
+    Array.from(section.shadowRoot.querySelectorAll("c-navigator-item"))
+  );
+}
+
+function querySections(element) {
+  return Array.from(element.shadowRoot.querySelectorAll("c-navigator-section"));
+}
+
+/**
+ * Every section's item labels on screen, in order, as one array per section.
+ * `queryItems` flattens the sections away, which is fine for a within-section
+ * reorder and useless for a move *between* sections — the whole question there
+ * is which section an item ended up in.
+ */
+function itemLabelsBySection(element) {
+  return querySections(element).map((section) =>
+    Array.from(section.shadowRoot.querySelectorAll("c-navigator-item")).map(
+      (item) => item.label
+    )
+  );
+}
+
+/** The section headers on screen, in order — the whole Navigator at a glance. */
+function sectionNames(element) {
+  return querySections(element).map(
+    (section) => section.shadowRoot.querySelector("h2").textContent
+  );
+}
+
+/** The layout the component last sent to Apex, parsed back out of the call. */
+/**
+ * What a screen reader would voice and a sighted user could see, which is the
+ * announcement with every zero-width character taken out of it. The
+ * distinguisher that makes a repeated announcement a *new* one is only allowed
+ * to live in this gap.
+ */
+function spoken(text) {
+  return text.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "");
+}
+
+function lastSavedLayout(apexMock) {
+  const calls = apexMock.mock.calls;
+  return JSON.parse(calls[calls.length - 1][0].layoutJson);
+}
+
+/** Drives one section's overflow menu the way a user would. */
+function selectSectionMenuItem(element, sectionIndex, value) {
+  const section = querySections(element)[sectionIndex];
+  section.shadowRoot
+    .querySelector("lightning-button-menu")
+    .dispatchEvent(new CustomEvent("select", { detail: { value } }));
+}
+
+/** One change in a burst: made, rendered, and 100ms of the debounce spent. */
+async function burstChange(element, columns) {
+  selectSectionMenuItem(element, 0, `columns-${columns}`);
+  await flush();
+  jest.advanceTimersByTime(100);
+}
+
+async function settleAutosave() {
+  jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+  await flush();
+  await flush();
+}
+
+describe("c-salesforce-navigator", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    getLayouts.mockResolvedValue([]);
+    createLayout.mockResolvedValue({
+      layoutId: CREATED_LAYOUT_ID,
+      name: "My Navigator",
+      isActive: true
+    });
+    updateLayout.mockResolvedValue({
+      layoutId: EXISTING_LAYOUT_ID,
+      name: "My Navigator",
+      isActive: true
+    });
+    // `jest.clearAllMocks()` clears recorded calls but leaves implementations
+    // in place, so a fake store installed by one test would otherwise still be
+    // answering in the next. Re-declaring the default here is what keeps each
+    // test's store its own.
+    activateLayout.mockResolvedValue([]);
+    renameLayout.mockResolvedValue({});
+    deleteLayout.mockResolvedValue([]);
+  });
+
+  afterEach(async () => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    // Removing the element runs `disconnectedCallback`, which flushes any
+    // save still sitting in the debounce. That save's promise chain must be
+    // allowed to settle *here*, before `clearAllMocks` — otherwise its
+    // `createLayout` call lands in the next test's microtask queue, on a
+    // mock that has already been cleared, and shows up there as a save that
+    // test never made.
+    jest.runOnlyPendingTimers();
+    await flush();
+    await flush();
+    jest.useRealTimers();
+    jest.clearAllMocks();
+  });
+
+  it("renders every tab the wire adapter returns, under its platform label", async () => {
+    const element = createNavigator();
+    getNavItems.emit({
+      navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM]
+    });
+    await flush();
+
+    const items = queryItems(element);
+    expect(items).toHaveLength(2);
+    expect(items[0].label).toBe(ACCOUNT_ITEM.label);
+    expect(items[1].label).toBe(ACTION_HUB_ITEM.label);
+  });
+
+  it("passes each item's stored pageReference through to its child unmodified", async () => {
+    const element = createNavigator();
+    getNavItems.emit({
+      navItems: [ACCOUNT_ITEM]
+    });
+    await flush();
+
+    const item = queryItems(element)[0];
+    expect(item.pageReference).toEqual(ACCOUNT_ITEM.pageReference);
+  });
+
+  it("navigates to the platform-supplied pageReference, unmodified, when an item is clicked", async () => {
+    const element = createNavigator();
+    getNavItems.emit({
+      navItems: [ACCOUNT_ITEM]
+    });
+    await flush();
+
+    const item = queryItems(element)[0];
+    const anchor = item.shadowRoot.querySelector("a");
+    anchor.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+
+    expect(getNavigateCalledWith().pageReference).toEqual(
+      ACCOUNT_ITEM.pageReference
+    );
+  });
+
+  it("requests more than one page so more than 100 accessible tabs are all listed", async () => {
+    // Verified against a live org: the platform's response carries no total
+    // `count` field at all — `nextPageUrl` present vs. absent is the actual
+    // pagination signal, so that is what this test drives rather than a
+    // `count` the platform never returns.
+    const firstPage = Array.from({ length: MAX_PAGE_SIZE }, (_, i) =>
+      buildItem(i)
+    );
+    const secondPage = Array.from({ length: 74 }, (_, i) =>
+      buildItem(MAX_PAGE_SIZE + i)
+    );
+    const totalCount = firstPage.length + secondPage.length;
+
+    const element = createNavigator();
+    getNavItems.emit({
+      navItems: firstPage,
+      nextPageUrl:
+        "/services/data/v67.0/ui-api/nav-items?formFactor=Large&page=1&pageSize=100"
+    });
+    await flush();
+
+    // The component must actually have asked the wire adapter for the next
+    // page — not merely rendered whatever the test handed it, which is all
+    // the assertion below this one can tell us on its own. Asserted against
+    // the whole config object, not just `.page`, so that `formFactor`,
+    // `navItemType`, `scope` and `pageSize` diverging from NAV_ITEMS_CONFIG
+    // (the single source of truth the "one module" criterion relies on) is
+    // caught here too — in particular `scope: "visible"`, which is the
+    // entire mechanism behind the claim that the component cannot render a
+    // tab the running user cannot reach.
+    expect(getNavItems.getLastConfig()).toEqual({
+      ...NAV_ITEMS_CONFIG,
+      page: 1
+    });
+
+    getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
+    await flush();
+
+    const items = queryItems(element);
+    expect(items).toHaveLength(totalCount);
+    // And it must stop advancing once the platform reports no further page.
+    expect(getNavItems.getLastConfig().page).toBe(1);
+  });
+
+  it("does not duplicate items when the wire adapter re-emits the final page after pagination completes", async () => {
+    // An LDS cache refresh can redeliver the current page's config at any
+    // time — that is a normal event for a UI API adapter, not a contrived
+    // one, and it must not grow the rendered list.
+    const firstPage = Array.from({ length: MAX_PAGE_SIZE }, (_, i) =>
+      buildItem(i)
+    );
+    const secondPage = Array.from({ length: 74 }, (_, i) =>
+      buildItem(MAX_PAGE_SIZE + i)
+    );
+    const totalCount = firstPage.length + secondPage.length;
+
+    const element = createNavigator();
+    getNavItems.emit({
+      navItems: firstPage,
+      nextPageUrl:
+        "/services/data/v67.0/ui-api/nav-items?formFactor=Large&page=1&pageSize=100"
+    });
+    getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
+    await flush();
+
+    let items = queryItems(element);
+    expect(items).toHaveLength(totalCount);
+
+    getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
+    await flush();
+
+    items = queryItems(element);
+    expect(items).toHaveLength(totalCount);
+  });
+
+  it("shows a user-facing message rather than a blank panel when the wire adapter errors", async () => {
+    const element = createNavigator();
+    getNavItems.error({ message: "insufficient access" }, 403, "Forbidden");
+    await flush();
+
+    const alert = element.shadowRoot.querySelector('[role="alert"]');
+    expect(alert).not.toBeNull();
+    expect(queryItems(element)).toHaveLength(0);
+  });
+
+  describe("first open", () => {
+    it("shows every reachable tab in one section named All Items", async () => {
+      const element = createNavigator();
+      getNavItems.emit({
+        navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM]
+      });
+      await flush();
+
+      const sections = querySections(element);
+      expect(sections).toHaveLength(1);
+      expect(sections[0].shadowRoot.querySelector("h2").textContent).toBe(
+        "All Items"
+      );
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Action Plans",
+        "Contacts"
+      ]);
+    });
+
+    it("writes no layout record for a user who has only ever looked", async () => {
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+      // Well past the autosave debounce — nothing scheduled it, so nothing
+      // fires. A component that persisted the seeded layout on mount would
+      // generate a row for every user who ever opens the tab, to store what
+      // the platform already knows.
+      await settleAutosave();
+
+      expect(queryItems(element)).toHaveLength(2);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("before the Navigator is ready to be changed", () => {
+    /** A `getLayouts` the test holds open, so the in-flight window is real. */
+    function heldOpenLayouts() {
+      let settle;
+      const promise = new Promise((resolve) => {
+        settle = resolve;
+      });
+      getLayouts.mockReturnValue(promise);
+      return settle;
+    }
+
+    /**
+     * Hands back the callback the component registered on `getLayouts`, so a
+     * test can deliver a layout to `adoptActiveLayout` more than once. The
+     * component calls `getLayouts()` exactly once and a promise settles
+     * exactly once, so there is no other way to create the condition the
+     * guard inside `adoptActiveLayout` exists for — and the guard must hold
+     * on its own rather than because the template happens to be gated.
+     */
+    function capturedLayoutResolution() {
+      let deliver;
+      getLayouts.mockReturnValue({
+        then(onFulfilled) {
+          deliver = onFulfilled;
+          return { catch() {} };
+        }
+      });
+      return (rows) => deliver(rows);
+    }
+
+    function storedRow(layoutId, sectionName) {
+      return {
+        layoutId,
+        name: "My Navigator",
+        isActive: true,
+        isReadable: true,
+        layoutJson: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          sections: [{ name: sectionName, columns: 2, items: [] }]
+        })
+      };
+    }
+
+    it("never assigns over a layout the user is already looking at and has changed", async () => {
+      // The other half of the pair the template gate is one half of. The
+      // template can only stop `adoptActiveLayout` running *before* the user
+      // has anything to change; the guard inside it is what stops a second
+      // resolution landing on top of a change they have already made and
+      // seen, which is silent data loss.
+      const deliver = capturedLayoutResolution();
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      deliver([storedRow(EXISTING_LAYOUT_ID, "Daily work")]);
+      await flush();
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+
+      element.shadowRoot.querySelector("lightning-button").click();
+      await flush();
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+
+      deliver([storedRow("a0X000000000009AAA", "Rival")]);
+      await flush();
+
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+    });
+
+    it("offers nothing to change until the stored layout has arrived, so the fetch cannot discard a change", async () => {
+      // The window this closes: `getLayouts` is fired without being awaited,
+      // and `adoptActiveLayout` assigns `storedLayout` unconditionally. A
+      // change made while the fetch was in flight was overwritten by the
+      // fetch landing, and the autosave then wrote the pre-change layout
+      // back — the user's work gone, with no message.
+      const settle = heldOpenLayouts();
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      expect(element.shadowRoot.querySelector("lightning-button")).toBeNull();
+      expect(querySections(element)).toHaveLength(0);
+
+      settle([
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "My Navigator",
+          isActive: true,
+          layoutJson: JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            sections: [{ name: "Daily work", columns: 2, items: [] }]
+          })
+        }
+      ]);
+      await flush();
+
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+      expect(
+        element.shadowRoot.querySelector("lightning-button")
+      ).not.toBeNull();
+
+      // And the fetch landing is not itself a change.
+      await settleAutosave();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("tells the user when their stored layout could not be read, and saves nothing until it can", async () => {
+      // A failed read used to say nothing at all, and the next change called
+      // `createLayout(makeActive: true)` — which clears `Is_Active__c` on the
+      // user's other layouts. Their real layout was deactivated and, with no
+      // switcher in this slice, unreachable.
+      getLayouts.mockRejectedValue({ body: { message: "Read timed out" } });
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const alert = element.shadowRoot.querySelector('[role="alert"]');
+      expect(alert).not.toBeNull();
+      expect(alert.textContent).toContain("could not load your saved layout");
+
+      // The seeded Navigator is still there to look at and navigate from.
+      expect(queryItems(element)).toHaveLength(2);
+      // But nothing may be written: a create here would displace the layout
+      // we failed to read.
+      expect(element.shadowRoot.querySelector("lightning-button")).toBeNull();
+      selectSectionMenuItem(element, 0, "columns-4");
+      await flush();
+      await settleAutosave();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("offers no New section button until every page of tabs has arrived", async () => {
+      // `New section` sat in `slot="actions"`, outside the isLoading/hasItems
+      // gate. Clicking it after page 1 of 2 froze a seed of only the pages
+      // received so far into the store; the rest were in no section, and this
+      // slice ships no picker to get them back.
+      const firstPage = Array.from({ length: MAX_PAGE_SIZE }, (_, i) =>
+        buildItem(i)
+      );
+      const secondPage = [
+        buildItem(MAX_PAGE_SIZE),
+        buildItem(MAX_PAGE_SIZE + 1)
+      ];
+
+      const element = createNavigator();
+      getNavItems.emit({
+        navItems: firstPage,
+        nextPageUrl:
+          "/services/data/v67.0/ui-api/nav-items?formFactor=Large&page=1&pageSize=100"
+      });
+      await flush();
+
+      expect(element.shadowRoot.querySelector("lightning-button")).toBeNull();
+
+      getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
+      await flush();
+
+      element.shadowRoot.querySelector("lightning-button").click();
+      await flush();
+      await settleAutosave();
+
+      // Every reachable tab, not just the pages that had arrived.
+      expect(lastSavedLayout(createLayout).sections[0].items).toHaveLength(
+        firstPage.length + secondPage.length
+      );
+    });
+  });
+
+  describe("a layout row this version cannot read", () => {
+    // What `getLayouts` returns for a row whose payload the controller could
+    // not read: flagged rather than raised, with no `layoutJson` at all and
+    // the reason it could not be read. The client half of that contract is
+    // what this block holds down.
+    const UNREADABLE_ACTIVE_ROW = {
+      layoutId: "a0X000000000003AAA",
+      name: "Written by a newer Navigator",
+      isActive: true,
+      schemaVersion: 99,
+      isReadable: false,
+      unreadableReason:
+        "This layout was saved at schema version 99, which this version of the Navigator cannot read.",
+      layoutJson: null
+    };
+
+    const READABLE_ROW = {
+      layoutId: EXISTING_LAYOUT_ID,
+      name: "My Navigator",
+      isActive: false,
+      isReadable: true,
+      layoutJson: JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
+        sections: [
+          { name: "Daily work", columns: 2, items: [{ id: "Account" }] }
+        ]
+      })
+    };
+
+    it("adopts the readable layout beside it rather than the unreadable active one", async () => {
+      // The unreadable row is the *active* one, so a client that did not
+      // filter it out would adopt it — and `deserializeLayout(null)` is a
+      // layout with no sections, so every tab the user has would vanish from
+      // the screen with nothing said about it.
+      getLayouts.mockResolvedValue([READABLE_ROW, UNREADABLE_ACTIVE_ROW]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts"
+      ]);
+    });
+
+    it("says so, names what an administrator needs, and saves nothing", async () => {
+      getLayouts.mockResolvedValue([READABLE_ROW, UNREADABLE_ACTIVE_ROW]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const alert = element.shadowRoot.querySelector('[role="alert"]');
+      expect(alert).not.toBeNull();
+      // Not the reload wording: every reload reproduces this row, so telling
+      // the user to reload is telling them to do the one thing that cannot
+      // work. What they can act on is handing the reason to an administrator.
+      expect(alert.textContent).not.toContain("Reload the page");
+      expect(alert.textContent).toContain("administrator");
+      expect(alert.textContent).toContain(
+        UNREADABLE_ACTIVE_ROW.unreadableReason
+      );
+
+      // And no write, because every write this component makes passes
+      // `makeActive: true` and would deactivate the row it cannot read.
+      selectSectionMenuItem(element, 0, "columns-4");
+      await flush();
+      await settleAutosave();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+      // The change is still on screen, and the Navigator is not empty.
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+    });
+
+    it("keeps the reload wording for a read that merely failed", async () => {
+      // The two conditions are not the same failure. A rejected read is
+      // transient, so reloading is the right advice; an unreadable row
+      // reproduces forever, so it is not.
+      getLayouts.mockRejectedValue({ body: { message: "Read timed out" } });
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const alert = element.shadowRoot.querySelector('[role="alert"]');
+      expect(alert.textContent).toContain("Reload the page");
+      expect(alert.textContent).not.toContain("administrator");
+    });
+  });
+
+  describe("sections, names and column counts", () => {
+    async function navigatorWithTabs() {
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+      return element;
+    }
+
+    it("creates a new section on request, alongside the seeded one", async () => {
+      const element = await navigatorWithTabs();
+
+      element.shadowRoot.querySelector("lightning-button").click();
+      await flush();
+
+      const names = querySections(element).map(
+        (section) => section.shadowRoot.querySelector("h2").textContent
+      );
+      expect(names).toEqual(["All Items", "New section"]);
+    });
+
+    it("renames the section the user renamed, and saves the new name", async () => {
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "rename");
+      await flush();
+      const section = querySections(element)[0];
+      const input = section.shadowRoot.querySelector("lightning-input");
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Daily work" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+
+      expect(
+        querySections(element)[0].shadowRoot.querySelector("h2").textContent
+      ).toBe("Daily work");
+
+      await settleAutosave();
+      expect(lastSavedLayout(createLayout).sections[0].name).toBe("Daily work");
+    });
+
+    it("deletes the section the user deleted, and saves the layout without it", async () => {
+      const element = await navigatorWithTabs();
+      element.shadowRoot.querySelector("lightning-button").click();
+      await flush();
+      expect(querySections(element)).toHaveLength(2);
+
+      selectSectionMenuItem(element, 0, "delete");
+      await flush();
+
+      const names = querySections(element).map(
+        (section) => section.shadowRoot.querySelector("h2").textContent
+      );
+      expect(names).toEqual(["New section"]);
+
+      await settleAutosave();
+      expect(
+        lastSavedLayout(createLayout).sections.map((section) => section.name)
+      ).toEqual(["New section"]);
+    });
+
+    it.each([1, 2, 3, 4, 5, 6])(
+      "renders the section in %i columns once the user chooses that count, and stores it",
+      async (columns) => {
+        const element = await navigatorWithTabs();
+
+        selectSectionMenuItem(element, 0, `columns-${columns}`);
+        await flush();
+
+        const grid = querySections(element)[0].shadowRoot.querySelector("ul");
+        expect(grid.className).toContain(`cols-${columns}`);
+
+        await settleAutosave();
+        expect(lastSavedLayout(createLayout).sections[0].columns).toBe(columns);
+      }
+    );
+  });
+
+  describe("surviving a reload", () => {
+    it("renders the stored sections, names and column counts rather than the seeded layout", async () => {
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "My Navigator",
+          isActive: true,
+          schemaVersion: SCHEMA_VERSION,
+          layoutJson: JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            sections: [
+              { name: "Daily work", columns: 5, items: [{ id: "Contact" }] },
+              { name: "Occasional", columns: 1, items: [{ id: "Account" }] }
+            ]
+          })
+        }
+      ]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const sections = querySections(element);
+      expect(
+        sections.map(
+          (section) => section.shadowRoot.querySelector("h2").textContent
+        )
+      ).toEqual(["Daily work", "Occasional"]);
+      expect(sections[0].shadowRoot.querySelector("ul").className).toContain(
+        "cols-5"
+      );
+      expect(sections[1].shadowRoot.querySelector("ul").className).toContain(
+        "cols-1"
+      );
+      // And the stored order, not the platform's alphabetical one.
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Contacts",
+        "Accounts"
+      ]);
+    });
+
+    it("prefers the user's active layout over the first one they own", async () => {
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: "a0X000000000009AAA",
+          name: "Old",
+          isActive: false,
+          layoutJson: JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            sections: [{ name: "Stale", columns: 1, items: [] }]
+          })
+        },
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "Current",
+          isActive: true,
+          layoutJson: JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            sections: [{ name: "Live", columns: 2, items: [] }]
+          })
+        }
+      ]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM] });
+      await flush();
+
+      expect(
+        querySections(element).map(
+          (section) => section.shadowRoot.querySelector("h2").textContent
+        )
+      ).toEqual(["Live"]);
+    });
+  });
+
+  describe("autosave", () => {
+    async function navigatorWithTabs() {
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+      return element;
+    }
+
+    it("saves nothing at all until the debounce elapses", async () => {
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-4");
+      await flush();
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS - 1);
+      await flush();
+
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("coalesces a burst of rapid changes into one save carrying the last of them", async () => {
+      const element = await navigatorWithTabs();
+
+      // Five changes 100ms apart — well inside one debounce window, and
+      // written out rather than looped because each has to be awaited and
+      // `no-await-in-loop` is on.
+      await burstChange(element, 2);
+      await burstChange(element, 3);
+      await burstChange(element, 4);
+      await burstChange(element, 5);
+      await burstChange(element, 6);
+      await settleAutosave();
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).not.toHaveBeenCalled();
+      // One save, and it is the *last* change — a debounce that fired on the
+      // leading edge would save 2 columns and lose the other four changes.
+      expect(lastSavedLayout(createLayout).sections[0].columns).toBe(6);
+    });
+
+    it("updates the record the first change created rather than creating a second one", async () => {
+      // The trap this guards is the one the controller's two-method split
+      // exists for: a client that keeps sending "save" without the id it was
+      // given ends up with a new record per change, or worse, silently
+      // overwriting whichever layout the server picked.
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-2");
+      await flush();
+      await settleAutosave();
+      expect(createLayout).toHaveBeenCalledTimes(1);
+
+      selectSectionMenuItem(element, 0, "columns-3");
+      await flush();
+      await settleAutosave();
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout.mock.calls[0][0].layoutId).toBe(CREATED_LAYOUT_ID);
+      expect(lastSavedLayout(updateLayout).sections[0].columns).toBe(3);
+    });
+
+    it("updates the layout it loaded, by that layout's own id, and never creates", async () => {
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "My Navigator",
+          isActive: true,
+          layoutJson: JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            sections: [{ name: "Daily work", columns: 2, items: [] }]
+          })
+        }
+      ]);
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      await settleAutosave();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout.mock.calls[0][0].layoutId).toBe(EXISTING_LAYOUT_ID);
+    });
+
+    it("never asks the controller to update a null id", async () => {
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-2");
+      await flush();
+      await settleAutosave();
+      selectSectionMenuItem(element, 0, "columns-3");
+      await flush();
+      await settleAutosave();
+
+      for (const call of updateLayout.mock.calls) {
+        expect(call[0].layoutId).toBeTruthy();
+      }
+    });
+
+    it("saves the seeded arrangement along with the first change, so seeding is not lost", async () => {
+      const element = await navigatorWithTabs();
+
+      element.shadowRoot.querySelector("lightning-button").click();
+      await flush();
+      await settleAutosave();
+
+      const saved = lastSavedLayout(createLayout);
+      expect(saved.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(saved.sections.map((section) => section.name)).toEqual([
+        "All Items",
+        "New section"
+      ]);
+      expect(saved.sections[0].items.map((item) => item.id)).toEqual([
+        "Account",
+        "Contact"
+      ]);
+    });
+
+    it("flushes a pending save when the component goes away, rather than dropping it", async () => {
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-4");
+      await flush();
+      document.body.removeChild(element);
+      await flush();
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(lastSavedLayout(createLayout).sections[0].columns).toBe(4);
+    });
+
+    it("keeps the user's change on screen, and its id, when the save is refused", async () => {
+      createLayout.mockRejectedValue({
+        body: {
+          message: "That layout no longer exists, or does not belong to you."
+        }
+      });
+      const element = await navigatorWithTabs();
+
+      selectSectionMenuItem(element, 0, "columns-4");
+      await flush();
+      await settleAutosave();
+
+      const grid = querySections(element)[0].shadowRoot.querySelector("ul");
+      expect(grid.className).toContain("cols-4");
+      expect(
+        element.shadowRoot.querySelector('[role="alert"]').textContent
+      ).toContain("does not belong to you");
+    });
+  });
+
+  describe("reordering", () => {
+    // Three tabs, so a move has a genuine middle and two ends. Driven at the
+    // lowest level a test here can reach — a real KeyboardEvent on the
+    // anchor, or a hand-rolled drag CustomEvent on it — so the whole chain
+    // runs: item handler, section, parent, model, payload.
+    const THREE = [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM];
+    const STORED_IDS = THREE.map((item) => item.developerName);
+
+    async function navigatorWithThree() {
+      const element = createNavigator();
+      getNavItems.emit({ navItems: THREE });
+      await flush();
+      return element;
+    }
+
+    function anchorAt(element, index) {
+      return queryItems(element)[index].shadowRoot.querySelector("a");
+    }
+
+    function grabbedAnchor(element) {
+      const item = queryItems(element).find((each) => each.grabbed === true);
+      return item ? item.shadowRoot.querySelector("a") : undefined;
+    }
+
+    // jsdom 20 defines no DragEvent and no DataTransfer, so nothing here
+    // claims to test the browser's dragstart -> dragover -> drop sequence.
+    // What it does test is that the handlers wired to those events move the
+    // right item to the right place and write the result.
+    function dragEvent(type) {
+      const event = new CustomEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true
+      });
+      Object.defineProperty(event, "dataTransfer", {
+        value: {
+          store: {},
+          setData(format, value) {
+            this.store[format] = String(value);
+          },
+          getData(format) {
+            return this.store[format] || "";
+          }
+        }
+      });
+      return event;
+    }
+
+    function press(anchor, key) {
+      anchor.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
+      );
+    }
+
+    function savedItemIds(apexMock, sectionIndex = 0) {
+      return lastSavedLayout(apexMock).sections[sectionIndex].items.map(
+        (item) => item.id
+      );
+    }
+
+    async function dragItem(element, from, to) {
+      anchorAt(element, from).dispatchEvent(dragEvent("dragstart"));
+      anchorAt(element, to).dispatchEvent(dragEvent("dragover"));
+      anchorAt(element, to).dispatchEvent(dragEvent("drop"));
+      await flush();
+    }
+
+    async function walkItem(element, from, steps) {
+      press(anchorAt(element, from), " ");
+      await flush();
+      for (let step = 0; step < Math.abs(steps); step += 1) {
+        press(grabbedAnchor(element), steps > 0 ? "ArrowRight" : "ArrowLeft");
+        // Sequential on purpose, which is why `no-await-in-loop` does not
+        // apply: each arrow press has to be applied and re-rendered before
+        // the next one can be aimed at the item's new position. Running them
+        // concurrently would press four keys at one position.
+        // eslint-disable-next-line no-await-in-loop
+        await flush();
+      }
+      press(grabbedAnchor(element), " ");
+      await flush();
+    }
+
+    /**
+     * Every source and destination in a three-item section, minus the
+     * no-op moves — an item dropped where it already is changes nothing and
+     * is therefore never written, so there is no payload to compare.
+     */
+    const MOVES = STORED_IDS.flatMap((_id, from) =>
+      STORED_IDS.map((__id, to) => [from, to]).filter(([f, t]) => f !== t)
+    );
+
+    async function freshNavigator() {
+      jest.clearAllMocks();
+      createLayout.mockResolvedValue({ layoutId: CREATED_LAYOUT_ID });
+      getLayouts.mockResolvedValue([]);
+      return navigatorWithThree();
+    }
+
+    it("moves a dragged item to its new position and writes that order", async () => {
+      const element = await navigatorWithThree();
+
+      await dragItem(element, 0, 2);
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Action Plans",
+        "Contacts",
+        "Accounts"
+      ]);
+
+      await settleAutosave();
+      expect(savedItemIds(createLayout)).toEqual([
+        "standard-ActionHub",
+        "Contact",
+        "Account"
+      ]);
+    });
+
+    it.each(MOVES)(
+      "writes the same order for a move from %i to %i whether it was dragged or typed",
+      async (from, to) => {
+        // The criterion behind this is that one function does the placement.
+        // Two paths that agreed on one example could still be two
+        // implementations, so every source and destination in the section is
+        // required to write the same payload by mouse, by keyboard, and by
+        // the model's own `reorder`.
+        const dragged = await freshNavigator();
+        await dragItem(dragged, from, to);
+        await settleAutosave();
+        const byMouse = savedItemIds(createLayout);
+        document.body.removeChild(dragged);
+
+        const typed = await freshNavigator();
+        await walkItem(typed, from, to - from);
+        await settleAutosave();
+        const byKeyboard = savedItemIds(createLayout);
+        document.body.removeChild(typed);
+
+        const byModel = reorder(STORED_IDS, from, to);
+        expect(byMouse).toEqual(byModel);
+        expect(byKeyboard).toEqual(byModel);
+      }
+    );
+
+    it("still shows the moved item in its new position after a reload", async () => {
+      // The criterion is about a page reload and a fresh login, and what
+      // reaches a fresh login is the payload. This drags, takes what was
+      // actually written, and mounts a second Navigator on it — which is what
+      // a reload is, since nothing else survives.
+      const element = await navigatorWithThree();
+      await dragItem(element, 2, 0);
+      await settleAutosave();
+      const written = createLayout.mock.calls[0][0].layoutJson;
+      document.body.removeChild(element);
+      jest.clearAllMocks();
+
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "My Navigator",
+          isActive: true,
+          schemaVersion: SCHEMA_VERSION,
+          layoutJson: written
+        }
+      ]);
+      const reloaded = await navigatorWithThree();
+
+      expect(queryItems(reloaded).map((item) => item.label)).toEqual([
+        "Contacts",
+        "Accounts",
+        "Action Plans"
+      ]);
+    });
+
+    it("still shows a keyboard-moved item in its new position after a reload", async () => {
+      // The remount above drives the mouse path. Every other keyboard
+      // assertion in this file stops at `savedItemIds`, which reads the
+      // payload that was *sent* to Apex — and a test that asserts what was
+      // sent is not a test of what was stored. This one takes what was
+      // actually written, mounts a second Navigator on it, and asserts what
+      // that renders.
+      const element = await navigatorWithThree();
+      await walkItem(element, 2, -2);
+      await settleAutosave();
+      const written = createLayout.mock.calls[0][0].layoutJson;
+      document.body.removeChild(element);
+      jest.clearAllMocks();
+
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: EXISTING_LAYOUT_ID,
+          name: "My Navigator",
+          isActive: true,
+          schemaVersion: SCHEMA_VERSION,
+          layoutJson: written
+        }
+      ]);
+      const reloaded = await navigatorWithThree();
+
+      expect(queryItems(reloaded).map((item) => item.label)).toEqual([
+        "Contacts",
+        "Accounts",
+        "Action Plans"
+      ]);
+    });
+
+    it("puts the item back where it started when the drag is cancelled with Escape", async () => {
+      const element = await navigatorWithThree();
+
+      press(anchorAt(element, 0), " ");
+      await flush();
+      press(grabbedAnchor(element), "ArrowRight");
+      await flush();
+      press(grabbedAnchor(element), "ArrowRight");
+      await flush();
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Action Plans",
+        "Contacts",
+        "Accounts"
+      ]);
+
+      press(grabbedAnchor(element), "Escape");
+      await flush();
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Action Plans",
+        "Contacts"
+      ]);
+      await settleAutosave();
+      expect(savedItemIds(createLayout)).toEqual(STORED_IDS);
+    });
+
+    it("keeps a dropped move, so a second Space is not a cancel", async () => {
+      // The other half of the Escape test. Without it, an implementation
+      // that treated every release as a cancel would pass the one above.
+      const element = await navigatorWithThree();
+
+      await walkItem(element, 0, 2);
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Action Plans",
+        "Contacts",
+        "Accounts"
+      ]);
+      await settleAutosave();
+      expect(savedItemIds(createLayout)).toEqual([
+        "standard-ActionHub",
+        "Contact",
+        "Account"
+      ]);
+    });
+
+    it("holds focus on the grabbed item across a move", async () => {
+      const element = await navigatorWithThree();
+
+      press(anchorAt(element, 0), " ");
+      await flush();
+      press(grabbedAnchor(element), "ArrowRight");
+      await flush();
+
+      const grabbed = queryItems(element).find((item) => item.grabbed === true);
+      expect(grabbed.label).toBe("Accounts");
+      expect(grabbed.shadowRoot.activeElement).not.toBeNull();
+    });
+
+    it("uses neither aria-grabbed nor aria-dropeffect anywhere in the tree", async () => {
+      const element = await navigatorWithThree();
+      press(anchorAt(element, 0), " ");
+      await flush();
+
+      const attributes = [element.shadowRoot]
+        .concat(querySections(element).map((each) => each.shadowRoot))
+        .concat(queryItems(element).map((each) => each.shadowRoot))
+        .flatMap((root) => Array.from(root.querySelectorAll("*")))
+        .flatMap((node) => Array.from(node.attributes).map((at) => at.name));
+
+      expect(attributes).not.toContain("aria-grabbed");
+      expect(attributes).not.toContain("aria-dropeffect");
+      // The assertion is only worth anything if it is looking at real
+      // attributes at all.
+      expect(attributes).toContain("aria-describedby");
+    });
+
+    describe("the sections themselves", () => {
+      const TWO_SECTIONS = {
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "My Navigator",
+        isActive: true,
+        schemaVersion: SCHEMA_VERSION,
+        layoutJson: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          sections: [
+            { name: "First", columns: 2, items: [{ id: "Account" }] },
+            { name: "Second", columns: 3, items: [{ id: "Contact" }] },
+            { name: "Third", columns: 1, items: [] }
+          ]
+        })
+      };
+
+      async function navigatorWithSections() {
+        getLayouts.mockResolvedValue([TWO_SECTIONS]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+        return element;
+      }
+
+      function cardAt(element, index) {
+        return querySections(element)[index].shadowRoot.querySelector(
+          "article"
+        );
+      }
+
+      function savedSectionNames() {
+        return lastSavedLayout(updateLayout).sections.map(
+          (section) => section.name
+        );
+      }
+
+      it("reorders the sections when a section card is dragged onto another", async () => {
+        const element = await navigatorWithSections();
+
+        cardAt(element, 2).dispatchEvent(
+          new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+        );
+        cardAt(element, 0).dispatchEvent(
+          new CustomEvent("drop", { bubbles: true, cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["Third", "First", "Second"]);
+        await settleAutosave();
+        expect(savedSectionNames()).toEqual(["Third", "First", "Second"]);
+      });
+
+      it("still shows the reordered sections after a reload", async () => {
+        const element = await navigatorWithSections();
+        cardAt(element, 2).dispatchEvent(
+          new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+        );
+        cardAt(element, 0).dispatchEvent(
+          new CustomEvent("drop", { bubbles: true, cancelable: true })
+        );
+        await flush();
+        await settleAutosave();
+        const written = updateLayout.mock.calls[0][0].layoutJson;
+        document.body.removeChild(element);
+        jest.clearAllMocks();
+
+        getLayouts.mockResolvedValue([
+          { ...TWO_SECTIONS, layoutJson: written }
+        ]);
+        const reloaded = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        expect(sectionNames(reloaded)).toEqual(["Third", "First", "Second"]);
+      });
+
+      it("still shows keyboard-reordered sections after a reload", async () => {
+        // The section axis's own keyboard remount, for the same reason as the
+        // item axis's: `savedSectionNames` reads what was sent, not what was
+        // stored and read back.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 1).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        await settleAutosave();
+
+        const written = updateLayout.mock.calls[0][0].layoutJson;
+        document.body.removeChild(element);
+        jest.clearAllMocks();
+
+        getLayouts.mockResolvedValue([
+          { ...TWO_SECTIONS, layoutJson: written }
+        ]);
+        const reloaded = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        expect(sectionNames(reloaded)).toEqual(["Second", "First", "Third"]);
+      });
+
+      it("reorders the sections from the keyboard, and cancels on Escape", async () => {
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+
+        const announcer = element.shadowRoot.querySelector("[aria-live]");
+        expect(announcer.getAttribute("aria-live")).toBe("assertive");
+        expect(announcer.getAttribute("aria-atomic")).toBe("true");
+        expect(announcer.textContent).toContain("First");
+        expect(announcer.textContent).toMatch(/position 1 of 3/i);
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+        expect(sectionNames(element)).toEqual(["Second", "First", "Third"]);
+        expect(
+          element.shadowRoot.querySelector("[aria-live]").textContent
+        ).toMatch(/position 2 of 3/i);
+
+        cardAt(element, 1).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        expect(
+          element.shadowRoot.querySelector("[aria-live]").textContent
+        ).toMatch(/cancelled/i);
+        await settleAutosave();
+        expect(savedSectionNames()).toEqual(["First", "Second", "Third"]);
+      });
+
+      it("reorders the sections when a dragged card is dropped on another card's item", async () => {
+        // The positive half of the forwarding path, and the mechanism that
+        // makes a whole card a drop target rather than only its margins: an
+        // item covers most of a card's surface, so a section dragged onto
+        // another card lands on an *item* far more often than on the article.
+        // The item stops the native drop (`handleDrop` calls
+        // `stopPropagation`), so `handleCardDrop` never sees it — the only
+        // route from here to a section reorder is `handleItemDrop`'s
+        // `from === undefined` branch forwarding it upward as a `sectiondrop`.
+        // The two section-drag tests above both drop on the article itself and
+        // never touch this branch.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 2).dispatchEvent(
+          new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+        );
+        queryItems(element)[0]
+          .shadowRoot.querySelector("a")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["Third", "First", "Second"]);
+        await settleAutosave();
+        expect(savedSectionNames()).toEqual(["Third", "First", "Second"]);
+      });
+
+      it("moves no card the user never picked up after an abandoned section drag", async () => {
+        // `dragend` fires whether or not the drop landed anywhere. If the
+        // parent did not clear its drag state there, the stale
+        // `dragKind === "section"` would still be sitting in place — and an
+        // item drop with no source of its own is forwarded upward as a
+        // section drop, which is the mechanism that makes a whole card a drop
+        // target. The two together would move a card nobody picked up.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 2).dispatchEvent(
+          new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+        );
+        cardAt(element, 2).dispatchEvent(
+          new CustomEvent("dragend", { bubbles: true, cancelable: true })
+        );
+        await flush();
+
+        queryItems(element)[0]
+          .shadowRoot.querySelector("a")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        await settleAutosave();
+        expect(updateLayout).not.toHaveBeenCalled();
+      });
+
+      it("writes nothing when a section card is dropped back on itself", async () => {
+        // The order is the same either way, so the order alone proves
+        // nothing: what the short-circuit prevents is a write — a save of a
+        // layout identical to the stored one, on a gesture that changed
+        // nothing.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 1).dispatchEvent(
+          new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+        );
+        cardAt(element, 1).dispatchEvent(
+          new CustomEvent("drop", { bubbles: true, cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        await settleAutosave();
+        expect(updateLayout).not.toHaveBeenCalled();
+      });
+
+      it("re-announces a repeated arrow press on a card rather than writing nothing", async () => {
+        // The section axis has the same live-region hazard as the item axis:
+        // two identical presses at the top of the list produce the same
+        // sentence, and an unchanged string is no DOM write and therefore no
+        // announcement.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowUp", cancelable: true })
+        );
+        await flush();
+
+        const region = element.shadowRoot.querySelector("[aria-live]");
+        const first = region.textContent;
+        expect(first).toMatch(/position 1 of 3/i);
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowUp", cancelable: true })
+        );
+        await flush();
+
+        expect(region.textContent).toMatch(/position 1 of 3/i);
+        expect(region.textContent).not.toBe(first);
+        // And, as on the item axis, the distinguisher is silent and invisible:
+        // the two are the same sentence once the zero-width characters are
+        // stripped. The nonce is injected into user-facing announcement text
+        // on every arrow press, so a distinguisher that is actually voiced
+        // would be heard on every one of them.
+        expect(spoken(region.textContent)).toBe(spoken(first));
+      });
+
+      it("holds focus on the grabbed card across a section move", async () => {
+        // A section reorder changes every section's key, so LWC destroys and
+        // rebuilds the card the user is holding. Without focus being put back
+        // the drag becomes unfinishable — the user can neither move again,
+        // drop, nor cancel.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["Second", "First", "Third"]);
+        const moved = querySections(element)[1];
+        expect(element.shadowRoot.activeElement).toBe(moved);
+        expect(moved.shadowRoot.activeElement).toBe(cardAt(element, 1));
+      });
+
+      it("leaves focus on the origin card when a section move is cancelled", async () => {
+        // The cancel performs a real reorder back to the origin, which
+        // destroys the card the user was holding just as an arrow press does.
+        // Releasing the grab before that render lands would leave focus
+        // nowhere at all, stranding a keyboard user on document.body.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 1).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        expect(document.activeElement).not.toBe(document.body);
+        const restored = querySections(element)[0];
+        expect(element.shadowRoot.activeElement).toBe(restored);
+        expect(restored.shadowRoot.activeElement).toBe(cardAt(element, 0));
+      });
+
+      it("does not take focus back on a later render once the cancel has been served", async () => {
+        // `cardFocusIndex` is a *one-shot* hand-off: it exists for exactly the
+        // render the cancel's own reorder schedules, and is consumed there
+        // whether or not it was used. Without the clear it never expires, and
+        // every later grab-free render — a getNavItems re-emission, a column
+        // change, a save-error message — re-runs the hand-off and yanks focus
+        // back to that card from wherever the user has since put it.
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 1).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+        );
+        await flush();
+        expect(element.shadowRoot.activeElement).toBe(
+          querySections(element)[0]
+        );
+
+        // The user moves on and puts focus somewhere else entirely.
+        cardAt(element, 0).blur();
+        expect(element.shadowRoot.activeElement).toBeNull();
+
+        // Something unrelated re-renders the Navigator. An LDS cache refresh
+        // redelivering the final page is an ordinary event for a UI API
+        // adapter, not a contrived one.
+        getNavItems.emit({ navItems: THREE, nextPageUrl: null });
+        await flush();
+
+        expect(element.shadowRoot.activeElement).toBeNull();
+      });
+
+      it("keeps a section drop, so a second Space is not a cancel", async () => {
+        const element = await navigatorWithSections();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true })
+        );
+        await flush();
+        cardAt(element, 1).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["Second", "First", "Third"]);
+        await settleAutosave();
+        expect(savedSectionNames()).toEqual(["Second", "First", "Third"]);
+      });
+
+      it("attaches the section instruction text only while a card is grabbed", async () => {
+        const element = await navigatorWithSections();
+
+        expect(cardAt(element, 0).hasAttribute("aria-describedby")).toBe(false);
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+
+        expect(cardAt(element, 0).hasAttribute("aria-describedby")).toBe(true);
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+
+        expect(cardAt(element, 0).hasAttribute("aria-describedby")).toBe(false);
+      });
+
+      it("moves a dragged item into the section it was dropped on, not the card it was dropped on", async () => {
+        // The counterpart of the section-axis test above: the same gesture on
+        // an *item* drag must move the item, and must not move a card the user
+        // never picked up.
+        const element = await navigatorWithSections();
+        const first = queryItems(element)[0].shadowRoot.querySelector("a");
+        const second = queryItems(element)[1].shadowRoot.querySelector("a");
+
+        first.dispatchEvent(dragEvent("dragstart"));
+        second.dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        expect(itemLabelsBySection(element)).toEqual([
+          [],
+          ["Accounts", "Contacts"],
+          []
+        ]);
+      });
+    });
+
+    /**
+     * Cross-section movement — a different pattern from the within-section
+     * reorder above, and deliberately so. Arrow keys do not cross a section
+     * boundary; the item's Move to… menu does, and it is the same menu a
+     * mouse user gets.
+     *
+     * Note what is and is not reachable here. The menu, the announcement, the
+     * same-section refusal and the payload that results are ordinary DOM and
+     * ordinary events, so all of them are driven end to end. The drag
+     * *gesture* is not: jsdom 20 defines no DragEvent and no DataTransfer, so
+     * the drag tests below drive the handlers those events are bound to and
+     * claim nothing about the browser firing them.
+     */
+    describe("moving an item into another section", () => {
+      const CROSS_SECTION_LAYOUT = {
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "My Navigator",
+        isActive: true,
+        schemaVersion: SCHEMA_VERSION,
+        layoutJson: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          sections: [
+            {
+              name: "Selling",
+              columns: 2,
+              items: [
+                { id: "Account", rename: "Clients" },
+                { id: "standard-ActionHub" }
+              ]
+            },
+            { name: "Support", columns: 3, items: [{ id: "Contact" }] }
+          ]
+        })
+      };
+
+      async function navigatorWithTwoSections() {
+        getLayouts.mockResolvedValue([CROSS_SECTION_LAYOUT]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+        return element;
+      }
+
+      function itemsIn(element, sectionIndex) {
+        return Array.from(
+          querySections(element)[sectionIndex].shadowRoot.querySelectorAll(
+            "c-navigator-item"
+          )
+        );
+      }
+
+      function menuOf(element, sectionIndex, itemIndex) {
+        return itemsIn(element, sectionIndex)[
+          itemIndex
+        ].shadowRoot.querySelector("lightning-button-menu");
+      }
+
+      /**
+       * The destinations on one item's menu. Filtered rather than taken whole,
+       * because the overflow menu carries this item's other actions too —
+       * Rename… since slice 06 — so every `lightning-menu-item` in it is no
+       * longer a place to move to.
+       */
+      function menuEntries(element, sectionIndex, itemIndex) {
+        return Array.from(
+          itemsIn(element, sectionIndex)[itemIndex].shadowRoot.querySelectorAll(
+            "lightning-menu-item"
+          )
+        ).filter((entry) => entry.value.startsWith("move-to-"));
+      }
+
+      function savedIds(apexMock, sectionIndex) {
+        return lastSavedLayout(apexMock).sections[sectionIndex].items.map(
+          (item) => item.id
+        );
+      }
+
+      /** Picks a destination from an item's Move to… menu, by its label. */
+      async function chooseDestination(
+        element,
+        sectionIndex,
+        itemIndex,
+        label
+      ) {
+        const entry = menuEntries(element, sectionIndex, itemIndex).find(
+          (each) => each.label === label
+        );
+        menuOf(element, sectionIndex, itemIndex).dispatchEvent(
+          new CustomEvent("select", { detail: { value: entry.value } })
+        );
+        await flush();
+      }
+
+      /**
+       * The same two sections, but `Selling` stores a third id the tab source
+       * does not return. Every other fixture in this suite stores only ids
+       * `getNavItems` reports, which makes the position an item is *rendered*
+       * at and the position it is *stored* at the same number everywhere — and
+       * a component that confused the two indistinguishable from one that did
+       * not.
+       */
+      const WITHDRAWN_LAYOUT = {
+        ...CROSS_SECTION_LAYOUT,
+        layoutJson: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          sections: [
+            {
+              name: "Selling",
+              columns: 2,
+              items: [
+                { id: "Account" },
+                { id: "standard-ActionHub" },
+                { id: "Contact" }
+              ]
+            },
+            { name: "Support", columns: 3, items: [] }
+          ]
+        })
+      };
+
+      /** Two of the three tabs: `Account` is stored, and out of reach. */
+      async function navigatorWithAWithdrawnTab() {
+        getLayouts.mockResolvedValue([WITHDRAWN_LAYOUT]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: [ACTION_HUB_ITEM, CONTACT_ITEM] });
+        await flush();
+        return element;
+      }
+
+      it("moves the item the user picked, not the one sharing its stored position", async () => {
+        const element = await navigatorWithAWithdrawnTab();
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Action Plans", "Contacts"],
+          []
+        ]);
+
+        // The first item on screen. It is stored second.
+        await chooseDestination(element, 0, 0, "Support");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Contacts"],
+          ["Action Plans"]
+        ]);
+
+        await settleAutosave();
+        // `Account` is still first in `Selling`, so restoring access still
+        // restores it in its original position.
+        expect(savedIds(updateLayout, 0)).toEqual(["Account", "Contact"]);
+        expect(savedIds(updateLayout, 1)).toEqual(["standard-ActionHub"]);
+      });
+
+      it("drags the item the user picked up, not the one sharing its stored position", async () => {
+        const element = await navigatorWithAWithdrawnTab();
+        const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        querySections(element)[1]
+          .shadowRoot.querySelector("article")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Contacts"],
+          ["Action Plans"]
+        ]);
+      });
+
+      it("reorders the item the user picked up when an earlier one is out of reach", async () => {
+        // Pre-existing from slice 04: the within-section reorder runs the
+        // same rendered index into the same stored layout. Fixed at the same
+        // seam, so it is pinned here.
+        const element = await navigatorWithAWithdrawnTab();
+
+        press(itemsIn(element, 0)[0].shadowRoot.querySelector("a"), " ");
+        await flush();
+        press(grabbedAnchor(element), "ArrowRight");
+        await flush();
+        press(grabbedAnchor(element), " ");
+        await flush();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Contacts", "Action Plans"],
+          []
+        ]);
+
+        await settleAutosave();
+        expect(savedIds(updateLayout, 0)).toEqual([
+          "Account",
+          "Contact",
+          "standard-ActionHub"
+        ]);
+      });
+
+      it("does not tell a screen reader the move was cancelled when a grabbed item is moved", async () => {
+        // Reachable with a mouse: `handleClick` blocks navigation mid-grab but
+        // not focus, and the menu button is a sibling of the anchor. The
+        // section's vanish-detection sees the item leave its list and cannot,
+        // on its own, tell "moved away" from "withdrawn".
+        const element = await navigatorWithTwoSections();
+
+        press(itemsIn(element, 0)[1].shadowRoot.querySelector("a"), " ");
+        await flush();
+
+        await chooseDestination(element, 0, 1, "Support");
+
+        const sectionRegion = querySections(
+          element
+        )[0].shadowRoot.querySelector(".rstk-nav-section__announcer");
+        expect(spoken(sectionRegion.textContent)).toBe(
+          "Action Plans grabbed. Position 2 of 2."
+        );
+        expect(
+          spoken(
+            element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+          )
+        ).toBe("Action Plans moved to Support.");
+        expect(queryItems(element).some((item) => item.grabbed)).toBe(false);
+      });
+
+      it("keeps a grab on the item being held when a sibling is moved out from under it", async () => {
+        // Reachable in exactly the way the case above is, and by a *different*
+        // item's menu: nothing blocks a sibling's Move to… menu mid-grab. The
+        // list the grab counts along renumbers underneath it, so a grab held by
+        // position lands on an item the user never picked up — or falls off the
+        // end and is falsely reported as cancelled while it is still on screen,
+        // contradicting the parent's own announcement about a different item.
+        getLayouts.mockResolvedValue([
+          {
+            ...CROSS_SECTION_LAYOUT,
+            layoutJson: JSON.stringify({
+              schemaVersion: SCHEMA_VERSION,
+              sections: [
+                {
+                  name: "Selling",
+                  columns: 2,
+                  items: [
+                    { id: "Account" },
+                    { id: "standard-ActionHub" },
+                    { id: "Contact" }
+                  ]
+                },
+                { name: "Support", columns: 3, items: [] }
+              ]
+            })
+          }
+        ]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        // Hold the last of the three.
+        press(itemsIn(element, 0)[2].shadowRoot.querySelector("a"), " ");
+        await flush();
+
+        // Move the *first* one out, from its own menu.
+        await chooseDestination(element, 0, 0, "Support");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Action Plans", "Contacts"],
+          ["Accounts"]
+        ]);
+        expect(
+          queryItems(element)
+            .filter((item) => item.grabbed)
+            .map((item) => item.label)
+        ).toEqual(["Contacts"]);
+
+        const sectionRegion = querySections(
+          element
+        )[0].shadowRoot.querySelector(".rstk-nav-section__announcer");
+        expect(spoken(sectionRegion.textContent)).toBe(
+          "Contacts grabbed. Position 3 of 3."
+        );
+        expect(
+          spoken(
+            element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+          )
+        ).toBe("Accounts moved to Support.");
+      });
+
+      it("leaves one copy of a tab when a hand-edited layout already listed it in the destination", async () => {
+        // Not producible by any gesture this Navigator ships, and this is the
+        // first operation that could turn a cross-section duplicate into a
+        // within-section one — which LWC will not render, because the two
+        // entries share a `key`.
+        getLayouts.mockResolvedValue([
+          {
+            ...CROSS_SECTION_LAYOUT,
+            layoutJson: JSON.stringify({
+              schemaVersion: SCHEMA_VERSION,
+              sections: [
+                {
+                  name: "Selling",
+                  columns: 2,
+                  items: [{ id: "Account" }, { id: "standard-ActionHub" }]
+                },
+                {
+                  name: "Support",
+                  columns: 3,
+                  items: [{ id: "Account" }, { id: "Contact" }]
+                }
+              ]
+            })
+          }
+        ]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        await chooseDestination(element, 0, 0, "Support");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Action Plans"],
+          ["Contacts", "Accounts"]
+        ]);
+
+        await settleAutosave();
+        expect(savedIds(updateLayout, 1)).toEqual(["Contact", "Account"]);
+      });
+
+      it("offers every other section on an item's menu, and never the item's own", async () => {
+        const element = await navigatorWithTwoSections();
+
+        expect(menuEntries(element, 0, 0).map((entry) => entry.label)).toEqual([
+          "Support"
+        ]);
+        expect(menuEntries(element, 1, 0).map((entry) => entry.label)).toEqual([
+          "Selling"
+        ]);
+      });
+
+      it("moves the item to the section a keyboard user picks, and writes it", async () => {
+        // The whole cross-section route without a mouse anywhere in it: a
+        // menu, chosen by its label, on an item that is a plain link.
+        const element = await navigatorWithTwoSections();
+
+        await chooseDestination(element, 0, 1, "Support");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients"],
+          ["Contacts", "Action Plans"]
+        ]);
+
+        await settleAutosave();
+        expect(savedIds(updateLayout, 0)).toEqual(["Account"]);
+        expect(savedIds(updateLayout, 1)).toEqual([
+          "Contact",
+          "standard-ActionHub"
+        ]);
+      });
+
+      it("moves an item out of the second section as readily as out of the first", async () => {
+        // The mirror of the test above, and it is here because every
+        // single-section fixture makes "this section" and "section 0" the same
+        // string: a component that reported a constant index would be
+        // invisible without a move that starts somewhere else.
+        const element = await navigatorWithTwoSections();
+
+        await chooseDestination(element, 1, 0, "Selling");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients", "Action Plans", "Contacts"],
+          []
+        ]);
+      });
+
+      it("still shows a menu-moved item in its new section after a reload", async () => {
+        // A remount on the payload that was actually written is what a reload
+        // is, since nothing else survives one.
+        const element = await navigatorWithTwoSections();
+        await chooseDestination(element, 0, 1, "Support");
+        await settleAutosave();
+
+        const written = updateLayout.mock.calls[0][0].layoutJson;
+        document.body.removeChild(element);
+        jest.clearAllMocks();
+
+        getLayouts.mockResolvedValue([
+          { ...CROSS_SECTION_LAYOUT, layoutJson: written }
+        ]);
+        const reloaded = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        expect(itemLabelsBySection(reloaded)).toEqual([
+          ["Clients"],
+          ["Contacts", "Action Plans"]
+        ]);
+      });
+
+      it("announces the move to a screen reader, naming the section it went to", async () => {
+        const element = await navigatorWithTwoSections();
+
+        await chooseDestination(element, 0, 1, "Support");
+
+        const region = element.shadowRoot.querySelector(".rstk-nav-announcer");
+        expect(spoken(region.textContent)).toBe(
+          "Action Plans moved to Support."
+        );
+      });
+
+      it("keeps the item's own rename when it changes section", async () => {
+        // The rename is the user's own wording and has nothing to do with
+        // where the item sits, so crossing a boundary must not drop it.
+        const element = await navigatorWithTwoSections();
+
+        await chooseDestination(element, 0, 0, "Support");
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Action Plans"],
+          ["Contacts", "Clients"]
+        ]);
+        await settleAutosave();
+        expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([
+          { id: "Contact" },
+          { id: "Account", rename: "Clients" }
+        ]);
+      });
+
+      it("offers no destination at all when the layout has only one section", async () => {
+        // Nowhere to move to, so nothing that offers to. The menu itself stays
+        // — it carries Rename… as well, and the seeded layout is a single
+        // section, so withholding the whole menu here would put renaming out
+        // of reach of every user who has never made a second one.
+        getLayouts.mockResolvedValue([]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["All Items"]);
+        queryItems(element).forEach((item) => {
+          expect(
+            item.shadowRoot.querySelector("lightning-button-menu")
+          ).not.toBeNull();
+          expect(
+            Array.from(
+              item.shadowRoot.querySelectorAll("lightning-menu-item")
+            ).filter((entry) => entry.value.startsWith("move-to-"))
+          ).toEqual([]);
+        });
+      });
+
+      it("drops the item at the position it was dropped at, not at the end", async () => {
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[1].shadowRoot.querySelector("a");
+        const landing = itemsIn(element, 1)[0].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        landing.dispatchEvent(dragEvent("dragover"));
+        landing.dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients"],
+          ["Action Plans", "Contacts"]
+        ]);
+      });
+
+      it("puts the item at the end when it is dropped on the card rather than on an item", async () => {
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        querySections(element)[1]
+          .shadowRoot.querySelector("article")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Action Plans"],
+          ["Contacts", "Clients"]
+        ]);
+      });
+
+      it("writes nothing when an item is dropped back into the section it came from", async () => {
+        // Criterion 7. Asserted on the *write* rather than on the order,
+        // because the order is identical either way — which is exactly why a
+        // missing guard would be invisible on screen.
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        querySections(element)[0]
+          .shadowRoot.querySelector("article")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+        await settleAutosave();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients", "Action Plans"],
+          ["Contacts"]
+        ]);
+        expect(updateLayout).not.toHaveBeenCalled();
+      });
+
+      it("tells the sections an item drag is in flight, and only while it is", async () => {
+        // The drop-target affordance needs two facts, and this is the half the
+        // parent owns: a section cannot tell an item drag from a section drag,
+        // because it never sees both.
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
+
+        expect(
+          querySections(element).map((section) => section.itemDragActive)
+        ).toEqual([false, false]);
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        await flush();
+        expect(
+          querySections(element).map((section) => section.itemDragActive)
+        ).toEqual([true, true]);
+
+        dragged.dispatchEvent(dragEvent("dragend"));
+        await flush();
+        expect(
+          querySections(element).map((section) => section.itemDragActive)
+        ).toEqual([false, false]);
+      });
+
+      it("does not tell the sections an item drag is in flight when a card is dragged", async () => {
+        const element = await navigatorWithTwoSections();
+
+        querySections(element)[0]
+          .shadowRoot.querySelector("article")
+          .dispatchEvent(
+            new CustomEvent("dragstart", { bubbles: true, cancelable: true })
+          );
+        await flush();
+
+        expect(
+          querySections(element).map((section) => section.itemDragActive)
+        ).toEqual([false, false]);
+      });
+    });
+  });
+
+  /**
+   * Calling a tab what you call it.
+   *
+   * The whole of this is ordinary DOM and ordinary events — a menu entry, an
+   * input, a commit — so unlike the drag axis there is no gesture ceiling here
+   * and every criterion is driven end to end: item handler, section, parent,
+   * model, payload, and a remount on the payload that was actually written.
+   *
+   * The load-bearing one is the first test below, which is the pairing the
+   * design named: a rename changes the wording on screen and does not change
+   * where the item goes, asserted in one go. It can be asserted at all because
+   * this repo carries the lwc-recipes `lightning/navigation` mock, whose
+   * `getNavigateCalledWith()` records what the component actually navigated to.
+   */
+  describe("renaming an item", () => {
+    const THREE = [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM];
+
+    function storedLayout(sections) {
+      return {
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "My Navigator",
+        isActive: true,
+        layoutJson: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          sections
+        })
+      };
+    }
+
+    /** One section, `Account` under the user's own wording. */
+    const RENAMED = storedLayout([
+      {
+        name: "Daily work",
+        columns: 3,
+        items: [{ id: "Account", rename: "Clients" }, { id: "Contact" }]
+      }
+    ]);
+
+    async function navigatorOn(layout, navItems = THREE) {
+      getLayouts.mockResolvedValue(layout ? [layout] : []);
+      const element = createNavigator();
+      getNavItems.emit({ navItems });
+      await flush();
+      return element;
+    }
+
+    function itemsIn(element, sectionIndex) {
+      return Array.from(
+        querySections(element)[sectionIndex].shadowRoot.querySelectorAll(
+          "c-navigator-item"
+        )
+      );
+    }
+
+    function itemAt(element, sectionIndex, itemIndex) {
+      return itemsIn(element, sectionIndex)[itemIndex];
+    }
+
+    /** What is actually painted, not what the property says. */
+    function renderedLabel(element, sectionIndex, itemIndex) {
+      return itemAt(element, sectionIndex, itemIndex)
+        .shadowRoot.querySelector("a")
+        .textContent.trim();
+    }
+
+    async function openRename(element, sectionIndex, itemIndex) {
+      itemAt(element, sectionIndex, itemIndex)
+        .shadowRoot.querySelector("lightning-button-menu")
+        .dispatchEvent(
+          new CustomEvent("select", { detail: { value: "rename" } })
+        );
+      await flush();
+      return itemAt(element, sectionIndex, itemIndex).shadowRoot.querySelector(
+        "lightning-input"
+      );
+    }
+
+    /** The whole gesture, exactly as a user performs it. */
+    async function renameTo(element, sectionIndex, itemIndex, wording) {
+      const input = await openRename(element, sectionIndex, itemIndex);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: wording } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+    }
+
+    function savedItems(apexMock, sectionIndex = 0) {
+      return lastSavedLayout(apexMock).sections[sectionIndex].items;
+    }
+
+    it("shows the user's own wording and still navigates to exactly the same tab", async () => {
+      // The two criteria the design said one test should prove together. The
+      // rename and the navigation target are different fields of the stored
+      // item, so this is a structural fact rather than a lucky one — and it is
+      // asserted against the platform's own pageReference, which is the same
+      // object an item with no rename would navigate to.
+      const element = await navigatorOn(RENAMED);
+
+      expect(renderedLabel(element, 0, 0)).toBe("Clients");
+      expect(renderedLabel(element, 0, 0)).not.toBe(ACCOUNT_ITEM.label);
+
+      itemAt(element, 0, 0)
+        .shadowRoot.querySelector("a")
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      expect(getNavigateCalledWith().pageReference).toEqual(
+        ACCOUNT_ITEM.pageReference
+      );
+    });
+
+    it("navigates to the same tab it did before a rename made in this session", async () => {
+      // The live half of the same pairing: not a rename that arrived in a
+      // payload, but one the user has just typed.
+      const element = await navigatorOn(RENAMED);
+      const anchor = () => itemAt(element, 0, 1).shadowRoot.querySelector("a");
+
+      anchor().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const before = getNavigateCalledWith().pageReference;
+
+      await renameTo(element, 0, 1, "People I know");
+      expect(renderedLabel(element, 0, 1)).toBe("People I know");
+      anchor().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      expect(getNavigateCalledWith().pageReference).toEqual(before);
+      expect(getNavigateCalledWith().pageReference).toEqual(
+        CONTACT_ITEM.pageReference
+      );
+    });
+
+    it("renames an item from its overflow menu, in place of the Salesforce label", async () => {
+      // From the seeded layout, which is the state every user starts in — one
+      // section, so this also pins that the menu is reachable there at all.
+      const element = await navigatorOn(undefined, [ACCOUNT_ITEM]);
+
+      expect(sectionNames(element)).toEqual(["All Items"]);
+      // The entry has to be *there*: every step below drives the menu's own
+      // `select`, which a menu with nothing in it would emit just as happily.
+      expect(
+        Array.from(
+          itemAt(element, 0, 0).shadowRoot.querySelectorAll(
+            "lightning-menu-item"
+          )
+        ).map((entry) => entry.value)
+      ).toContain("rename");
+
+      await renameTo(element, 0, 0, "Clients");
+
+      expect(renderedLabel(element, 0, 0)).toBe("Clients");
+    });
+
+    it("writes the rename beside the id, and nothing else about the item", async () => {
+      const element = await navigatorOn(RENAMED);
+
+      await renameTo(element, 0, 1, "People");
+      await settleAutosave();
+
+      expect(savedItems(updateLayout)).toEqual([
+        { id: "Account", rename: "Clients" },
+        { id: "Contact", rename: "People" }
+      ]);
+      // No label, no pageReference, no icon — the payload stores nothing the
+      // platform can be asked for, which is what makes an org relabelling
+      // free.
+      expect(Object.keys(savedItems(updateLayout)[1]).sort()).toEqual([
+        "id",
+        "rename"
+      ]);
+    });
+
+    it("still shows the rename after a reload", async () => {
+      // A remount on the payload that was actually written is what a reload
+      // is, since nothing else survives one — and the store is per-user and
+      // owner-filtered, so a fresh login reads back this same row.
+      const element = await navigatorOn(RENAMED);
+      await renameTo(element, 0, 1, "People");
+      await settleAutosave();
+
+      const written = updateLayout.mock.calls[0][0].layoutJson;
+      document.body.removeChild(element);
+      jest.clearAllMocks();
+
+      const reloaded = await navigatorOn({ ...RENAMED, layoutJson: written });
+
+      expect(itemsIn(reloaded, 0).map((item) => item.label)).toEqual([
+        "Clients",
+        "People"
+      ]);
+    });
+
+    it("returns the item to its Salesforce label when the rename is cleared", async () => {
+      const element = await navigatorOn(RENAMED);
+
+      await renameTo(element, 0, 0, "");
+
+      expect(renderedLabel(element, 0, 0)).toBe("Accounts");
+      await settleAutosave();
+      // Cleared is the key's absence, not an empty string sitting in the
+      // payload — asserted as an exact key set, because `toEqual` alone would
+      // not tell `{id}` from `{id, rename: ""}` if the value were undefined.
+      expect(savedItems(updateLayout)[0]).toEqual({ id: "Account" });
+      expect(Object.keys(savedItems(updateLayout)[0])).toEqual(["id"]);
+    });
+
+    it("keeps the cleared item under its Salesforce label after a reload", async () => {
+      const element = await navigatorOn(RENAMED);
+      await renameTo(element, 0, 0, "");
+      await settleAutosave();
+
+      const written = updateLayout.mock.calls[0][0].layoutJson;
+      document.body.removeChild(element);
+      jest.clearAllMocks();
+
+      const reloaded = await navigatorOn({ ...RENAMED, layoutJson: written });
+
+      expect(itemsIn(reloaded, 0).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Contacts"
+      ]);
+    });
+
+    it("creates no layout row when an empty box is committed on an item with no rename", async () => {
+      // The other door onto "wording committed unchanged reports nothing at
+      // all". Emptying the box on an item that has no rename asks for the
+      // Salesforce label it already has, so it stores nothing — and a gesture
+      // that stores nothing must not be what creates a layout row for a user
+      // who has only ever looked, which slice 03 has a criterion against. Nor
+      // is there anything to announce: "Accounts renamed to Accounts."
+      const element = await navigatorOn(undefined, [ACCOUNT_ITEM]);
+
+      await renameTo(element, 0, 0, "");
+      await settleAutosave();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(renderedLabel(element, 0, 0)).toBe("Accounts");
+      expect(
+        spoken(
+          element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+        )
+      ).toBe("");
+    });
+
+    it("clears the rename when the user types the platform label into a renamed item", async () => {
+      // The same end state as emptying the box, reached by the other route,
+      // and it must be stored the same way — otherwise this item quietly loses
+      // criterion 6 while an unrenamed one keeps it under identical
+      // keystrokes. The consequence is deliberate: typing the platform label
+      // is a second way to clear a rename.
+      const element = await navigatorOn(RENAMED);
+      expect(renderedLabel(element, 0, 0)).toBe("Clients");
+
+      await renameTo(element, 0, 0, "Accounts");
+
+      expect(renderedLabel(element, 0, 0)).toBe("Accounts");
+      await settleAutosave();
+      expect(savedItems(updateLayout)[0]).toEqual({ id: "Account" });
+      expect(Object.keys(savedItems(updateLayout)[0])).toEqual(["id"]);
+    });
+
+    it("picks up a change to the org's own tab label, with no write at all", async () => {
+      // The payload stores no labels, so this costs nothing: the item is
+      // resolved against the live tab source on every render.
+      const element = await navigatorOn(RENAMED);
+      expect(renderedLabel(element, 0, 1)).toBe("Contacts");
+
+      getNavItems.emit({
+        navItems: [
+          ACCOUNT_ITEM,
+          { ...CONTACT_ITEM, label: "People" },
+          ACTION_HUB_ITEM
+        ],
+        nextPageUrl: null
+      });
+      await flush();
+
+      expect(renderedLabel(element, 0, 1)).toBe("People");
+      // And the renamed item is not disturbed by the relabelling of another.
+      expect(renderedLabel(element, 0, 0)).toBe("Clients");
+
+      await settleAutosave();
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("leaves the org's tab label alone for anyone without this layout", async () => {
+      // The rename is the user's own wording, held in their own layout row.
+      // A Navigator that reads no layout — which is what any other user's
+      // first open is — shows the platform's label for the same tab.
+      const element = await navigatorOn(RENAMED);
+      expect(renderedLabel(element, 0, 0)).toBe("Clients");
+      document.body.removeChild(element);
+      jest.clearAllMocks();
+
+      const somebodyElse = await navigatorOn(undefined);
+
+      expect(renderedLabel(somebodyElse, 0, 0)).toBe("Accounts");
+    });
+
+    it("renames the item the user picked when an earlier one is out of reach", async () => {
+      // The resolved-versus-stored seam. `Account` is stored first and is not
+      // in the accessible set, so the first item on screen is `Action Plans` —
+      // and a rename that ran the rendered index into the stored list would
+      // label a tab the user cannot see and leave theirs alone.
+      const element = await navigatorOn(
+        storedLayout([
+          {
+            name: "Daily work",
+            columns: 3,
+            items: [
+              { id: "Account" },
+              { id: "standard-ActionHub" },
+              { id: "Contact" }
+            ]
+          }
+        ]),
+        [ACTION_HUB_ITEM, CONTACT_ITEM]
+      );
+
+      await renameTo(element, 0, 0, "Plans");
+
+      expect(itemsIn(element, 0).map((item) => item.label)).toEqual([
+        "Plans",
+        "Contacts"
+      ]);
+      await settleAutosave();
+      expect(savedItems(updateLayout)).toEqual([
+        { id: "Account" },
+        { id: "standard-ActionHub", rename: "Plans" },
+        { id: "Contact" }
+      ]);
+    });
+
+    it("renames an item in the second section as readily as in the first", async () => {
+      // Every other fixture here would make "this section" and "section 0" the
+      // same number, and a chain that reported a constant would be invisible.
+      const element = await navigatorOn(
+        storedLayout([
+          { name: "Selling", columns: 3, items: [{ id: "Account" }] },
+          { name: "Support", columns: 3, items: [{ id: "Contact" }] }
+        ])
+      );
+
+      await renameTo(element, 1, 0, "People");
+
+      expect(itemLabelsBySection(element)).toEqual([["Accounts"], ["People"]]);
+      await settleAutosave();
+      expect(savedItems(updateLayout, 0)).toEqual([{ id: "Account" }]);
+      expect(savedItems(updateLayout, 1)).toEqual([
+        { id: "Contact", rename: "People" }
+      ]);
+    });
+
+    it("announces the rename to a screen reader, naming both wordings", async () => {
+      const element = await navigatorOn(RENAMED);
+
+      await renameTo(element, 0, 1, "People");
+
+      const region = element.shadowRoot.querySelector(".rstk-nav-announcer");
+      expect(spoken(region.textContent)).toBe("Contacts renamed to People.");
+    });
+
+    it("announces a cleared rename by the label the item goes back to", async () => {
+      const element = await navigatorOn(RENAMED);
+
+      await renameTo(element, 0, 0, "");
+
+      const region = element.shadowRoot.querySelector(".rstk-nav-announcer");
+      expect(spoken(region.textContent)).toBe("Clients renamed to Accounts.");
+    });
+  });
+
+  describe("losing and regaining access to a tab", () => {
+    const STORED_THREE = {
+      layoutId: EXISTING_LAYOUT_ID,
+      name: "My Navigator",
+      isActive: true,
+      layoutJson: JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
+        sections: [
+          {
+            name: "Daily work",
+            columns: 3,
+            items: [
+              { id: "Account" },
+              { id: "Contact" },
+              { id: "standard-ActionHub" }
+            ]
+          }
+        ]
+      })
+    };
+
+    it("stops rendering an item the user can no longer reach", async () => {
+      getLayouts.mockResolvedValue([STORED_THREE]);
+
+      const element = createNavigator();
+      // Contact is gone from the platform's accessible set.
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM] });
+      await flush();
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Action Plans"
+      ]);
+    });
+
+    it("releases a keyboard grab when the grabbed item stops rendering", async () => {
+      // The access-loss path and the drag path meet here. An item held from
+      // the keyboard can vanish underneath the drag, and if the grab is not
+      // released with it the section believes a drag is in flight forever:
+      // nothing carries `grabbed`, focus is nowhere, and the live region is
+      // left reading a grab that ended.
+      getLayouts.mockResolvedValue([STORED_THREE]);
+      const element = createNavigator();
+      getNavItems.emit({
+        navItems: [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM]
+      });
+      await flush();
+
+      const section = querySections(element)[0];
+      queryItems(element)[2]
+        .shadowRoot.querySelector("a")
+        .dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: " ",
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      await flush();
+
+      const region = section.shadowRoot.querySelector("[aria-live]");
+      expect(region.textContent).toMatch(/grabbed/i);
+
+      // Access to the held tab is lost while it is being held.
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Contacts"
+      ]);
+      expect(region.textContent).not.toMatch(/grabbed/i);
+      expect(region.textContent).toMatch(/no longer available/i);
+      // And it names what vanished. "The move ended" is not something to tell
+      // a screen reader user without saying what it was about — which is the
+      // whole reason `grabbedItemLabel` is kept alongside the id, since by the
+      // time this sentence is needed the item itself is gone from the list.
+      expect(region.textContent).toContain("Action Plans");
+
+      // And the section is not stuck: a fresh grab is accepted, which it
+      // would not be while it still believed it was holding something.
+      queryItems(element)[0]
+        .shadowRoot.querySelector("a")
+        .dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: " ",
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      await flush();
+
+      expect(queryItems(element).map((item) => item.grabbed)).toEqual([
+        true,
+        false
+      ]);
+    });
+
+    it("releases a keyboard grab whose item vanishes from an index that stays in range", async () => {
+      // The discriminating case for `releaseGrabIfItemGone`, and the one its
+      // docblock is about: the *identity* test, not the index one. The test
+      // above holds the last of three, so losing it also pushes the index past
+      // the end of the list and a bare `grabbedItemIndex < items.length` catches
+      // it too. Here the held item is the **first** of three, so after it goes
+      // index 0 is still a perfectly real position — and an index-only check
+      // silently transfers the grab to the neighbour and leaves the live region
+      // reading a grab on an item that is gone.
+      getLayouts.mockResolvedValue([STORED_THREE]);
+      const element = createNavigator();
+      getNavItems.emit({
+        navItems: [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM]
+      });
+      await flush();
+
+      const section = querySections(element)[0];
+      queryItems(element)[0]
+        .shadowRoot.querySelector("a")
+        .dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: " ",
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      await flush();
+
+      const region = section.shadowRoot.querySelector("[aria-live]");
+      expect(region.textContent).toMatch(/grabbed/i);
+
+      // Access to the held tab — the first one — is lost while it is held.
+      getNavItems.emit({ navItems: [CONTACT_ITEM, ACTION_HUB_ITEM] });
+      await flush();
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Contacts",
+        "Action Plans"
+      ]);
+      // No surviving item inherits the grab.
+      expect(queryItems(element).map((item) => item.grabbed)).toEqual([
+        false,
+        false
+      ]);
+      expect(region.textContent).not.toMatch(/grabbed/i);
+      expect(region.textContent).toMatch(/no longer available/i);
+      expect(region.textContent).toContain("Accounts");
+    });
+
+    it("leaves the stored layout carrying the lost item, even across a save", async () => {
+      // The sharpest form of this criterion: the item is not rendered, then
+      // the user changes something else and the autosave runs. If the render
+      // -time intersection were a mutation of stored state instead, this save
+      // would quietly write the pruned list and the item would never come
+      // back.
+      getLayouts.mockResolvedValue([STORED_THREE]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM] });
+      await flush();
+
+      selectSectionMenuItem(element, 0, "columns-5");
+      await flush();
+      await settleAutosave();
+
+      expect(lastSavedLayout(updateLayout).sections[0].items).toEqual([
+        { id: "Account" },
+        { id: "Contact" },
+        { id: "standard-ActionHub" }
+      ]);
+    });
+
+    it("restores the item in its original position when access returns", async () => {
+      getLayouts.mockResolvedValue([STORED_THREE]);
+
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM] });
+      await flush();
+      expect(queryItems(element)).toHaveLength(2);
+
+      // Access comes back — the same stored layout, a wider accessible set.
+      getNavItems.emit({
+        navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM],
+        nextPageUrl: null
+      });
+      await flush();
+
+      expect(queryItems(element).map((item) => item.label)).toEqual([
+        "Accounts",
+        "Contacts",
+        "Action Plans"
+      ]);
+    });
+  });
+
+  describe("removing an item and adding it back", () => {
+    const THREE = [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM];
+
+    function storedLayout(sections) {
+      return {
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "My Navigator",
+        isActive: true,
+        layoutJson: JSON.stringify({ schemaVersion: SCHEMA_VERSION, sections })
+      };
+    }
+
+    /**
+     * Two sections, so "which section did it land in" is a real question —
+     * and one reachable tab, `Contact`, deliberately left out of both, so the
+     * picker has something to offer. A fixture in which everything is already
+     * placed cannot tell a picker that lists the right thing from one that
+     * lists nothing at all.
+     */
+    const TWO_SECTIONS = storedLayout([
+      { name: "Selling", columns: 3, items: [{ id: "Account" }] },
+      { name: "Support", columns: 2, items: [{ id: "standard-ActionHub" }] }
+    ]);
+
+    async function navigatorOn(layout, navItems = THREE) {
+      getLayouts.mockResolvedValue(layout ? [layout] : []);
+      const element = createNavigator();
+      getNavItems.emit({ navItems });
+      await flush();
+      return element;
+    }
+
+    function itemsIn(element, sectionIndex) {
+      return Array.from(
+        querySections(element)[sectionIndex].shadowRoot.querySelectorAll(
+          "c-navigator-item"
+        )
+      );
+    }
+
+    function itemAt(element, sectionIndex, itemIndex) {
+      return itemsIn(element, sectionIndex)[itemIndex];
+    }
+
+    /** Drives one item's own overflow menu, the way a user reaches Remove. */
+    function selectItemMenuItem(element, sectionIndex, itemIndex, value) {
+      itemAt(element, sectionIndex, itemIndex)
+        .shadowRoot.querySelector("lightning-button-menu")
+        .dispatchEvent(new CustomEvent("select", { detail: { value } }));
+    }
+
+    /** The entries the item's menu actually offers, as a user reads them. */
+    function itemMenuEntries(element, sectionIndex, itemIndex) {
+      return Array.from(
+        itemAt(element, sectionIndex, itemIndex).shadowRoot.querySelectorAll(
+          "lightning-menu-item"
+        )
+      ).map((entry) => [entry.value, entry.label]);
+    }
+
+    function addButtonOf(element, sectionIndex) {
+      // A hand-rolled `<button>`, not a `lightning-button`: the section names
+      // itself in assistive text inside the button's own content, which is
+      // where a button's accessible name comes from.
+      return querySections(element)[sectionIndex].shadowRoot.querySelector(
+        "button.rstk-nav-section__add"
+      );
+    }
+
+    /** The picker the parent mounted, if it mounted one. */
+    function pickerOf() {
+      const modals = getOpenModals();
+      return modals[modals.length - 1];
+    }
+
+    function pickerEntries(picker) {
+      return Array.from(
+        picker.shadowRoot.querySelectorAll("button.rstk-nav-picker__item")
+      );
+    }
+
+    function pickerLabels(picker) {
+      return pickerEntries(picker).map((entry) => entry.textContent.trim());
+    }
+
+    /** Opens the picker the way a user does: the section's own button. */
+    async function openPicker(element, sectionIndex) {
+      addButtonOf(element, sectionIndex).dispatchEvent(
+        new CustomEvent("click")
+      );
+      await flush();
+      return pickerOf();
+    }
+
+    function announcementOf(element) {
+      return spoken(
+        element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+      );
+    }
+
+    afterEach(() => {
+      resetModals();
+    });
+
+    it("takes an item out of the layout when Remove is chosen from its menu", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      // The entry has to be findable, not merely respondable-to — slice 06's
+      // row 16 is the reason this assertion is here and not implied.
+      expect(itemMenuEntries(element, 0, 0)).toContainEqual([
+        "remove",
+        "Remove"
+      ]);
+
+      selectItemMenuItem(element, 0, 0, "remove");
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([[], ["Action Plans"]]);
+    });
+
+    it("removes the item the user chose, out of the second section as readily as the first", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+
+      selectItemMenuItem(element, 1, 0, "remove");
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([["Accounts"], []]);
+    });
+
+    it("writes the removal, and a reload shows the item still gone", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+
+      selectItemMenuItem(element, 1, 0, "remove");
+      await flush();
+      await settleAutosave();
+
+      expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([]);
+
+      // What a reload is: a second Navigator mounted on the payload that was
+      // actually written.
+      const written = updateLayout.mock.calls.at(-1)[0].layoutJson;
+      document.body.removeChild(element);
+      const reloaded = await navigatorOn(
+        storedLayout(JSON.parse(written).sections)
+      );
+
+      expect(itemLabelsBySection(reloaded)).toEqual([["Accounts"], []]);
+    });
+
+    it("announces the removal, naming the item and the section it left", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+
+      selectItemMenuItem(element, 1, 0, "remove");
+      await flush();
+
+      expect(announcementOf(element)).toBe(
+        "Action Plans removed from Support."
+      );
+    });
+
+    it("removes the item the user can see when an earlier one is out of reach", async () => {
+      // The fixture shape the suite had nowhere before slice 05's critique:
+      // a stored id absent from `getNavItems`, sitting before the one being
+      // removed. Removing "visible position 0" must remove what the user can
+      // see, not the stored entry at index 0.
+      const element = await navigatorOn(
+        storedLayout([
+          {
+            name: "Selling",
+            columns: 3,
+            items: [
+              { id: "Contact" },
+              { id: "Account" },
+              { id: "standard-ActionHub" }
+            ]
+          }
+        ]),
+        [ACCOUNT_ITEM, ACTION_HUB_ITEM]
+      );
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Action Plans"]
+      ]);
+
+      selectItemMenuItem(element, 0, 0, "remove");
+      await flush();
+      await settleAutosave();
+
+      // `Contact` is unreachable and must survive untouched, in place.
+      expect(lastSavedLayout(updateLayout).sections[0].items).toEqual([
+        { id: "Contact" },
+        { id: "standard-ActionHub" }
+      ]);
+      expect(itemLabelsBySection(element)).toEqual([["Action Plans"]]);
+    });
+
+    it("tells a user who has emptied a section that it is empty and how to fill it", async () => {
+      const element = await navigatorOn(
+        storedLayout([
+          { name: "Selling", columns: 3, items: [{ id: "Account" }] }
+        ])
+      );
+
+      selectItemMenuItem(element, 0, 0, "remove");
+      await flush();
+
+      const empty = querySections(element)[0].shadowRoot.querySelector(
+        ".rstk-nav-section__empty"
+      );
+      expect(empty).not.toBeNull();
+      expect(empty.textContent).toContain("no items");
+      expect(empty.textContent).toContain("Add items");
+      expect(addButtonOf(element, 0)).not.toBeNull();
+    });
+
+    it("opens a picker from the section header listing every reachable tab not in the layout", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+
+      const picker = await openPicker(element, 0);
+
+      expect(picker).toBeDefined();
+      // `Account` and `standard-ActionHub` are placed — in *different*
+      // sections, so this also pins that the list is built across the whole
+      // layout and not only the section the picker was opened from.
+      expect(pickerLabels(picker)).toEqual(["Contacts"]);
+    });
+
+    it("never lists a tab the running user cannot reach", async () => {
+      // `Contact` is stored nowhere and is also absent from `getNavItems`, so
+      // it is not the picker's to offer. This is Outcome 1's one failure mode
+      // — over-reporting — driven end to end.
+      const element = await navigatorOn(
+        storedLayout([
+          { name: "Selling", columns: 3, items: [{ id: "Account" }] }
+        ]),
+        [ACCOUNT_ITEM, ACTION_HUB_ITEM]
+      );
+
+      const picker = await openPicker(element, 0);
+
+      expect(pickerLabels(picker)).toEqual(["Action Plans"]);
+    });
+
+    it("lists items under their Salesforce label, never under a rename in the layout", async () => {
+      const element = await navigatorOn(
+        storedLayout([
+          {
+            name: "Selling",
+            columns: 3,
+            items: [{ id: "Account", rename: "Clients" }]
+          }
+        ])
+      );
+      // The rename is on screen, so the layout really does carry one.
+      expect(itemLabelsBySection(element)).toEqual([["Clients"]]);
+
+      const picker = await openPicker(element, 0);
+
+      expect(pickerLabels(picker)).toEqual(["Action Plans", "Contacts"]);
+    });
+
+    it("finds an item in the picker by typing part of its label", async () => {
+      const element = await navigatorOn(
+        storedLayout([{ name: "Selling", columns: 3, items: [] }])
+      );
+      const picker = await openPicker(element, 0);
+      expect(pickerLabels(picker)).toHaveLength(3);
+
+      picker.shadowRoot
+        .querySelector("lightning-input")
+        .dispatchEvent(
+          new CustomEvent("change", { detail: { value: "Plan" } })
+        );
+      await flush();
+
+      expect(pickerLabels(picker)).toEqual(["Action Plans"]);
+    });
+
+    it("adds the chosen item to the section the picker was opened from", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 1);
+
+      pickerEntries(picker)[0].click();
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts"],
+        ["Action Plans", "Contacts"]
+      ]);
+    });
+
+    it("adds to the first section as readily as to the second", async () => {
+      // A parent that always added to section 0 would pass every assertion
+      // driven from section 0 — slice 05's row 13 on this axis.
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 0);
+
+      pickerEntries(picker)[0].click();
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Contacts"],
+        ["Action Plans"]
+      ]);
+    });
+
+    it("writes the addition, and a reload shows the item still there", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 1);
+
+      pickerEntries(picker)[0].click();
+      await flush();
+      await settleAutosave();
+
+      expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([
+        { id: "standard-ActionHub" },
+        { id: "Contact" }
+      ]);
+
+      const written = updateLayout.mock.calls.at(-1)[0].layoutJson;
+      document.body.removeChild(element);
+      const reloaded = await navigatorOn(
+        storedLayout(JSON.parse(written).sections)
+      );
+
+      expect(itemLabelsBySection(reloaded)).toEqual([
+        ["Accounts"],
+        ["Action Plans", "Contacts"]
+      ]);
+    });
+
+    it("announces the addition, naming the item and the section it landed in", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 1);
+
+      pickerEntries(picker)[0].click();
+      await flush();
+
+      expect(announcementOf(element)).toBe("Contacts added to Support.");
+    });
+
+    it("offers an item removed earlier back, and adds it to where it is asked for", async () => {
+      // The round trip the criterion names, driven as one gesture chain.
+      const element = await navigatorOn(TWO_SECTIONS);
+      selectItemMenuItem(element, 0, 0, "remove");
+      await flush();
+      expect(itemLabelsBySection(element)).toEqual([[], ["Action Plans"]]);
+
+      const picker = await openPicker(element, 1);
+      // The removed item is back on offer, alongside the one that was never
+      // placed.
+      expect(pickerLabels(picker)).toEqual(["Accounts", "Contacts"]);
+
+      pickerEntries(picker)[0].click();
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([
+        [],
+        ["Action Plans", "Accounts"]
+      ]);
+    });
+
+    it("offers a deleted section's items back rather than discarding them", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+
+      selectSectionMenuItem(element, 1, "delete");
+      await flush();
+      expect(sectionNames(element)).toEqual(["Selling"]);
+
+      const picker = await openPicker(element, 0);
+
+      // `Action Plans` was Support's only item. Deleting Support did not
+      // discard it — it is on offer again.
+      expect(pickerLabels(picker)).toEqual(["Action Plans", "Contacts"]);
+    });
+
+    it("adds a deleted section's item back into a surviving section", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      selectSectionMenuItem(element, 1, "delete");
+      await flush();
+
+      const picker = await openPicker(element, 0);
+      pickerEntries(picker)[0].click();
+      await flush();
+      await settleAutosave();
+
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Action Plans"]
+      ]);
+      expect(lastSavedLayout(updateLayout).sections).toHaveLength(1);
+      expect(lastSavedLayout(updateLayout).sections[0].items).toEqual([
+        { id: "Account" },
+        { id: "standard-ActionHub" }
+      ]);
+    });
+
+    it("writes nothing when the picker is merely opened", async () => {
+      // Slice 03's criterion: no layout record exists for a user who has only
+      // ever looked. Opening a picker is looking. `getLayouts` returns nothing
+      // here, so a write would be a `createLayout` — the exact gesture that
+      // generates a row for a user who never customised anything.
+      const element = await navigatorOn(undefined);
+
+      const picker = await openPicker(element, 0);
+      await settleAutosave();
+
+      expect(picker).toBeDefined();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when the picker is cancelled", async () => {
+      const element = await navigatorOn(undefined);
+      const picker = await openPicker(element, 0);
+
+      picker.shadowRoot
+        .querySelector("lightning-button.rstk-nav-picker__cancel")
+        .dispatchEvent(new CustomEvent("click"));
+      await flush();
+      await settleAutosave();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when a removal names no item on screen", async () => {
+      // The payload-equality guard in `handleItemRemove` is what stops a
+      // gesture that stores nothing from creating a layout row for a user who
+      // has only ever looked — slice 03's criterion. Nothing drove that
+      // gesture before: every removal in the suite names a real item, so
+      // `removeItem` always changed something and the guard never had to hold.
+      // `getLayouts` returns nothing here, so a write would be a
+      // `createLayout` — the row that must not exist.
+      const element = await navigatorOn(undefined);
+      const before = itemLabelsBySection(element);
+
+      querySections(element)[0].dispatchEvent(
+        new CustomEvent("itemremove", {
+          bubbles: true,
+          composed: true,
+          detail: { sectionIndex: 0, index: 9 }
+        })
+      );
+      await flush();
+      await settleAutosave();
+
+      expect(itemLabelsBySection(element)).toEqual(before);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when the picker closes with a falsy value that is not undefined", async () => {
+      // Cancel and Escape both hand back `undefined`, and the payload-equality
+      // guard swallows those on its own. This drives the other falsy shape a
+      // real close can carry — an entry whose `data-id` is the empty string,
+      // which is what a tab with a blank developer name produces. That one the
+      // equality guard cannot swallow: an empty id *is* in the accessible set,
+      // so `addItemToSection` would happily store `{id: ""}` and the layout
+      // would change, and an item the user cannot navigate to would be in it.
+      // `addChosenItem`'s `if (!tabId)` is the only thing standing there. (A
+      // *stored* layout rather than the seeded one, because the seed places
+      // every reachable tab, so a user with no layout is offered nothing at
+      // all and this route cannot be driven against them.)
+      const element = await navigatorOn(
+        TWO_SECTIONS,
+        THREE.concat([
+          {
+            developerName: "",
+            label: "Blank",
+            pageReference: {
+              type: "standard__navItemPage",
+              attributes: { apiName: "" },
+              state: {}
+            }
+          }
+        ])
+      );
+      const before = itemLabelsBySection(element);
+
+      const picker = await openPicker(element, 0);
+      const blank = pickerEntries(picker).find(
+        (entry) => entry.dataset.id === ""
+      );
+      expect(blank).toBeDefined();
+      blank.dispatchEvent(new CustomEvent("click"));
+      await flush();
+      await settleAutosave();
+
+      expect(itemLabelsBySection(element)).toEqual(before);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("schedules no autosave when the picker resolves after the Navigator has gone", async () => {
+      // `LightningModal.open` mounts the picker on `document.body`, outside
+      // this component's tree, so it outlives the Navigator. A user who leaves
+      // the Navigator tab with the picker open and then chooses an item runs
+      // `applyLayout` -> `scheduleSave` on a destroyed instance, starting a 1s
+      // timer that `disconnectedCallback` has already come and gone for. This
+      // is the only write path in the file not driven by a template event, and
+      // therefore the only one that can fire after disconnect.
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 0);
+
+      document.body.removeChild(element);
+      expect(jest.getTimerCount()).toBe(0);
+
+      pickerEntries(picker)[0].dispatchEvent(new CustomEvent("click"));
+      await flush();
+
+      // The hazard is the *timer*, not only the call: nothing is left running
+      // that no `disconnectedCallback` will flush.
+      expect(jest.getTimerCount()).toBe(0);
+      await settleAutosave();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("adds nothing and writes nothing when Escape closes the picker", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      const before = itemLabelsBySection(element);
+      const picker = await openPicker(element, 0);
+
+      picker.shadowRoot.querySelector("lightning-input").dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          composed: true
+        })
+      );
+      await flush();
+      await settleAutosave();
+
+      expect(itemLabelsBySection(element)).toEqual(before);
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("says there is nothing to add when every reachable tab is already placed", async () => {
+      const element = await navigatorOn(
+        storedLayout([
+          {
+            name: "Selling",
+            columns: 3,
+            items: [
+              { id: "Account" },
+              { id: "Contact" },
+              { id: "standard-ActionHub" }
+            ]
+          }
+        ])
+      );
+
+      const picker = await openPicker(element, 0);
+
+      expect(pickerEntries(picker)).toHaveLength(0);
+      expect(picker.shadowRoot.textContent).toContain("already");
+    });
+
+    it("names the dialog after the section it was opened from", async () => {
+      // `label` is the dialog's accessible name in the real platform, and it
+      // is base-class config rather than an `@api` property of the picker —
+      // so nothing asserted that it survived the trip until the mock stopped
+      // dropping it. Section 1, not 0, so "names the section" is
+      // distinguishable from "names the first one".
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 1);
+
+      expect(configOf(picker).label).toBe("Add items to Support");
+      expect(configOf(picker).size).toBe("small");
+    });
+
+    it("puts the picker in a real lightning-modal rather than a hand-rolled panel", async () => {
+      // The design says compose from base components where one exists —
+      // they adopt SLDS 2 automatically, and the dialog semantics, the focus
+      // trap and Escape are the platform's rather than ours. A div dressed up
+      // as a dialog would pass every click-driven assertion above.
+      const element = await navigatorOn(TWO_SECTIONS);
+      const picker = await openPicker(element, 0);
+
+      expect(
+        picker.shadowRoot.querySelector("lightning-modal-header")
+      ).not.toBeNull();
+      expect(
+        picker.shadowRoot.querySelector("lightning-modal-body")
+      ).not.toBeNull();
+      expect(
+        picker.shadowRoot.querySelector("lightning-modal-footer")
+      ).not.toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // Keeping more than one layout and switching between them.
+  //
+  // **Every assertion in this block is about what the store holds
+  // afterwards**, never about which Apex method was called with what. That is
+  // this slice's whole subject: the failure it exists to prevent is a client
+  // sending a plausible call and the server writing it to the wrong row, and a
+  // suite asserting the call stays green throughout that. So the Apex mocks
+  // below are not stubs returning fixed values — they are a small in-memory
+  // store that behaves the way `NavigatorLayoutController` does, and the
+  // assertions read `store.rows`.
+  //
+  // The fixture is three layouts with **the active one in the middle**. One
+  // layout cannot tell "the active one" from "the only one", and an active
+  // layout at position 0 cannot tell it from "the first one" — either would
+  // pass a switcher wired to the wrong record.
+  // -------------------------------------------------------------------
+
+  describe("switching between layouts", () => {
+    const FIRST_ID = "a0X000000000011AAA";
+    const SECOND_ID = "a0X000000000012AAA";
+    const THIRD_ID = "a0X000000000013AAA";
+
+    const NAV_ITEMS = [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM];
+
+    /** A payload whose section name, column count and rename are all distinct. */
+    function payload(sectionName, columns, items) {
+      return JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
+        sections: [{ name: sectionName, columns, items }]
+      });
+    }
+
+    const SELLING = payload("Selling", 2, [
+      { id: "Account", rename: "Clients" }
+    ]);
+    const SUPPORT = payload("Support", 4, [{ id: "Contact" }]);
+    const ADMIN = payload("Admin", 1, [{ id: "standard-ActionHub" }]);
+
+    function threeRows() {
+      return [
+        {
+          layoutId: FIRST_ID,
+          name: "Selling",
+          isActive: false,
+          isReadable: true,
+          layoutJson: SELLING
+        },
+        {
+          layoutId: SECOND_ID,
+          name: "Support",
+          isActive: true,
+          isReadable: true,
+          layoutJson: SUPPORT
+        },
+        {
+          layoutId: THIRD_ID,
+          name: "Admin",
+          isActive: false,
+          isReadable: true,
+          layoutJson: ADMIN
+        }
+      ];
+    }
+
+    /**
+     * A stand-in for `Navigator_Layout__c` that enforces what the controller
+     * enforces: exactly one active row, a create that sits beside what is
+     * already there, and a delete that hands the active flag to the layout
+     * taking the deleted one's place. Assertions read from it.
+     */
+    function installStore(rows) {
+      const store = {
+        rows: rows.map((row) => ({ ...row })),
+        of(layoutId) {
+          return store.rows.find((row) => row.layoutId === layoutId);
+        },
+        activeName() {
+          const active = store.rows.filter((row) => row.isActive);
+          return active.length === 1
+            ? active[0].name
+            : `${active.length} active`;
+        },
+        payloadOf(layoutId) {
+          const row = store.of(layoutId);
+          return row ? row.layoutJson : undefined;
+        },
+        names() {
+          return store.rows.map((row) => row.name);
+        }
+      };
+
+      function makeActiveOnly(layoutId) {
+        store.rows.forEach((row) => {
+          row.isActive = row.layoutId === layoutId;
+        });
+      }
+      function copies() {
+        return store.rows.map((row) => ({ ...row }));
+      }
+      function refuse() {
+        return Promise.reject(
+          new Error("That layout no longer exists, or does not belong to you.")
+        );
+      }
+
+      getLayouts.mockImplementation(() => Promise.resolve(copies()));
+
+      updateLayout.mockImplementation(
+        ({ layoutId, name, layoutJson, makeActive }) => {
+          const row = store.of(layoutId);
+          if (!row) {
+            return refuse();
+          }
+          row.name = name;
+          row.layoutJson = layoutJson;
+          if (makeActive) {
+            makeActiveOnly(layoutId);
+          }
+          return Promise.resolve({ ...row });
+        }
+      );
+
+      createLayout.mockImplementation(({ name, layoutJson, makeActive }) => {
+        const row = {
+          layoutId: `a0X0000000000${20 + store.rows.length}AAA`,
+          name,
+          layoutJson,
+          isActive: false,
+          isReadable: true
+        };
+        store.rows.push(row);
+        if (makeActive) {
+          makeActiveOnly(row.layoutId);
+        }
+        return Promise.resolve({ ...row });
+      });
+
+      activateLayout.mockImplementation(({ layoutId }) => {
+        if (!store.of(layoutId)) {
+          return refuse();
+        }
+        makeActiveOnly(layoutId);
+        return Promise.resolve(copies());
+      });
+
+      /**
+       * Holds the next switch open until the caller lets it go, so a change can
+       * be made *while a switch is in flight*. Every other test here resolves
+       * Apex instantly, and instant resolution hides the one ordering the
+       * previous project actually shipped a bug in.
+       */
+      store.deferNextActivation = () => {
+        const answer = activateLayout.getMockImplementation();
+        let release;
+        const gate = new Promise((resolve) => {
+          release = resolve;
+        });
+        activateLayout.mockImplementationOnce((args) =>
+          gate.then(() => answer(args))
+        );
+        return release;
+      };
+
+      /**
+       * The same, for a create. A change made *while a create is in flight* is
+       * the one interleaving that reaches `rememberSaved`'s create-adoption
+       * guard: the change belongs to a user who had no row, so it is a create
+       * of its own, and by the time it lands the layout on screen is the one
+       * the other create made.
+       */
+      store.deferNextCreate = () => {
+        const answer = createLayout.getMockImplementation();
+        let release;
+        const gate = new Promise((resolve) => {
+          release = resolve;
+        });
+        createLayout.mockImplementationOnce((args) =>
+          gate.then(() => answer(args))
+        );
+        return release;
+      };
+
+      renameLayout.mockImplementation(({ layoutId, name }) => {
+        const row = store.of(layoutId);
+        if (!row) {
+          return refuse();
+        }
+        row.name = name;
+        return Promise.resolve({ ...row });
+      });
+
+      deleteLayout.mockImplementation(({ layoutId }) => {
+        const at = store.rows.findIndex((row) => row.layoutId === layoutId);
+        if (at === -1) {
+          return refuse();
+        }
+        const wasActive = store.rows[at].isActive;
+        store.rows = store.rows.filter((row) => row.layoutId !== layoutId);
+        if (wasActive && store.rows.length > 0) {
+          makeActiveOnly(
+            store.rows[Math.min(at, store.rows.length - 1)].layoutId
+          );
+        }
+        return Promise.resolve(copies());
+      });
+
+      /**
+       * The same, for a delete. A change made *while a delete is in flight* is
+       * the one interleaving `discardPendingSave` cannot reach: it fires at the
+       * gesture, and the round trip that follows is a window in which
+       * `this.layoutId` still names the row that is about to go.
+       */
+      store.deferNextDelete = () => {
+        const answer = deleteLayout.getMockImplementation();
+        let release;
+        const gate = new Promise((resolve) => {
+          release = resolve;
+        });
+        deleteLayout.mockImplementationOnce((args) =>
+          gate.then(() => answer(args))
+        );
+        return release;
+      };
+
+      return store;
+    }
+
+    async function navigatorOnStore(store, navItems = NAV_ITEMS) {
+      const element = createNavigator();
+      getNavItems.emit({ navItems });
+      await flush();
+      await flush();
+      expect(store.rows.length).toBeGreaterThanOrEqual(0);
+      return element;
+    }
+
+    function layoutMenu(element) {
+      return element.shadowRoot.querySelector("lightning-button-menu");
+    }
+
+    function layoutMenuEntries(element) {
+      return Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).map((entry) => ({
+        value: entry.value,
+        label: entry.label,
+        checked: entry.checked === true
+      }));
+    }
+
+    function selectLayoutMenu(element, value) {
+      layoutMenu(element).dispatchEvent(
+        new CustomEvent("select", { detail: { value } })
+      );
+    }
+
+    async function switchToLayout(element, layoutId) {
+      selectLayoutMenu(element, `layout:${layoutId}`);
+      await settleAutosave();
+    }
+
+    /** The column count actually painted, read off the grid's class. */
+    function renderedColumns(element, sectionIndex) {
+      const grid =
+        querySections(element)[sectionIndex].shadowRoot.querySelector("ul");
+      return Number(/cols-(\d)/.exec(grid.className)[1]);
+    }
+
+    function promptInput(element) {
+      return element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input");
+    }
+
+    function promptButton(element, label) {
+      return Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      ).find((button) => button.label === label);
+    }
+
+    async function typeLayoutName(element, name) {
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: name } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await settleAutosave();
+    }
+
+    // ---------------------------------------------------------------
+    // Listing, and what the active layout renders as
+    // ---------------------------------------------------------------
+
+    it("lists every layout the user owns with the active one checked, and the active one is neither the only one nor the first", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      expect(layoutMenuEntries(element)).toEqual([
+        { value: `layout:${FIRST_ID}`, label: "Selling", checked: false },
+        { value: `layout:${SECOND_ID}`, label: "Support", checked: true },
+        { value: `layout:${THIRD_ID}`, label: "Admin", checked: false },
+        { value: "new-layout", label: "New layout…", checked: false },
+        { value: "rename-layout", label: "Rename layout…", checked: false },
+        { value: "delete-layout", label: "Delete layout…", checked: false }
+      ]);
+      expect(layoutMenu(element).label).toBe("Support");
+    });
+
+    it("renders the sections, items, column counts and renames of the active layout, not of the first one", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      expect(sectionNames(element)).toEqual(["Support"]);
+      expect(itemLabelsBySection(element)).toEqual([["Contacts"]]);
+      expect(renderedColumns(element, 0)).toBe(4);
+    });
+
+    // ---------------------------------------------------------------
+    // Switching
+    // ---------------------------------------------------------------
+
+    it("switching re-renders the selected layout's sections, items, column counts and renames", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      await switchToLayout(element, FIRST_ID);
+
+      expect(sectionNames(element)).toEqual(["Selling"]);
+      expect(itemLabelsBySection(element)).toEqual([["Clients"]]);
+      expect(renderedColumns(element, 0)).toBe(2);
+      expect(store.activeName()).toBe("Selling");
+    });
+
+    it("switching leaves every other layout in the store exactly as it was", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      await switchToLayout(element, THIRD_ID);
+
+      expect(store.payloadOf(FIRST_ID)).toBe(SELLING);
+      expect(store.payloadOf(SECOND_ID)).toBe(SUPPORT);
+      expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
+      expect(store.names()).toEqual(["Selling", "Support", "Admin"]);
+    });
+
+    it("switching writes no payload at all, so it cannot rewrite the layout it switches to", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      await switchToLayout(element, THIRD_ID);
+
+      // The switch has to have actually happened, or "no payload was written"
+      // is true of a test that never switched at all.
+      expect(store.activeName()).toBe("Admin");
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("switching away and back restores the first layout's own renames and column count from the store", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      await switchToLayout(element, FIRST_ID);
+      await switchToLayout(element, SECOND_ID);
+
+      expect(sectionNames(element)).toEqual(["Support"]);
+      expect(renderedColumns(element, 0)).toBe(4);
+      expect(store.payloadOf(FIRST_ID)).toBe(SELLING);
+    });
+
+    it("no sequence of switches leaves two layouts active or none", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      for (const id of [THIRD_ID, FIRST_ID, FIRST_ID, SECOND_ID, THIRD_ID]) {
+        // eslint-disable-next-line no-await-in-loop
+        await switchToLayout(element, id);
+        expect(store.rows.filter((row) => row.isActive)).toHaveLength(1);
+      }
+      expect(store.activeName()).toBe("Admin");
+    });
+
+    it("the display follows the store rather than the request, so a client that asked for the wrong layout is corrected", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      // The server refuses the id and the store is unchanged; the component
+      // must not paint a layout the store does not say is active.
+      await switchToLayout(element, "a0X000000000099AAA");
+
+      expect(store.activeName()).toBe("Support");
+      expect(sectionNames(element)).toEqual(["Support"]);
+    });
+
+    it("selecting the layout that is already active changes nothing and calls nothing", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      await switchToLayout(element, SECOND_ID);
+
+      expect(activateLayout).not.toHaveBeenCalled();
+      expect(store.activeName()).toBe("Support");
+    });
+
+    it("a change still in the debounce is written to the layout it was made on, not to the one switched to", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      // Switched inside the debounce window, before the save has fired.
+      await switchToLayout(element, THIRD_ID);
+
+      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
+        6
+      );
+      expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
+      expect(store.activeName()).toBe("Admin");
+    });
+
+    /**
+     * The previous project's bug, in the one ordering that still reaches it
+     * after every switch flushes its debounce: a change made *while a switch is
+     * in flight*. `this.layoutId` moves when the switch resolves, so a save
+     * that read it at write time rather than at queue time would put the layout
+     * the user was looking at onto the layout they had just moved to.
+     *
+     * Every other test in this block resolves Apex instantly, which is exactly
+     * why none of them can tell the two apart — the switch is over before the
+     * change is made. This one holds the switch open.
+     */
+    it("a change made while a switch is still in flight is written to the layout it was made on", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      const releaseSwitch = store.deferNextActivation();
+
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await flush();
+
+      // Still looking at Support, because the switch has not landed.
+      expect(sectionNames(element)).toEqual(["Support"]);
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+      await flush();
+
+      releaseSwitch();
+      await settleAutosave();
+
+      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
+        6
+      );
+      expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
+      expect(store.activeName()).toBe("Admin");
+      expect(sectionNames(element)).toEqual(["Admin"]);
+    });
+
+    /**
+     * The same ordering the other way round, and it is the **ordinary** case
+     * rather than the rare one: the activation round trip completes *inside*
+     * the 1s debounce window, so `this.layoutId` and `this.storedLayout` have
+     * both already moved by the time the timer fires.
+     *
+     * The order below is the order a browser uses — a resolved promise's
+     * continuations run before any timer does — and it is deliberately not the
+     * order `settleAutosave` uses, which advances the timer first and so can
+     * never see an Apex call land ahead of a pending debounce.
+     */
+    it("a change made while a switch is in flight survives the switch landing before the debounce fires", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      const releaseSwitch = store.deferNextActivation();
+
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await flush();
+
+      // Still looking at Support, because the switch has not landed.
+      expect(sectionNames(element)).toEqual(["Support"]);
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      // The switch lands first. Microtasks, then timers.
+      releaseSwitch();
+      await flush();
+      await flush();
+      expect(sectionNames(element)).toEqual(["Admin"]);
+
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+      await flush();
+      await flush();
+
+      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
+        6
+      );
+      expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
+      expect(store.activeName()).toBe("Admin");
+    });
+
+    /**
+     * What flushing the pending save at the *start* of a switch buys, now that
+     * the change carries its own layout's id whenever it fires. A change made
+     * on the layout switched *to*, still inside the first change's debounce
+     * window, replaces the pending change — so an unflushed one is not merely
+     * late, it is gone with no trace and no error.
+     */
+    it("a change still in the debounce is written before the switch, so a change made on the layout switched to cannot displace it", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      // Switched inside the debounce window, before the save has fired.
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await flush();
+      await flush();
+      await flush();
+      expect(sectionNames(element)).toEqual(["Admin"]);
+
+      // A second change, still inside the first one's window.
+      selectSectionMenuItem(element, 0, "columns-2");
+      await flush();
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+      await flush();
+      await flush();
+
+      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
+        6
+      );
+      expect(JSON.parse(store.payloadOf(THIRD_ID)).sections[0].columns).toBe(2);
+    });
+
+    /**
+     * The one state in which the store has rows the client can read and none of
+     * them flagged. The controller does not produce it — `createLayout`
+     * activates the row it creates when the owner has nothing else active — but
+     * no server rule can close this route, because the flag is on a row *this
+     * package cannot read*, and unreadable rows are filtered out on this side
+     * before the flag is looked for. The load path and the switch/delete path
+     * have to agree about it, or the same store paints two different screens.
+     */
+    it("a store whose active layout is one this version cannot read still shows a layout the user owns, not the seeded one", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      deleteLayout.mockResolvedValueOnce([
+        {
+          layoutId: FIRST_ID,
+          name: "Selling",
+          isActive: false,
+          isReadable: true,
+          layoutJson: SELLING
+        },
+        {
+          layoutId: THIRD_ID,
+          name: "Admin",
+          isActive: true,
+          isReadable: false,
+          unreadableReason: "schema version 9"
+        }
+      ]);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await settleAutosave();
+
+      expect(sectionNames(element)).toEqual(["Selling"]);
+      expect(layoutMenu(element).label).toBe("Selling");
+    });
+
+    /**
+     * Why the delete path *discards* a pending change where the switch path
+     * flushes one: a payload written to a row that is about to be deleted is
+     * work with no reader, and a failure would report a save error about a
+     * layout that no longer exists.
+     */
+    it("a change still in the debounce when its layout is deleted is dropped rather than written", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await settleAutosave();
+
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(store.names()).toEqual(["Selling", "Admin"]);
+      expect(store.activeName()).toBe("Admin");
+    });
+
+    /**
+     * The other half of the same rule, and the half `discardPendingSave` cannot
+     * reach: the change is made *after* the gesture, while the delete is still
+     * in flight. `this.layoutId` still names the doomed row until the reply
+     * lands, so the change is captured against it — and a write addressed
+     * there is refused, telling the user a save failed about the very layout
+     * they had just asked to be rid of, beside a screen already showing its
+     * successor.
+     *
+     * Interleaved by hand rather than through `settleAutosave`, which advances
+     * the timer first and so could never see the delete land ahead of the
+     * pending debounce.
+     */
+    it("a change made while its layout is being deleted is written nowhere and reports no save error", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      const releaseDelete = store.deferNextDelete();
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await flush();
+
+      // Still looking at Support, because the delete has not landed.
+      expect(sectionNames(element)).toEqual(["Support"]);
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      // The delete lands first. Microtasks, then timers.
+      releaseDelete();
+      await flush();
+      await flush();
+      expect(sectionNames(element)).toEqual(["Admin"]);
+
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+      await flush();
+      await flush();
+
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(store.names()).toEqual(["Selling", "Admin"]);
+      expect(store.activeName()).toBe("Admin");
+      expect(element.shadowRoot.querySelector('[role="alert"]')).toBeNull();
+    });
+
+    /**
+     * `rememberSaved`'s create-adoption guard, which needs both of its
+     * conditions and can only be reached by making a change while a *create* is
+     * in flight. The change belongs to a user who owned no row, so it creates
+     * one — correctly, that is what a first change does — but the layout on
+     * screen by the time it lands is the one *New layout* made, and adopting
+     * the id would point every later save at a layout the change was never
+     * made on.
+     */
+    it("a change made while a new layout is being created gets its own row, and the new layout stays the one on screen", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      const releaseCreate = store.deferNextCreate();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+      await flush();
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+
+      expect(store.names()).toEqual(["Weekly review", "My Navigator"]);
+      expect(
+        layoutMenuEntries(element)
+          .filter((entry) => entry.checked)
+          .map((entry) => entry.label)
+      ).toEqual(["Weekly review"]);
+    });
+
+    it("the chosen layout is still the active one after a reload", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await switchToLayout(element, THIRD_ID);
+
+      // A reload: the component is destroyed and a fresh one reads the store.
+      document.body.removeChild(element);
+      jest.runOnlyPendingTimers();
+      await flush();
+      const reloaded = await navigatorOnStore(store);
+
+      expect(layoutMenu(reloaded).label).toBe("Admin");
+      expect(sectionNames(reloaded)).toEqual(["Admin"]);
+      expect(store.activeName()).toBe("Admin");
+    });
+
+    /**
+     * The placement criterion, as far as jsdom reaches it. A second component
+     * instance stands for a second placement — an App page or a Home page —
+     * and it is handed nothing that could scope it differently, because the
+     * bundle declares no design-time property at all: `lightning__Tab` rejects
+     * `<property>` outright, server-enforced, so a placement key does not
+     * exist to differ by. Both read the same per-user store with no placement
+     * argument, so both show the same active layout.
+     *
+     * What this cannot reach is the three placements themselves — a real tab,
+     * a real App page and a real Home page in a running org. See the slice's
+     * `## Deviations`.
+     */
+    it("a second placement shows the same active layout, because a layout is scoped to the user and to nothing else", async () => {
+      const store = installStore(threeRows());
+      const tabPlacement = await navigatorOnStore(store);
+      await switchToLayout(tabPlacement, THIRD_ID);
+
+      const appPagePlacement = await navigatorOnStore(store);
+
+      expect(layoutMenu(appPagePlacement).label).toBe("Admin");
+      expect(sectionNames(appPagePlacement)).toEqual(["Admin"]);
+      expect(sectionNames(tabPlacement)).toEqual(["Admin"]);
+      // Neither placement passed anything to the read: the call takes no
+      // argument, so there is no seam at which a placement could scope it.
+      expect(getLayouts).toHaveBeenCalledWith();
+    });
+
+    // ---------------------------------------------------------------
+    // Creating
+    // ---------------------------------------------------------------
+
+    it("a new layout sits beside the existing ones rather than renaming and overwriting one", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await typeLayoutName(element, "Weekly review");
+
+      expect(store.names()).toEqual([
+        "Selling",
+        "Support",
+        "Admin",
+        "Weekly review"
+      ]);
+      expect(store.payloadOf(SECOND_ID)).toBe(SUPPORT);
+      expect(store.activeName()).toBe("Weekly review");
+      expect(layoutMenu(element).label).toBe("Weekly review");
+    });
+
+    it("a new layout starts from every tab the user can reach, as a first open does", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await typeLayoutName(element, "Weekly review");
+
+      expect(sectionNames(element)).toEqual(["All Items"]);
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Contacts", "Action Plans"]
+      ]);
+    });
+
+    // ---------------------------------------------------------------
+    // Renaming
+    // ---------------------------------------------------------------
+
+    it("renaming a layout renames that layout in the store and leaves its payload and its neighbours alone", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Cases");
+
+      expect(store.names()).toEqual(["Selling", "Cases", "Admin"]);
+      expect(store.payloadOf(SECOND_ID)).toBe(SUPPORT);
+      expect(store.activeName()).toBe("Cases");
+      expect(layoutMenu(element).label).toBe("Cases");
+    });
+
+    /**
+     * A rename the server refused must not survive on screen. Left standing it
+     * is a name the store does not hold, in the button and in the menu — and
+     * the next unrelated autosave carries `this.layoutName` to `updateLayout`,
+     * so a refused rename would be made real by an edit that had nothing to do
+     * with it.
+     */
+    it("a rename the store refuses is taken back off the screen, and the next unrelated change does not carry it", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      renameLayout.mockRejectedValueOnce(new Error("Refused"));
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Cases");
+
+      expect(layoutMenu(element).label).toBe("Support");
+      expect(layoutMenuEntries(element).map((entry) => entry.label)).toEqual([
+        "Selling",
+        "Support",
+        "Admin",
+        "New layout…",
+        "Rename layout…",
+        "Delete layout…"
+      ]);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await settleAutosave();
+
+      expect(updateLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ layoutId: SECOND_ID, name: "Support" })
+      );
+      expect(store.names()).toEqual(["Selling", "Support", "Admin"]);
+    });
+
+    // ---------------------------------------------------------------
+    // Deleting
+    // ---------------------------------------------------------------
+
+    it("deleting the active layout leaves the layout that takes its place active and on screen", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await settleAutosave();
+
+      expect(store.names()).toEqual(["Selling", "Admin"]);
+      expect(store.rows.filter((row) => row.isActive)).toHaveLength(1);
+      expect(store.activeName()).toBe("Admin");
+      expect(sectionNames(element)).toEqual(["Admin"]);
+      expect(renderedColumns(element, 0)).toBe(1);
+    });
+
+    it("deleting the only layout leaves no row at all and puts the user back on the seeded layout", async () => {
+      const store = installStore([
+        {
+          layoutId: SECOND_ID,
+          name: "Support",
+          isActive: true,
+          isReadable: true,
+          layoutJson: SUPPORT
+        }
+      ]);
+      const element = await navigatorOnStore(store);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await settleAutosave();
+
+      expect(store.rows).toEqual([]);
+      expect(sectionNames(element)).toEqual(["All Items"]);
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Contacts", "Action Plans"]
+      ]);
+    });
+
+    // ---------------------------------------------------------------
+    // Looking is not changing
+    // ---------------------------------------------------------------
+
+    it("opening the menu, and opening each of its dialogs, writes nothing for a user who has never changed anything", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+
+      layoutMenu(element).dispatchEvent(new CustomEvent("open"));
+      await settleAutosave();
+
+      // Opening a dialog is not committing one. A `select` that merely opened
+      // a box has been enough to create a row twice on this spec, from two
+      // different directions, so each is opened here and none is committed.
+      for (const entry of ["new-layout", "rename-layout", "delete-layout"]) {
+        selectLayoutMenu(element, entry);
+        // eslint-disable-next-line no-await-in-loop
+        await settleAutosave();
+      }
+
+      expect(store.rows).toEqual([]);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("cancelling New layout, Rename layout and Delete layout each writes nothing", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+
+      for (const entry of ["new-layout", "rename-layout", "delete-layout"]) {
+        selectLayoutMenu(element, entry);
+        // eslint-disable-next-line no-await-in-loop
+        await flush();
+        promptButton(element, "Cancel").click();
+        // eslint-disable-next-line no-await-in-loop
+        await settleAutosave();
+      }
+
+      expect(store.names()).toEqual(["Selling", "Support", "Admin"]);
+      expect(store.activeName()).toBe("Support");
+      expect(store.payloadOf(SECOND_ID)).toBe(SUPPORT);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(deleteLayout).not.toHaveBeenCalled();
+      expect(renameLayout).not.toHaveBeenCalled();
+    });
+
+    it("a user who has never changed anything still gets a menu, and it names the layout they are looking at", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+
+      expect(layoutMenu(element).label).toBe("My Navigator");
+      // Delete is absent: there is no row to delete, and offering it would
+      // promise something no call could deliver.
+      expect(layoutMenuEntries(element).map((entry) => entry.value)).toEqual([
+        "layout:",
+        "new-layout",
+        "rename-layout"
+      ]);
+      expect(store.rows).toEqual([]);
+    });
+  });
+});

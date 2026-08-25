@@ -1,0 +1,157 @@
+/* SLDS 2 removes borders from cards, so a section card is a surface
+   container with elevation and no border — not a bordered box. */
+.rstk-nav-section {
+  padding: var(--slds-g-spacing-4, 1rem);
+  border-radius: var(--slds-g-radius-border-2, 0.25rem);
+  background-color: var(--slds-g-color-surface-container-1, #ffffff);
+  box-shadow: var(--slds-g-shadow-1, 0 2px 2px 0 #e5e5e5);
+  /* The card is permanently draggable, and permanently focusable so a
+     keyboard user can reach the same gesture. */
+  cursor: grab;
+}
+
+/* Focus and grab both use the focus-ring hook rather than a hand-rolled
+   outline, which would pick one colour and fail contrast in one of the two
+   colour modes. SLDS's own drag classes cannot help here: `.slds-is-grabbed`
+   only applies inside a dueling list. */
+.rstk-nav-section:focus-visible {
+  box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
+}
+
+.rstk-nav-section_grabbed {
+  cursor: grabbing;
+  background-color: var(--slds-g-color-surface-container-2, #f3f3f3);
+  box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
+}
+
+/* The section an item is being dragged over, while the drag is in progress.
+   Without it a cross-section drag is a guess: the item is under the pointer
+   and nothing on screen says which section is about to receive it.
+
+   Deliberately a different signal from `_grabbed` above — that one says "you
+   are holding this", this one says "this is where it would land" — so it takes
+   the accent border rather than the focus ring, and both are semantic hooks
+   that resolve per colour mode. SLDS's own drag classes are no help:
+   `.slds-has-drag*` only applies inside a file-selector dropzone. */
+.rstk-nav-section_droptarget {
+  background-color: var(--slds-g-color-surface-container-2, #f3f3f3);
+  outline: var(--slds-g-sizing-border-2, 2px) dashed
+    var(--slds-g-color-border-accent-1, #0b5cab);
+  outline-offset: var(--slds-g-spacing-1, 0.25rem);
+}
+
+.rstk-nav-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--slds-g-spacing-3, 0.75rem);
+  margin-bottom: var(--slds-g-spacing-3, 0.75rem);
+}
+
+/* on-surface-3 is the title colour, and the weight stays regular — SLDS 2
+   uses colour rather than bold for headings.
+
+   The heading is the part of the header that gives way. A flex item's default
+   minimum is its own content, so without `min-width: 0` a long stored section
+   name cannot shrink and `space-between` above pushes the header wider than
+   the card holding it — worst at six columns, where the card is narrowest.
+   The name is still reachable in full: `title` on the heading for a pointer,
+   the card's own `aria-label` for a screen reader. */
+.rstk-nav-section__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--slds-g-font-scale-3, 1.25rem);
+  font-weight: var(--slds-g-font-weight-4, 400);
+  color: var(--slds-g-color-on-surface-3, #181818);
+}
+
+/* The rename box stands where the heading does and shrinks for the same
+   reason — an input's intrinsic width is wider than the space it may have. */
+.rstk-nav-section__rename {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The Add items button is a real `<button>` rather than a `lightning-button`
+   — see the note in the template for why — so SLDS 2 adoption on this one
+   control is ours rather than inherited. It is the neutral button: a surface
+   container with body text on it, the *functional* border colour (`border-2`,
+   which is the interactive one) rather than the decorative `border-1`, the
+   dense 4px radius that buttons take, and semibold, which is the weight SLDS 2
+   gives button text. It does not shrink: the heading beside it is what gives
+   way, and a button whose label wrapped or clipped would be worse than a
+   truncated name. */
+.rstk-nav-section__add {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: var(--slds-g-spacing-1, 0.25rem) var(--slds-g-spacing-3, 0.75rem);
+  border: var(--slds-g-sizing-border-1, 1px) solid
+    var(--slds-g-color-border-2, #747474);
+  border-radius: var(--slds-g-radius-border-1, 0.25rem);
+  background-color: var(--slds-g-color-surface-container-1, #ffffff);
+  color: var(--slds-g-color-on-surface-2, #2e2e2e);
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+  font-weight: var(--slds-g-font-weight-6, 600);
+  cursor: pointer;
+}
+
+.rstk-nav-section__add:hover {
+  background-color: var(--slds-g-color-surface-container-2, #f3f3f3);
+}
+
+/* The focus ring is the shadow system's, not a hand-rolled outline: an
+   outline picks one colour and fails contrast in one of the two colour modes,
+   and this button is the section's primary action. */
+.rstk-nav-section__add:focus-visible {
+  box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
+}
+
+.rstk-nav-section__empty {
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+  color: var(--slds-g-color-on-surface-1, #747474);
+}
+
+/* The column count is a computed class, `cols-1` … `cols-6`, and each is a
+   CSS Grid of that many equal tracks.
+
+   Not `lightning-layout`: its `size` is a 1–12 integer span and cannot
+   express five columns at all. Not an inline `style` either — that would
+   mean `width`, which the SLDS linter validates and flags, whereas
+   `grid-template-columns` is not on its validated-property list. The styling
+   rule actively pushes toward a computed class, and this is it.
+
+   `minmax(0, 1fr)` rather than `1fr`: a grid track's default minimum is
+   `auto`, so a long tab label would push its column wider than its share and
+   the columns would stop being equal. */
+.rstk-nav-section__grid {
+  display: grid;
+  gap: var(--slds-g-spacing-2, 0.5rem);
+  list-style: none;
+}
+
+.cols-1 {
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+
+.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.cols-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.cols-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.cols-6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}

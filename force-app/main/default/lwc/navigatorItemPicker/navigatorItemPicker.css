@@ -1,0 +1,55 @@
+/* The list of tabs on offer. A single column with a scroll of its own rather
+   than a grid: the picker is a reading-and-finding surface, not a layout, and
+   174 entries have to be scrollable inside the modal rather than pushing the
+   footer off the bottom of it.
+
+   `max-height` takes a sizing hook (8-point grid) rather than a spacing one —
+   the two scales are different on purpose and this is a dimension. */
+.rstk-nav-picker__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--slds-g-spacing-1, 0.25rem);
+  max-height: var(--slds-g-sizing-16, 30rem);
+  overflow-y: auto;
+  margin-top: var(--slds-g-spacing-3, 0.75rem);
+  list-style: none;
+}
+
+/* Each entry is a real button, so it carries the browser's own defaults —
+   which have to be reset to something that reads as a list row rather than as
+   a form control. Colour comes from the semantic families only: the surface /
+   on-surface pairing is what resolves per colour mode under Cosmos. */
+/* No `width: 100%` — the linter flags a static dimension, and it is not
+   needed: the list above is a flex column, whose items stretch to the
+   container's width by default. */
+.rstk-nav-picker__item {
+  display: block;
+  text-align: left;
+  padding: var(--slds-g-spacing-2, 0.5rem) var(--slds-g-spacing-3, 0.75rem);
+  border: none;
+  border-radius: var(--slds-g-radius-border-1, 0.25rem);
+  background-color: var(--slds-g-color-surface-container-1, #ffffff);
+  color: var(--slds-g-color-on-surface-2, #2e2e2e);
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+  cursor: pointer;
+}
+
+.rstk-nav-picker__item:hover {
+  background-color: var(--slds-g-color-surface-container-2, #f3f3f3);
+}
+
+/* The focus ring is the shadow system's, not a hand-rolled outline: an
+   outline picks one colour and fails contrast in one of the two modes, and
+   this list is walked from the keyboard as its ordinary use. */
+.rstk-nav-picker__item:focus-visible {
+  box-shadow: var(--slds-g-shadow-outline-focus-1, 0 0 0 2px #0b5cab);
+}
+
+/* Both empty states — "nothing matches" and "nothing left to add" — take the
+   body-text colour rather than a feedback colour. Neither is an error: one is
+   a search that found nothing and the other is a layout that is complete. */
+.rstk-nav-picker__empty {
+  margin-top: var(--slds-g-spacing-3, 0.75rem);
+  font-size: var(--slds-g-font-scale-1, 0.875rem);
+  color: var(--slds-g-color-on-surface-1, #747474);
+}

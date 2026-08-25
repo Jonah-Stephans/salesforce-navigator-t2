@@ -1,0 +1,183 @@
+<template>
+  <lightning-card title="Salesforce Navigator" icon-name="standard:choice">
+    <!-- Gated on the same fact the sections are, and for the same reason: a
+         click before pagination finishes seeds All Items from the pages
+         received so far, and a click before the stored layout arrives is
+         overwritten when it does. -->
+    <template lwc:if={canEdit}>
+      <!-- The active layout's name *is* the menu button, which is what makes
+           "which layout am I looking at" answerable without opening anything.
+           Every layout the user owns is listed with the active one checked, so
+           the menu reports state as well as accepting input — the same shape
+           as the section's column-count entries. -->
+      <lightning-button-menu
+        slot="actions"
+        class="rstk-nav-layout-menu"
+        label={layoutName}
+        alternative-text="Switch layout"
+        menu-alignment="auto"
+        onselect={handleLayoutMenuSelect}
+      >
+        <template for:each={layoutChoices} for:item="choice">
+          <lightning-menu-item
+            key={choice.value}
+            value={choice.value}
+            label={choice.label}
+            checked={choice.checked}
+          ></lightning-menu-item>
+        </template>
+        <lightning-menu-divider></lightning-menu-divider>
+        <lightning-menu-item
+          value="new-layout"
+          label="New layout…"
+        ></lightning-menu-item>
+        <lightning-menu-item
+          value="rename-layout"
+          label="Rename layout…"
+        ></lightning-menu-item>
+        <!-- Absent, not disabled, for a user with no stored layout: there is
+             nothing to delete, and an entry that cannot do what it says is
+             worse than one that is not offered. -->
+        <template lwc:if={canDeleteLayout}>
+          <lightning-menu-item
+            value="delete-layout"
+            label="Delete layout…"
+          ></lightning-menu-item>
+        </template>
+      </lightning-button-menu>
+
+      <lightning-button
+        slot="actions"
+        label="New section"
+        onclick={handleAddSection}
+      ></lightning-button>
+    </template>
+
+    <template lwc:if={isLoading}>
+      <lightning-spinner
+        alternative-text="Loading your tabs"
+        size="small"
+      ></lightning-spinner>
+    </template>
+    <template lwc:elseif={hasError}>
+      <div class="rstk-nav-error" role="alert">
+        <p class="rstk-nav-error__text">{errorMessage}</p>
+      </div>
+    </template>
+    <template lwc:elseif={isEmpty}>
+      <div class="slds-p-around_medium">
+        <p>You do not have access to any tabs yet.</p>
+      </div>
+    </template>
+    <template lwc:elseif={hasItems}>
+      <!-- Beside the layout, not in place of it: the seeded Navigator below
+           is complete and still navigates. The message has to be here rather
+           than nowhere, because the consequence is invisible otherwise —
+           this is not the user's layout, and nothing is being saved. -->
+      <template lwc:if={hasLayoutLoadError}>
+        <div class="rstk-nav-error" role="alert">
+          <p class="rstk-nav-error__text">{layoutLoadErrorMessage}</p>
+        </div>
+      </template>
+
+      <!-- Reported beside the layout, never in place of it: the change that
+           failed to save is still on screen and still correct. -->
+      <template lwc:if={hasSaveError}>
+        <div class="rstk-nav-error" role="alert">
+          <p class="rstk-nav-error__text">{saveErrorMessage}</p>
+        </div>
+      </template>
+
+      <!-- Assertive rather than polite: a section the user has just moved and
+           is about to move again is not something to queue behind whatever
+           else the page is saying. It lives here rather than in the section
+           because a section reorder rebuilds every card, and an announcement
+           inside one of them would be destroyed as it was made. -->
+      <span
+        class="slds-assistive-text rstk-nav-announcer"
+        aria-live="assertive"
+        aria-atomic="true"
+        >{announcement}</span
+      >
+
+      <!-- The three ellipses on the layout menu. Each is transient UI and
+           writes nothing until it is committed — opening one, and cancelling
+           one, must leave a user who has only ever looked with no layout row,
+           which is this spec's oldest settled rule. -->
+      <template lwc:if={isNamingLayout}>
+        <div
+          class="rstk-nav-layout-prompt"
+          role="group"
+          aria-label={layoutPromptLabel}
+        >
+          <lightning-input
+            class="rstk-nav-layout-prompt__input"
+            label={layoutPromptLabel}
+            value={draftLayoutName}
+            onchange={handleLayoutNameChange}
+            oncommit={handleLayoutNameCommit}
+            onkeydown={handleLayoutPromptKeydown}
+          ></lightning-input>
+          <lightning-button
+            label={layoutPromptCommitLabel}
+            variant="brand"
+            onclick={handleLayoutNameCommit}
+          ></lightning-button>
+          <lightning-button
+            label="Cancel"
+            onclick={handleLayoutPromptCancel}
+          ></lightning-button>
+        </div>
+      </template>
+      <template lwc:elseif={isConfirmingLayoutDelete}>
+        <!-- `alertdialog` rather than a bare div: a delete is destructive and
+             the confirmation has to reach a screen reader user as a decision
+             to make, not as text that appeared somewhere on the page. -->
+        <div
+          class="rstk-nav-layout-prompt"
+          role="alertdialog"
+          aria-label="Delete layout"
+          onkeydown={handleLayoutPromptKeydown}
+        >
+          <p class="rstk-nav-layout-prompt__text">{layoutDeleteMessage}</p>
+          <lightning-button
+            label="Delete layout"
+            variant="destructive"
+            onclick={handleLayoutDeleteConfirm}
+          ></lightning-button>
+          <lightning-button
+            label="Cancel"
+            onclick={handleLayoutPromptCancel}
+          ></lightning-button>
+        </div>
+      </template>
+
+      <div class="rstk-nav-sections">
+        <template for:each={sections} for:item="section">
+          <c-navigator-section
+            key={section.key}
+            section={section}
+            grabbed={section.isGrabbed}
+            item-drag-active={isItemDragActive}
+            onsectionrename={handleSectionRename}
+            onsectioncolumns={handleSectionColumns}
+            onsectiondelete={handleSectionDelete}
+            onsectionadditems={handleSectionAddItems}
+            onitemremove={handleItemRemove}
+            onitemmove={handleItemMove}
+            onitemmoveto={handleItemMoveTo}
+            onitemrename={handleItemRename}
+            onitemdragstart={handleItemDragStart}
+            onsectiondragstart={handleSectionDragStart}
+            onsectiondrop={handleSectionDrop}
+            onsectiondragend={handleSectionDragEnd}
+            onsectiongrab={handleSectionGrab}
+            onsectionkeymove={handleSectionKeyMove}
+            onsectionkeydrop={handleSectionKeyDrop}
+            onsectionkeycancel={handleSectionKeyCancel}
+          ></c-navigator-section>
+        </template>
+      </div>
+    </template>
+  </lightning-card>
+</template>
