@@ -563,6 +563,77 @@ same two private helpers rather than by getting it right here.
       `npm run lint:slds-gate` and `npm run prettier:verify` are clean;
       `grep -rn splice force-app | grep -v __tests__` returns exactly the two lines inside `reorder`;
       and `git status` shows no production file modified.
+- [x] false positive — "the no-op argument for ruling out route 1 is unverified, and the slice may
+      have closed on a mistake". Ran it independently, exactly as the finding described it:
+      `resolveLayout`'s label became
+      `item.rename && item.rename !== tab.label ? item.rename : tab.label`, the whole suite ran, and
+      the file was restored — **313 passed across 5 suites, nothing failed**. Ran it a second time as
+      a separate probe with the same result. The fix pass's argument is not merely correct, it is
+      weaker than the truth: the normalisation is a **tautology**, not a rule that happens to be
+      untested. Case by case on the three inputs — `rename` falsy, both forms yield `tab.label`;
+      `rename` truthy and unequal to the label, both yield `rename`; `rename` truthy and *equal* to
+      the label, the old form yields `rename` and the new yields `tab.label`, which is the same
+      string. `resolveLayout` therefore returns a byte-identical result for every possible input, so
+      no test anywhere could distinguish the two versions. The reason the fix pass gives — that after
+      a relabel the stored wording matches nothing, so the normalisation cannot fire at the moment it
+      would be needed — is also correct, and it is the reason the *other* read-side placements fail
+      too. Confirmed independently that the settled rule the fix leans on is really settled: slice 03
+      criterion at line 48, `No layout record exists for a user who has only ever looked`.
+- [x] false positive — "a green-on-arrival test is inadequate here, and it may pin nothing". It bites
+      under three independent mutations, none of which is the same fact twice. Row 2 (`label:
+      tab.label`) fails it on its post-relabel assertion. A mutation the table does not carry —
+      `serializeLayout` emitting `storedItem(item.id, undefined)`, so the serialiser drops the
+      wording — fails 17 including this test, on its round-trip assertion. And
+      `deserializeLayout` reading `storedItem(textOf(rawItem.id), undefined)` fails 19, again
+      including this test. So two of the three properties the pass claims for it are pinned by
+      distinct mutations rather than by one. The third — indistinguishable from an unrenamed row
+      while the label stands — is the weak one, and it is weak for the reason above rather than by
+      omission: no read-side rule can make that assertion fail, because a read-side rule is a
+      tautology. Green on arrival was the only possible outcome for a pass that changed no production
+      file, and the pass checked vacuity instead of dressing it up, which is the right move.
+- [x] false positive — "row 2's move from 20 to 21 hides coverage traded away somewhere". Rebuilt all
+      22 mutations from the table's own wording against the committed tree, in a runner that aborts
+      when its pattern is not unique, running the whole suite per row and restoring every file from
+      an in-memory original. **All 22 still bite and every count matches to the digit:** 1 **12**,
+      2 **21**, 3 **7**, 4 **3**, 5 **6**, 6 **2**, 7 **7**, 8 **2**, 9 **6**, 10 **2**, 11 **1**,
+      12 **5**, 13 **1**, 14 **2**, 15 **14**, 16 **2**, 17 **7**, 18 **2**, 19 **1**, 20 **2**,
+      21 **1**, 22 **1**. Nothing survived, no count fell, and row 2 at 21 is the new test biting —
+      confirmed by name in the failure list. This was reconstructed independently rather than read
+      off the previous pass's runner.
+- [x] false positive — "there is a third route that self-heals such a row without a write the user did
+      not ask for". There is a third *placement*, and it is worse rather than better, so it is not a
+      finding. Normalising at **serialize** time — `serializeLayout(layout, tabs)` dropping `rename`
+      where it equals `platformLabelOf(tabs, id)` — would ride a write the user already caused rather
+      than adding one, and would widen the repair window from "until that item is next edited" to
+      "until anything is next saved". It fails on the rule this spec already settled: it makes the
+      stored bytes a function of the running user's live accessible tab set, which is exactly the
+      leak of `resolveLayout` into stored state that slice 03 forbids and that the module's own
+      comment above `moveItemWithinSection` states as an invariant. `serializeLayout` is also the
+      equality oracle in `handleItemRename`, so the guard would begin comparing normalised forms. And
+      it inherits the same detection window as every other route: after the org relabels, nothing is
+      detectable. No placement escapes that, because the relabel destroys the only evidence. The fix
+      pass's conclusion stands.
+- [x] false positive — "the accepted state causes user-visible harm beyond the one stated". Walked all
+      five states for an item stored as `{id: "Account", rename: "Accounts"}` while `Account` is
+      labelled `Accounts`. **Today:** renders `Accounts`, indistinguishable from an unrenamed row.
+      **After a relabel to `Accts`:** renders `Accounts` — the stated harm, and the menu button's
+      `alternative-text` reads `Actions for Accounts`, which is a consequence of it rather than a
+      second one. **They edit it:** `renameItem` rebuilds that item through `storedItem`, so any new
+      wording is stored and the redundant row is repaired; typing `Accts` clears it. **They clear
+      it:** the box opens on `Accounts`, an empty commit is not equal to it so it dispatches,
+      `renameItem` stores `{id}`, and the announcement reads `Accounts renamed to Accts.` — correct
+      on both sides. **A cross-section move:** `moveItemBetweenSections` carries the item object
+      verbatim, `rename` included, so the row moves in the state it was in and gains nothing new.
+      Every route out of the state repairs it; none makes it worse.
+- [x] false positive — "there are tests here that cannot fail, as every previous round on this spec
+      found". Scanned all five suites for the signatures that produce one — `toBeDefined`,
+      `toBeTruthy`, `not.toThrow`, `toBeGreaterThanOrEqual(0)`, `expect.any`, and assertions guarded
+      by an `if` — across 6203 lines. Exactly one hit, `expect(call[0].layoutId).toBeTruthy()`, and
+      it belongs to an earlier slice's save path rather than to this one. Read the whole of
+      `renameItem`'s model block and the whole of the parent's `renaming an item` block: every test
+      asserts rendered text, an exact payload key set, or a named announcement string, and the
+      end-to-end ones drive the menu's own `select` after asserting the entry is there. Nothing
+      vacuous.
 
 **Verification.** Every mutation above was applied to shipped code by a runner that exits non-zero
 when its pattern does not match, the whole suite was run, and the file was restored from the
@@ -597,4 +668,13 @@ it. It was caught immediately by the suite (2 failed), reapplied, and re-verifie
 that `git checkout` is the wrong restore tool while a fix is uncommitted in the same file. The
 mutation runner's own scratchpad-copy restore, used everywhere else, has no such hazard.
 
-fix_cycles: 1
+**Verification, slice pass.** `npm test` is **313 passed across 5 suites** before and after every
+mutation. All 22 rows were rebuilt from the table's own wording rather than reused, run through a
+runner that aborts on a non-unique or missing match and restores from an in-memory original, and
+every count matched. `npm run lint`, `npm run lint:slds-gate` and `npm run prettier:verify` are
+clean; `grep -rn 'splice' force-app | grep -v __tests__` returns exactly the two lines in `reorder`.
+No production file was changed and none was left changed — `git status` shows only this slice file
+modified, alongside the untracked `sketches/` directory that belongs to a parallel session.
+**Nothing real remains open on this slice.**
+
+fix_cycles: 2
