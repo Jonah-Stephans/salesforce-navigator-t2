@@ -771,3 +771,71 @@ no edit mode, the layout switcher, the item picker, the column range, section op
 compute-don't-write on first open, one Apex controller, and the sketch detour):
 
 > "Agree with your recommendation on all of these."
+
+## Outcome checks
+
+- [x] won't fix — the All Items equivalence has no backing API to test against, and the same
+  substance was already waived at slice 02. Shipping on the access-scoping half alone.
+  Renders only tabs the running user can see in the App Launcher's All Items list. The
+  access-scoping half holds by construction: the `getNavItems` wire is pinned to `scope: "visible"`
+  and `resolveLayout` intersects every stored id against that live set, so a tab the user cannot
+  reach never appears. What is unverified is the equivalence between that call and the All Items
+  list itself — no API is documented as the list's backing source, a live probe of
+  `connect/app-launcher/panel` returned `NOT_FOUND`, and so "never wider than that list" was never
+  checked against the list. Slice 02 already carries a human `won't fix` on the same substance.
+- [x] met — An item whose tab the user has lost, or which has been deleted from the org, stops
+  rendering without the stored layout being altered, and returns to its original position when
+  access comes back.
+- [x] met — Ships a `CustomTab` carrying `<lwcComponent>salesforceNavigator</lwcComponent>` and
+  declares `lightning__AppPage` and `lightning__HomePage` to the App Builder palette.
+- [x] met — A named section can be created and set to between one and six columns, clamped at a
+  single choke point, and renders as `repeat(N, minmax(0, 1fr))`.
+- [x] met — Sections can be renamed, deleted and reordered; a deleted section's items return to the
+  pool the picker offers rather than being discarded.
+- [x] met — An item can be dragged to a new position within its section and into another section,
+  and both placements persist to `Layout_JSON__c` and survive a remount on the written payload.
+- [x] met — An item can be removed and added back from a picker computed as every reachable tab
+  minus every tab already placed in any section of the layout.
+- [x] met — An item can be renamed to the user's own wording; the rename is stored in a different
+  field from the item's identity, so the renamed item still navigates to the same tab.
+- [x] met — Items are real anchors carrying a `GenerateUrl` href, and modified clicks fall through
+  to the browser unprevented, so middle-click and open-in-new-tab work.
+- [x] won't fix — shipping with four of the five section operations silent to a screen reader.
+  Keyboard reach is complete; only the announcements are missing, and the fix is four
+  `announce(...)` calls in `salesforceNavigator.js:890-908` plus tests. Accepted knowingly rather
+  than because it is hard.
+  Every reorder, move, rename, removal and section operation performable from the
+  keyboard alone, with each change announced to a screen reader. Keyboard reach is complete across
+  all five families, and item move, rename and removal plus section reorder all announce. But
+  section create, rename, delete and column change call `applyLayout` with no `announce(...)` —
+  `salesforceNavigator.js:890-908` — so a screen-reader user gets no feedback at all that a section
+  was created, renamed, deleted or recolumned. Four of the five section operations are silent.
+- [x] met — A user with no layout sees every reachable tab in one seeded section, and no record is
+  written until they first change something; `getLayouts` is `cacheable=true` and so structurally
+  barred from DML.
+- [x] met — More than one named layout can be saved and switched, with exactly-one-active enforced
+  in Apex, and switching re-renders the sections, items, column counts and renames.
+- [x] won't fix — "Grant Access Using Hierarchies" cannot be expressed in the Metadata API, so it
+  cannot ship as source. Shipping with role-hierarchy access still ON: until someone unchecks it in
+  Setup, every manager above a user can read that user's layouts through reports, list views and
+  the API. This is the isolation Outcome, and it is being accepted unmet rather than deferred.
+  Every layout owned by the individual user, the store Private with role-hierarchy
+  access disabled. The Navigator half holds: `with sharing`, every query `WITH USER_MODE` behind an
+  `OwnerId = :UserInfo.getUserId()` predicate, DML at `AccessLevel.USER_MODE`, no `without sharing`
+  anywhere, and a permission set granting neither `viewAllRecords` nor `modifyAllRecords`. But
+  "Grant Access Using Hierarchies" cannot be expressed in the Metadata API at API 67.0, so it
+  survives only as a manual Setup step that no shipped artifact performs and nothing confirms was
+  taken. Until it is, every manager above a user in the role hierarchy can read that user's layouts
+  through reports, list views and the API.
+- [x] won't fix — shipping on construction alone: every colour hook resolves to a `light-dark()`
+  pair under Cosmos, so nothing freezes, but nobody looked at the component in dark mode.
+  All colour, spacing and typography from SLDS 2 global styling hooks, rendering
+  correctly under Cosmos in both light and dark mode. The hooks half is met and mechanically
+  enforced: every value routes through a `--slds-g-*` hook, there is no `--lwc-*`, `--sds-*` or
+  `--slds-c-*` authoring, no inline styles, and every colour hook used resolves to a `light-dark()`
+  pair under Cosmos rather than freezing. The render itself was never observed — nobody deployed
+  the component to a Cosmos-enabled org and looked at it in dark mode. Slice 05 records the cost of
+  closing it: "one look at the screen."
+- [x] met — The repository mechanically detects a hard-coded colour, spacing or typography value
+  under `**/lwc/**` and a pull request carrying one cannot go green; proved by a fixture pair and by
+  `lint:slds-gate` probing the real `npm run lint` entry point rather than a copy of it.
