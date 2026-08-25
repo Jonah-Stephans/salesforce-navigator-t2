@@ -1438,7 +1438,41 @@ export default class SalesforceNavigator extends LightningElement {
     return this.saveChain;
   }
 
+  /**
+   * Whether a write may still be addressed to this layout.
+   *
+   * `this.layouts` is the store's own answer about what the user owns, replaced
+   * wholesale after every switch and every delete, and it is the list the menu
+   * is drawn from — so "write only to a layout the menu still lists" needs no
+   * second piece of bookkeeping that could fall out of step with the first.
+   * Nothing has to remember which ids were deleted, and no number of deletes
+   * makes the rule weaker.
+   *
+   * Asked here at the call rather than when the change was made, and that is
+   * the point: `saveChain` puts a delete ahead of anything a later timer
+   * queues, so by the time this runs the store has already answered. A delete
+   * the store **refused** leaves the row listed, and the change is written
+   * normally rather than being lost with it.
+   */
+  stillExists(layoutId) {
+    return this.layouts.some((row) => row.layoutId === layoutId);
+  }
+
   persist(target) {
+    // A change made while the delete of its own layout was in flight.
+    // `discardPendingSave` covers a change made *before* the gesture; the round
+    // trip after it is a window in which `this.layoutId` still names the doomed
+    // row, so the change is captured against an id that is about to name
+    // nothing. `updateLayout` refuses it and the user is told a save failed —
+    // about the layout they had just asked to be rid of, beside a screen
+    // already showing its successor. That is exactly the failure
+    // `discardPendingSave` exists to prevent, so it is the same rule, applied
+    // on the far side of the call as well as the near one. Nothing is lost: the
+    // change was made on a layout that no longer exists.
+    if (target.layoutId && !this.stillExists(target.layoutId)) {
+      return Promise.resolve();
+    }
+
     // **Which layout is active is asked as late as possible, and the id is
     // asked as early as possible — and the asymmetry is the point.** *Where*
     // this payload goes was settled when the change was made, so it is

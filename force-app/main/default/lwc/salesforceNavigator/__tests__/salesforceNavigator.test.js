@@ -3551,6 +3551,24 @@ describe("c-salesforce-navigator", () => {
         return Promise.resolve(copies());
       });
 
+      /**
+       * The same, for a delete. A change made *while a delete is in flight* is
+       * the one interleaving `discardPendingSave` cannot reach: it fires at the
+       * gesture, and the round trip that follows is a window in which
+       * `this.layoutId` still names the row that is about to go.
+       */
+      store.deferNextDelete = () => {
+        const answer = deleteLayout.getMockImplementation();
+        let release;
+        const gate = new Promise((resolve) => {
+          release = resolve;
+        });
+        deleteLayout.mockImplementationOnce((args) =>
+          gate.then(() => answer(args))
+        );
+        return release;
+      };
+
       return store;
     }
 
@@ -3919,6 +3937,50 @@ describe("c-salesforce-navigator", () => {
       expect(updateLayout).not.toHaveBeenCalled();
       expect(store.names()).toEqual(["Selling", "Admin"]);
       expect(store.activeName()).toBe("Admin");
+    });
+
+    /**
+     * The other half of the same rule, and the half `discardPendingSave` cannot
+     * reach: the change is made *after* the gesture, while the delete is still
+     * in flight. `this.layoutId` still names the doomed row until the reply
+     * lands, so the change is captured against it — and a write addressed
+     * there is refused, telling the user a save failed about the very layout
+     * they had just asked to be rid of, beside a screen already showing its
+     * successor.
+     *
+     * Interleaved by hand rather than through `settleAutosave`, which advances
+     * the timer first and so could never see the delete land ahead of the
+     * pending debounce.
+     */
+    it("a change made while its layout is being deleted is written nowhere and reports no save error", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      const releaseDelete = store.deferNextDelete();
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await flush();
+
+      // Still looking at Support, because the delete has not landed.
+      expect(sectionNames(element)).toEqual(["Support"]);
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      // The delete lands first. Microtasks, then timers.
+      releaseDelete();
+      await flush();
+      await flush();
+      expect(sectionNames(element)).toEqual(["Admin"]);
+
+      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
+      await flush();
+      await flush();
+
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(store.names()).toEqual(["Selling", "Admin"]);
+      expect(store.activeName()).toBe("Admin");
+      expect(element.shadowRoot.querySelector('[role="alert"]')).toBeNull();
     });
 
     /**

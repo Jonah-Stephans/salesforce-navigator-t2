@@ -131,6 +131,14 @@ survived.**
 The `re-run` column is the same seven mutations applied again after the critique fix pass, to check
 that a fix had not silently killed coverage a mutation used to catch. **No count fell.**
 
+Run a third time after the delete-round-trip fix below, against the shipped code and the org.
+**Nothing survived and no count fell.** Measured: 1 → 3 (read fully literally, `persist` taking
+`this.layoutId` for both the branch *and* the field, which is the reading the last pass recorded at
+3); 2 → 2; 3 → 3; 4 → 6; 5 → 2; 6 → 6; 7 → 1 applied to `adoptFromStore` alone, which is the same
+figure and the same caveat the last pass recorded for that cell. 3 and 4 were deployed to the org,
+run, and the shipped class redeployed; 41/41 Apex green afterwards and `--dry-run` reports no
+changes.
+
 | # | Mutation | Caught by | Failing tests | Re-run |
 | --- | --- | --- | --- | --- |
 | 1 | `save()` stops capturing the layout id; `persist` reads `this.layoutId` at write time | jest | 1 — *a change made while a switch is still in flight…* | 2 — and *…survives the switch landing before the debounce fires* |
@@ -365,7 +373,41 @@ test now opens all three dialogs and would catch it on its own.
       `Database.update`/`Database.delete` passes `AccessLevel.USER_MODE`. Dropping the `OwnerId`
       predicate fails `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack`.
 
-- [ ] **A change made *while the delete of that layout is in flight* is sent to the deleted row, and
+- [x] fixed — **the write is refused rather than the alert suppressed, and the thing it is checked
+      against is the store's own answer rather than a new note-to-self.** Of the three routes the
+      finding named, the third was rejected outright — suppressing an alert leaves a doomed call
+      still being made — and the choice was between refusing to *schedule* while a delete is in
+      flight and refusing to *send*. Refusing to send won, for two reasons. First, `saveChain`
+      serialises, so a delete is always ahead of anything a later timer queues: by the time the
+      write is decided the store has already answered, which means a delete the store **refused**
+      leaves the change written normally instead of silently dropped — refusing at schedule time
+      cannot tell those apart, because at the gesture nobody yet knows whether the delete will
+      succeed. Second, and this is the "hardest to express" half: the check needs no new state at
+      all. `persist` now asks `stillExists(target.layoutId)` — *is this layout still one the store
+      says the user owns* — against `this.layouts`, which is replaced wholesale after every switch
+      and every delete and is the very list the menu is drawn from. So the rule is **a write is only
+      addressed to a layout the menu still lists**, there is no second piece of bookkeeping to fall
+      out of step with the first, and no number of deletes, in any order, weakens it. It sits beside
+      `isCurrent` and shares its asymmetry: *where* a payload goes was settled at change time,
+      *whether that row still exists* is a fact about now.
+      Pinned by *a change made while its layout is being deleted is written nowhere and reports no
+      save error*, written to the critic's reproduction with a new `store.deferNextDelete` seam
+      mirroring `deferNextActivation` and `deferNextCreate`, and interleaved by hand — microtasks
+      for the released delete first, `jest.advanceTimersByTime` after, never `settleAutosave`.
+      Against the shipped-then code it failed with `expect(jest.fn()).not.toHaveBeenCalled() —
+      Expected number of calls: 0, Received number of calls: 1`, the one call being
+      `{layoutId: <SECOND_ID>, layoutJson: <the columns-6 edit>, makeActive: false, name: "Support"}`
+      — `SECOND_ID` being the row the delete had just removed. It also asserts
+      `[role="alert"]` is absent from the whole component, so the misleading message is pinned and
+      not only the pointless call.
+      **The fix was mutated in both directions.** Weakening `stillExists` to
+      `this.layouts.length > 0 && Boolean(layoutId)` — "some layout exists, so write" — fails the new
+      test alone (1). Over-broadening the guard to `target.layoutId !== this.layoutId` — "drop any
+      write not aimed at the layout on screen", which would also close this instance — fails the two
+      switch-in-flight tests (2) and leaves the new one green, which is what shows the guard is
+      about *existence* and not about *currency*, and that the two settled rules have not been
+      merged into one.
+      **A change made *while the delete of that layout is in flight* is sent to the deleted row, and
       the user is shown a save error about a layout that no longer exists — beside a screen already
       showing a different layout.** `deleteCurrentLayout` calls `discardPendingSave()` at the moment
       of the gesture, which covers a change made *before* it. It does not cover the round trip:
