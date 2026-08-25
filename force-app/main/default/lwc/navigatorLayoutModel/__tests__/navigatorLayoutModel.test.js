@@ -142,6 +142,50 @@ describe("resolveLayout — the render-time access intersection", () => {
     expect(sections[0].items[0].pageReference).toEqual(ACCOUNT.pageReference);
   });
 
+  it("keeps a stored rename equal to the platform label when the org relabels the tab", () => {
+    // The boundary of what "an item with no rename follows the org" buys, and
+    // it is a boundary of the *stored* state rather than of what is on screen.
+    // `renameItem` will no longer write this shape — wording equal to the live
+    // platform label is stored as the key's absence — but a payload written
+    // before that rule existed, or hand-edited, can still carry it. There is
+    // nothing the read path can do about it: normalising here would compare
+    // `rename` against the *current* label, and by the time the org has
+    // relabelled the two no longer match, so the redundancy is undetectable
+    // at exactly the moment it starts to matter. Repairing it would take a
+    // write, and a write for a user who has only looked is the hazard slice
+    // 03's criterion and this slice's own unchanged-commit rule both exist to
+    // prevent. So the row keeps its `rename` until the item is next edited,
+    // and this pins that rather than pretending otherwise.
+    const redundant = {
+      sections: [
+        {
+          name: "Selling",
+          columns: 2,
+          items: [{ id: "Account", rename: "Accounts" }]
+        }
+      ]
+    };
+
+    // Indistinguishable from an item with no rename while the label stands.
+    expect(resolveLayout(redundant, ALL_TABS)[0].items[0].label).toBe(
+      "Accounts"
+    );
+
+    // The org relabels afterwards, which is the order that discriminates: a
+    // rule that dropped the redundant key at adoption time would render the
+    // new wording here, and one that only looks at the live label cannot.
+    const relabelled = [{ ...ACCOUNT, label: "Accts" }, CONTACT, OUR_SITE];
+    const after = resolveLayout(redundant, relabelled)[0].items[0];
+
+    expect(after.label).toBe("Accounts");
+    expect(after.label).not.toBe("Accts");
+    // And the stored shape is untouched by the render, so nothing self-heals
+    // through a round trip either.
+    expect(
+      deserializeLayout(serializeLayout(redundant)).sections[0].items[0]
+    ).toEqual({ id: "Account", rename: "Accounts" });
+  });
+
   it("stops rendering an item whose tab the user has lost access to", () => {
     const withoutContact = [ACCOUNT, OUR_SITE];
 

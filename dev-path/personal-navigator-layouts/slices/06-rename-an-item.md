@@ -75,11 +75,25 @@ re-derived. **Criterion 5** (clearing returns the item to its Salesforce label) 
 into it rather than one: emptying the box, and typing the wording the tab already carries. The second
 is a consequence of the rule findings 4 and 5 were fixed by, not an interaction that was designed —
 but it is the same end state, so it stores the same thing. **Criterion 6** (an item with no rename
-picks up an org relabelling without a write) now holds for every item *shown under the platform
-label*, not only for those that never had a rename. Before the fix, an item renamed to its own
-platform label stored that wording and stopped following the org; that item was inside the criterion's
-words and outside its behaviour. The cost, accepted deliberately: a user cannot pin the current
-platform wording against a future relabelling. Criterion 6 is the promise that they cannot.
+picks up an org relabelling without a write) now holds for every item *stored without a rename*,
+whichever route reached that state — including the item a user renamed to its own platform label,
+which before the fix stored that wording and stopped following the org. The cost, accepted
+deliberately: a user cannot pin the current platform wording against a future relabelling. Criterion
+6 is the promise that they cannot.
+
+**The boundary of that, stated rather than left to be found.** The rule is a *write*-path rule and
+only a write-path rule. `renameItem` will not store wording equal to the live platform label, so no
+gesture this Navigator ships can produce such a row again — but a row that already holds one keeps it
+until the item is next edited. That is not a gap left open by oversight: **the read path cannot close
+it.** Normalising at render time would compare `rename` against the *current* label, and by the time
+the org has relabelled the tab the two no longer match, so the redundancy is undetectable at exactly
+the moment it starts to matter; the information that the wording was ever the platform's is gone.
+Repairing such a row would take a *write* at adoption time, on a payload the user has not touched —
+which is the hazard slice 03's own criterion, and this slice's unchanged-commit rule, both exist to
+prevent. Rows written by the pre-fix build and deployed to the org therefore render under their
+stored wording and stop following a later relabelling, until their owner renames that item again.
+`resolveLayout` renders such a row exactly as it renders one with no rename while the label stands,
+which is asserted, along with what it does after a relabel.
 
 ### Decisions taken during the build
 
@@ -157,7 +171,8 @@ platform wording against a future relabelling. Criterion 6 is the promise that t
   because they are criteria 2 and 6, they are what this slice must not break, and both are caught by
   the mutation table below.
 - 274 pre-existing jest tests all still pass. The suite was **307 across 5 suites** at build; the fix
-  pass added five and it is **312 across 5 suites**.
+  pass added five and took it to **312**; the second fix pass added the one `resolveLayout` test the
+  last finding asked for and it is **313 across 5 suites**.
 - Invariants re-checked by reading: `grep -rn 'splice' force-app` outside `__tests__` returns exactly
   two lines, both inside `reorder`; `aria-grabbed` and `aria-dropeffect` appear nowhere outside the
   tests asserting their absence; `navigatorLayoutModel` imports nothing and mutates nothing; the only
@@ -200,6 +215,15 @@ moved are named under the table.
 | 22 | Focus does not follow the rename into the input | — | 1 failed |
 
 **Nothing survived**, in either column.
+
+**The second fix pass re-ran all 22 again, at 313.** Nothing survived and **exactly one count moved:
+row 2 went 20 → 21.** It is the new `resolveLayout` test, and it is the same bite twice rather than a
+new fact — that test's discriminating assertion is that a stored `rename` still renders after the org
+relabels the tab, and row 2's mutation (`label: tab.label`) is precisely what makes it render the new
+label instead. Every other row matched the Re-run column exactly: 1 **12**, 3 **7**, 4 **3**, 5 **6**,
+6 **2**, 7 **7**, 8 **2**, 9 **6**, 10 **2**, 11 **1**, 12 **5**, 13 **1**, 14 **2**, 15 **14**,
+16 **2**, 17 **7**, 18 **2**, 19 **1**, 20 **2**, 21 **1**, 22 **1**. No count fell, so nothing was
+traded.
 
 **The counts that moved, and the one that is a real trade.** Rows 2, 3, 5, 10, 15, 17 and 18 all went
 *up*, which is the five new tests biting rows beyond their own.
@@ -400,7 +424,37 @@ same two private helpers rather than by getting it right here.
       `splice` still appears exactly twice outside `__tests__`, both inside `reorder`; `aria-grabbed`
       and `aria-dropeffect` appear nowhere outside the tests asserting their absence; no `if:true` /
       `if:false` anywhere.
-- [ ] **Criterion 6, as reworded above, is over-claimed for a payload that already stores a `rename`
+- [x] fixed — **route 2, and route 1 was ruled out by running it rather than by judgement.** The
+      prose was narrowed: criterion 6 now claims what the write path actually delivers — every item
+      *stored without a rename*, whichever route reached that state — and a new paragraph states
+      plainly that a row written before this fix keeps its redundant `rename` until the item is next
+      edited, and why. **Route 1 is not merely the weaker fix, it is a no-op.** Applied it exactly
+      as the finding describes it — `resolveLayout`'s label became
+      `item.rename && item.rename !== tab.label ? item.rename : tab.label` — and ran the whole
+      suite: **313 passed across 5 suites, nothing failed and nothing changed.** It cannot change
+      anything, and the reason is the finding's own parenthesis read to its conclusion: the
+      comparison is against the *current* label, so after the org relabels `Accounts` to `Accts` the
+      stored `"Accounts"` matches nothing and renders as before; while the label still stands, the
+      row renders identically with or without the normalisation. There is no render-time state in
+      which dropping the key is both detectable and useful. The only rule that would self-heal such
+      a row is a *write* at adoption time on a payload the user has not touched — which is what
+      `resolveLayout`'s settled "the access filter must never leak into stored state" forbids, and
+      what this slice's own finding 4 was raised about. So the code is right and the sentence was
+      wrong. On the second question the finding asks: with the write path folding it away, "pin the
+      current wording" is not an expressible intent through any shipped gesture, so normalising on
+      read could not have lost a deliberate one either — it simply had nothing to act on.
+      The critic's discriminating test exists as a `resolveLayout` test,
+      `keeps a stored rename equal to the platform label when the org relabels the tab`, with the
+      relabel happening *after* the payload is stored, per the finding's own instruction. Being a
+      prose fix it was green on arrival — recorded honestly rather than dressed up as a red — so it
+      was checked for vacuity instead: under row 2's mutation (`label: tab.label`) it fails with
+      `expect(received).toBe(expected) // Object.is equality / Expected: "Accounts" / Received:
+      "Accts"`. It asserts three things a future change would have to notice: the row is
+      indistinguishable from an unrenamed one while the label stands, it renders the stored wording
+      and *not* the new one after the relabel, and a `serializeLayout`/`deserializeLayout` round
+      trip preserves the key. **No production file changed**; the box is closed by correcting a
+      claim, not by changing behaviour.
+      **Criterion 6, as reworded above, is over-claimed for a payload that already stores a `rename`
       equal to the platform label.** The Deviations section now says criterion 6 "holds for every
       item *shown under the platform label*, not only for those that never had a rename". It does
       not. The fix is on the *write* path only — `renameItem` refuses to store wording equal to the
@@ -527,6 +581,15 @@ retrieved with `--target-metadata-dir <scratchpad> --unzip` — the form that ca
 tree — and diffed against `git show HEAD:<path>`. **Every one differs only by the trailing newline
 the platform strips on retrieve**, so `--ignore-conflicts` was used; the deploy then reported all 10
 files `Changed`, `Status: Succeeded`, Deploy ID `0AfO800000ZSJZpKAP`.
+
+**Verification, second fix pass.** `npm test` is **313 passed across 5 suites**. All 22 rows were
+re-run by the same pattern-checked runner — it aborts on a non-unique or missing match, and every file
+is restored from an in-memory original — nothing survived, and the one moved count is diagnosed under
+the table. `npm run lint`, `npm run lint:slds-gate` and `npm run prettier:verify` are clean;
+`grep -rn 'splice' force-app | grep -v __tests__` returns exactly the two lines in `reorder`.
+`sf project deploy start` reported **`No changes to deploy`** — no source-tracking conflict and no
+retrieve-and-diff needed, because this pass changed no production file at all: the only edits are one
+`it` block in `navigatorLayoutModel.test.js` and this slice. `git status` shows exactly those two.
 
 One operator error is recorded rather than hidden: a `git checkout` on
 `navigatorLayoutModel.js`, used mid-session to undo a probe, reverted the finding-5 fix along with
