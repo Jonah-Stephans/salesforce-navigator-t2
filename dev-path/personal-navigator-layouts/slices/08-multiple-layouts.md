@@ -9,7 +9,7 @@ touches:
   - force-app/main/default/lwc/salesforceNavigator/salesforceNavigator.css
   - force-app/main/default/lwc/salesforceNavigator/__tests__/salesforceNavigator.test.js
 done: true
-fix_cycles: 0
+fix_cycles: 1
 ---
 
 # Keep more than one layout and switch between them
@@ -364,3 +364,74 @@ test now opens all three dialogs and would catch it on its own.
       `with sharing`, the one query is `WITH USER_MODE` *and* predicated on `OwnerId`, and every new
       `Database.update`/`Database.delete` passes `AccessLevel.USER_MODE`. Dropping the `OwnerId`
       predicate fails `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack`.
+
+- [ ] **A change made *while the delete of that layout is in flight* is sent to the deleted row, and
+      the user is shown a save error about a layout that no longer exists — beside a screen already
+      showing a different layout.** `deleteCurrentLayout` calls `discardPendingSave()` at the moment
+      of the gesture, which covers a change made *before* it. It does not cover the round trip:
+      `scheduleSave` goes on capturing `layoutId: this.layoutId`, and until `deleteLayout` resolves
+      and `adoptFromStore` runs, `this.layoutId` is still the layout being deleted. So a change made
+      during the call is captured against a doomed id, the debounce fires after the row is gone, and
+      `persist` calls `updateLayout({layoutId: <the deleted id>})`, which the controller refuses via
+      `findOwned`. Reproduced against the shipped code with a `deferNextDelete` seam mirroring
+      `deferNextActivation`: install `threeRows()`, open Delete layout…, click `Delete layout`,
+      `await flush()`, then `selectSectionMenuItem(element, 0, "columns-6")` and `await flush()`,
+      then release the delete, flush, and advance the timer. Result: exactly one `updateLayout` call,
+      naming `SECOND_ID` which is no longer in the store; the store ends `["Selling", "Admin"]`; the
+      screen shows `Admin`; and `[role="alert"]` reads *"We could not save your layout. Your last
+      change may not be kept."* That is precisely the failure `discardPendingSave`'s own doc comment
+      says the discard/flush distinction exists to prevent — *"a failure would report a save error
+      about a layout that no longer exists"* — so the rationale is honoured on one side of the call
+      and not the other. **Severity is low: no data is lost.** The change was made on the layout the
+      user had just asked to delete, and the fix to the first finding is what keeps it off the
+      successor row, so the damage is a misleading alert rather than a wrong write. A fix would keep
+      the doomed id for the duration of the call — record it when `deleteCurrentLayout` queues, and
+      have `save()` (or `scheduleSave`) drop a target whose `layoutId` matches it — and clear it when
+      `adoptFromStore` runs. A test that makes a change while the delete is deferred and asserts
+      `updateLayout` was never called, plus that no `[role="alert"]` is shown, would pin it.
+
+- [x] false positive — *`pendingSave` is new mutable state on the hot path that leaks or goes stale*.
+      Five interleavings driven against the shipped code, each with the relevant call held open:
+      a change during a switch that then **fails** (the change lands on the layout it was made on,
+      `columns: 6` on `SECOND_ID`, the user stays on `Support`, `activeName()` stays `Support`);
+      two changes in one window (one `updateLayout`, carrying the **latest** payload, `columns: 3` —
+      the debounce contract, not a loss); a rejected save with a further change behind it (two calls,
+      final payload correct, and the alert clears when the second succeeds); a change during a create
+      (its own row, and the created layout stays checked in the menu). The field is set only in
+      `scheduleSave`, consumed and cleared only in `save()`, and cleared in `discardPendingSave` —
+      so it is never set without a live timer and never survives its own write. The one interleaving
+      that does misbehave is the delete round trip, recorded above as a finding in its own right.
+
+- [x] false positive — *`makeActive == true || isOnlyCandidate` is a fourth meaning on the same
+      boolean that can end with two active or none*. Driven by mutation in **both** directions
+      against the org, which is what proves the pair discriminates rather than agrees.
+      Reverting to `Is_Active__c = makeActive == true` fails only
+      `aCreateThatClaimsNoFlagStillLeavesTheUserWithAnActiveLayout` (*Expected: 1, Actual: 0*) and
+      leaves `aCreateThatClaimsNoFlagDoesNotTakeItFromTheLayoutThatHasIt` green; forcing
+      `Is_Active__c = true` fails only the second (*Expected: 1, Actual: 2*) and leaves the first
+      green. So neither "a create never claims the flag" nor "a create always steals it" passes the
+      pair. `anyActiveIn` reads `ownLayouts()`, which is already `OwnerId`-predicated, so the
+      candidacy test is per-owner; and the client never reaches the `false` branch anyway —
+      `createNewLayout` and `persist` both send `makeActive: true`.
+
+- [x] false positive — *the `store.deferNextCreate` seam is production code, or a test seam bolted
+      onto the store*. It is neither. Both `deferNextCreate` and `deferNextActivation` are defined
+      inside `installStore` in `salesforceNavigator.test.js` — a fixture-local helper on the jest
+      fake, wrapping `createLayout.mockImplementationOnce`. Nothing in `salesforceNavigator.js` or
+      `NavigatorLayoutController.cls` knows they exist.
+
+- [x] false positive — *a mutation count fell on the re-run, or mutation 1 is overstated*. Re-ran all
+      seven against the shipped code. Nothing survived and no count fell. Apex, measured in the org:
+      mutation 3 (`deleteLayout` never activates a successor) fails 3; mutation 4 (`deactivations`
+      returns nothing) fails 6 — both exactly as tabled. jest: mutation 2 fails 2, mutation 5 fails 2,
+      mutation 6 fails 6 — exactly as tabled. Mutation 1 read literally (`persist` takes
+      `this.layoutId` at write time rather than `target.layoutId`) fails **3**, one more than the
+      table's 2: *…is written to the layout it was made on*, *…survives the switch landing before the
+      debounce fires*, and *a change made while a new layout is being created…*. Mutation 7 is the
+      one cell I could not reproduce at 18, because "strips `rename` out of the adopted payload" does
+      not say which adoption path; applied to `adoptFromStore` alone it fails 1 (*switching
+      re-renders … and renames*), and applied to both paths it would take the load-path tests with
+      it. Caught either way, so the claim stands. Separately verified that each fix's own pin goes
+      red when that fix is undone: the create-adoption guard (1 red), `flushPendingSave` in
+      `switchToLayout` (1), `discardPendingSave` in `deleteCurrentLayout` (1), the rename rollback
+      (1), and `activeRowIn`'s `|| readable[0]` (3, including the two pre-existing load-path tests).
