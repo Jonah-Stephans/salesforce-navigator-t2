@@ -21,6 +21,7 @@ touches:
   - test/jest-mocks/lightning/modal.js
   - jest.config.js
   - eslint.config.js
+fix_cycles: 0
 done: true
 ---
 
@@ -295,3 +296,123 @@ this slice — and the untracked `sketches/` directory belonging to a parallel s
 neither edited nor staged.
 
 ## Critique findings
+
+- [ ] **The Add items button has the same accessible name on every card, so criterion 2's one verified
+      clause is weaker than it reads.** `navigatorSection.html` gives it `title={addItemsLabel}` while
+      its visible text is the literal `label="Add items"`. A `<button>`'s accessible name comes from
+      its content before its `title` (HTML-AAM), so `title` is a mouse tooltip and nothing else: every
+      section in the layout announces "Add items", which is exactly the failure the comment above the
+      button and the Deviations section ("with the section named on it") both say has been avoided.
+      The test that appears to cover it, `navigatorSection.test.js:1136` "names the section on the Add
+      items button", asserts `.title` — it pins the tooltip, not the name. The picker's own entries get
+      this right with `aria-label={item.assistiveLabel}`, which is why row 29 is a real row and this is
+      not. Fix by putting the section name into the button's `label` (or by rendering a plain `<button>`
+      with an `aria-label`, as the picker entries do); `lightning-button` exposes no `aria-label`
+      passthrough, so `title` cannot be made to do this job. Re-assert on the computed accessible name,
+      not on `title`: mutating `title={addItemsLabel}` to a constant `title="Add items"` fails exactly
+      1 test today, which is the tooltip assertion and not an accessibility one.
+- [ ] **Two guards this slice's Deviations calls load-bearing are asserted by nothing — both survive
+      deletion with the suite fully green at 393.** (a) `salesforceNavigator.addChosenItem`'s
+      `if (!tabId) { return; }`: removing it leaves 393 passing, because `addItemToSection` refuses an
+      id absent from `tabs` and the payload-equality comparison then swallows the no-op. The Deviations
+      say opening and cancelling are "guarded twice … on the resolved value being falsy, and on the
+      payload-equality comparison"; only the second guard is exercised. (b) `handleItemRemove`'s
+      `if (serializeLayout(next) === serializeLayout(this.layout)) { return; }`: removing it also leaves
+      393 passing. That is the more consequential of the two — its own comment says it is what keeps a
+      removal that stores nothing from creating a layout row for a user who has only ever looked, which
+      is slice 03's criterion. Nothing in the suite drives a removal that names no item on screen. Two
+      tests are wanted, both against a user `getLayouts` returns nothing for, both asserting
+      `createLayout` is never called: one firing `itemremove` with an index that names no rendered item,
+      and one closing the picker with a falsy-but-not-`undefined` value.
+- [ ] **Row 30's general form is still open on two older model functions, which is the direct answer to
+      "do the older purity assertions share the hole".** The per-*item* half is now closed — making
+      `copySection` return `items: itemsOf(section).slice()` (new array, the caller's own item objects)
+      fails 6. But `deleteSection` and `addSection` have no `hands back copies` test at all, and each
+      drops `copySection` with the suite fully green: `sections.filter((_section, at) => at !== index)`
+      without `.map(copySection)` → **0 failed**, and `[...sectionsOf(layout), {…}]` without
+      `.map(copySection)` → **0 failed**. Both then hand the caller's own section objects straight back.
+      No live defect today (nothing mutates a layout in place), but it is the same latent aliasing row 30
+      found, and this slice raises the stakes on `deleteSection` specifically: criterion 6 routes its
+      output into `applyLayout` and into `availableTabs`. Give each of them the same three-level
+      assertion `removeItem` now carries — per section, per `items` array, and per item, plus a
+      write-through check.
+- [ ] **The picker tells a screen-reader user nothing about what the search found.** There is no live
+      region anywhere in `navigatorItemPicker.html`. Typing narrows the list silently, and both empty
+      states — `{noMatchMessage}` and "Every tab you can reach is already in this layout." — are plain
+      `<p>`s that appear and disappear with no announcement. A sighted user watches 174 entries become
+      one; a screen-reader user gets no feedback from the one control the criterion says makes 174 items
+      usable and has to tab into the list to find out whether anything matched. Add a polite live region
+      carrying the match count and, when there are none, the relevant empty-state sentence. Assert it as
+      a region a user is *told* about, the way the section and navigator announcers are asserted, not
+      merely as text present in the shadow root.
+- [ ] **A picker resolved after the Navigator is disconnected schedules an autosave timer nothing will
+      flush.** `LightningModal.open` mounts the picker outside this component's tree, so it outlives the
+      Navigator; `handleSectionAddItems`'s `.then((tabId) => this.addChosenItem(sectionIndex, tabId))`
+      has no connected check and no `.catch`. A user who leaves the Navigator tab with the picker open
+      and then chooses an item runs `applyLayout` → `scheduleSave` on a destroyed instance, starting a
+      1s `setTimeout` that `disconnectedCallback` has already come and gone for. Every other write path
+      in this file is driven by a template event and therefore cannot fire after disconnect; this is the
+      first that can, and it is the exact hazard the `@lwc/lwc/no-async-operation` disable comment in
+      `scheduleSave` argues is closed. No test covers it. Guard `addChosenItem` (or the `.then`) on the
+      component still being connected, and add a test that disconnects the element between `open()` and
+      the click.
+- [ ] **The modal mock silently drops two of the three config values the parent passes it, and one of
+      them is the dialog's accessible name.** `open()` applies config with `element[key] = config[key]`,
+      which in LWC only reaches the component for `@api` properties. `availableItems` and `sectionName`
+      are `@api` on the picker and do reflect; `label`, `size` and `disableClose` are plain fields on the
+      mock's base class, so they land as unknown own-properties on the host (LWC logs "Unknown public
+      property" for each) and the component never sees them. Demonstrated rather than reasoned:
+      `open({ disableClose: true })` followed by Escape still closes the modal. The consequence for this
+      slice is that `handleSectionAddItems` passes `label: "Add items to <section>"` — the dialog's
+      accessible name in the real platform — through a path that could not carry it and that no test
+      asserts, so criterion 2's dialog naming is unverified in a second way beyond the one the
+      Deviations already own. Declare `label`, `size`, `description` and `disableClose` as `@api` on the
+      mock base (or assert them off the host in a test), so a future `disableClose` is not silently
+      ignored under test while working in the org.
+- [x] false positive — that `removeItem`'s resolved index could renumber, move or drop an id the running
+      user cannot reach. Probed directly against the shipped module with twelve fixtures: unreachable
+      first, unreachable last, two consecutive unreachable at the head, two consecutive in the middle,
+      the interleaved `X A Y B Z` with each of the two visible positions removed, everything
+      unreachable, and indices past the end, `-1` and `0.5`. In every case the item the user can see is
+      the one that goes and every unreachable id keeps its exact stored position; the out-of-range and
+      non-integer cases return the layout unchanged. Row 6 (`removeItem` reading the stored index) bites
+      at 3 and row 21 (taking out every item) at 7.
+- [x] false positive — that `addItemToSection` taking an id rather than an index leaves a hole somewhere
+      else. Probed with the id already in that same section, in a *different* section, absent from
+      `tabs`, `""`, `undefined`, `null`, numeric `0` and an object: all eight return the layout
+      unchanged. A successful add stores `{id}` and nothing else, and it neither reads nor writes a
+      `rename` on any item — an existing rename elsewhere in the layout is untouched. Rows 16, 17 and 18
+      all bite.
+- [x] false positive — that criterion 6 being "satisfied by accident" means it could regress unnoticed.
+      Verified rather than accepted: `deleteSection` is not touched by this commit, it drops the section
+      outright, and `availableTabs` collects `placed` across every section of the layout, which is the
+      condition that makes the ids reappear. It is asserted at the model level
+      (`navigatorLayoutModel.test.js:1443`) and end to end twice
+      (`salesforceNavigator.test.js:3089` and `:3103`, the second of which also checks the payload that
+      is written). Making a deleted section's ids stay "placed" fails 12.
+- [x] false positive — that opening, cancelling or escaping the picker could reach a write from some
+      direction slice 06's finding suggests. All three are driven against a user `getLayouts` returns
+      nothing for, so any write would be a `createLayout`, and both `createLayout` and `updateLayout` are
+      asserted uncalled after the autosave has been settled. Select-then-cancel is unreachable rather
+      than untested: `close()` in the mock is idempotent and the entry click removes the element.
+      Row 8 (opening triggers a save) bites at 3.
+- [x] false positive — that `resetModals()` leaks a still-mounted picker into the next test. It does
+      leave the element in `document.body` and its `open()` promise pending, but both suites that use it
+      clear `document.body` in their own `afterEach` (`navigatorItemPicker.test.js:89`,
+      `salesforceNavigator.test.js:198`), so nothing crosses a test boundary. Worth knowing if a third
+      suite ever imports the mock without that hook.
+- [x] false positive — that the new operations could put `resolveLayout`'s output into stored state.
+      Neither `removeItem` nor `addItemToSection` builds an item from a resolved one: `removeItem`
+      filters the stored list by position and `addItemToSection` appends `storedItem(tabId, undefined)`.
+      The end-to-end reload tests re-mount a Navigator on the payload that was actually written and get
+      `{id}` / `{id, rename}` back, with unreachable ids still in place
+      (`salesforceNavigator.test.js:2888`).
+- [x] false positive — that the 31-row table might not reproduce. Re-run independently, every row bites.
+      Row 27 reproduces the build's own note exactly: applied as a single tag it breaks the template and
+      the picker suite fails to compile (the run reports 253 tests, not 393, so the count cannot be
+      trusted); applied as a well-formed pair it fails **1**, as recorded. Rows whose counts differ from
+      the table differ only because my wording of the mutation differs — row 4 (Escape commits a
+      selection, applied in the mock) 3 rather than 1, row 5 (a constant destination section) 4 rather
+      than 3, row 7 (a deleted section's ids stay placed, applied as a memo inside `availableTabs`) 12
+      rather than 5, row 16 2 rather than 1. All the rest reproduce at the recorded count, including
+      10 at 22, 15 at 22, 19 at 14, 28 at 13, 21 at 7, 1 at 16 and 30/31 at 1.
