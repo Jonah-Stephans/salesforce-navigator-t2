@@ -21,7 +21,7 @@ touches:
   - test/jest-mocks/lightning/modal.js
   - jest.config.js
   - eslint.config.js
-fix_cycles: 1
+fix_cycles: 2
 done: true
 ---
 
@@ -745,3 +745,115 @@ directory was neither edited nor staged.
       convention. `aria-live="polite"` with `aria-atomic="true"` is the right pair for a status that
       narrows as you type: assertive would interrupt the keystroke the user is still making, and
       non-atomic risks a reader voicing only the digit that changed.
+- [ ] The Add items button's accessible name silently loses the "Unnamed section" fallback under
+      mutation: changing `navigatorSection.addItemsAssistive` from `` ` to ${this.cardLabel}` `` to
+      `` ` to ${this.name}` `` leaves the suite fully green at **409**. The shipped code is correct —
+      it reads `cardLabel`, which is the slice 04 fallback — but nothing asserts it, so the one input
+      shape the fallback exists for is uncovered on the very control this whole thread exists to
+      protect. A stored layout can arrive with a blank or all-whitespace section name
+      (`navigatorSection.js:213-217` says so in as many words, and `handleRenameCommit` only refuses
+      *new* blank names), and on that layout the regressed getter announces the button as
+      "Add items to" with nothing after it — a control named after nothing, which is the same defect
+      class finding 1 was raised for. Every neighbouring branch of this fix *is* pinned: dropping the
+      assistive span fails 2, making it visible fails 3, putting the section name back in the visible
+      wording fails 4, and dropping the leading space from the getter fails 1. Only the blank-name
+      branch is not. Add a test in `navigatorSection.test.js`'s `adding and removing items` describe
+      that creates a section with `name: ""` (or `"   "`) and asserts the button's computed
+      accessible name — `accessibleNameOf(addButtonOf(element))`, the helper already in that file —
+      is `"Add items to Unnamed section"`. The existing blank-name test at
+      `navigatorSection.test.js:898` covers only the card's `aria-label`, which is why this survives.
+- [x] false positive — that the button wanting `slds-button slds-button_neutral` is a real gap,
+      given that "a button that looks like a button" differs from a list entry. Checked against the
+      shipped stylesheet rather than reasoned: `.rstk-nav-section__add` is a *complete* neutral-button
+      recipe from semantic hooks — padding, `border-2` (the functional colour, which is the right one
+      for an interactive control), the dense `radius-border-1`, `surface-container-1` background,
+      `on-surface-2` text, `font-scale-1`, `font-weight-6`, a hover on `surface-container-2` and a
+      `--slds-g-shadow-outline-focus-1` focus ring. Adding `slds-button_neutral` on top would layer a
+      second, independently-versioned definition of the same six properties over it, which is a
+      conflict rather than an improvement; and `navigatorItemPicker.css` establishes exactly this
+      pattern for the repo's other hand-rolled buttons. Every hook used is `--slds-g-*` in
+      `var(--hook, fallback)` form with the fallback the linter itself suggests, and not one of them
+      is in the 38 that carry no `light-dark()` — no `palette-*`, no `*-base-50`/`*-base-100`, no
+      `accent-container-1`, no `disabled`, no `accent-light-*`/`accent-dark-*` — so the control
+      resolves per colour mode with no `prefers-color-scheme` and no JS branch, and the stylesheet
+      test's negative assertion pins that. `npm run lint`, `npm run lint:slds-gate` (six assertions
+      ok) and `npm run prettier:verify` are clean.
+- [x] false positive — that the `addItemsAssistive` getter is "indirection for nothing" because the
+      whitespace claim behind it is false. The claim as *worded* is imprecise, but the getter is the
+      right call for a reason the comment does not give, and the critic's inline sketch would have
+      been worse. Verified by compiling rather than by reading docs: `@lwc/template-compiler` 8.28.2,
+      fed the real `navigatorSection.html` with the span rewritten to the sketch's
+      `<span class="slds-assistive-text"> to {name}</span>`, emits
+      `api_static_part(3, null, " to " + api_dynamic_text($cmp.name))` — **the single inline leading
+      space survives**, and `npx prettier --write` leaves that line byte-identical rather than
+      reflowing it. So "template whitespace either side of an expression is collapsed by the
+      compiler" is false for a plain inline space. What *is* true, and is presumably what the
+      sentence was reaching for: whitespace containing a **newline** is dropped outright — the same
+      probe with `{addItemsText}\n<span …>to {name}</span>` emits `"to "` with no leading space and
+      no trailing space on the part before it, so the moment Prettier has cause to break that line
+      the space is gone silently. The decisive point against the sketch is different again and is not
+      about whitespace at all: the sketch interpolates `{name}`, and the getter interpolates
+      `cardLabel`, which is the only thing that keeps a blank stored name from producing
+      "Add items to". The getter is therefore load-bearing, not indirection. The rationale in
+      `navigatorSection.js` and in `## Deviations` overstates its case, which is a wording matter and
+      not a defect in the control. The template file was restored byte-identically — `git status`
+      shows no modification to it.
+- [x] false positive — that dropping the button's `title` while keeping `title={cardLabel}` on the
+      `<h2>` is inconsistent, since the heading's `title` is byte-identical to its own text whenever
+      the name is non-blank and therefore repeats it the same way. The two cases genuinely differ.
+      The `<h2>` is non-interactive and its `title` is there for a *pointer* over text the stylesheet
+      now clips with an ellipsis — the standard idiom for CSS-truncated content, and the only way a
+      mouse user reads a name they can no longer see in full. The button's `title` was on an
+      interactive control that is focused, whose accessible name is computed from its content and
+      whose `title` is then voiced as the *description* on that focus — two announcements of one
+      sentence on one Tab stop. Nothing on the `<h2>` is focused, so there is no second announcement
+      to collide with, and a screen reader user already has the full name on the card's own
+      `aria-label`. Checked in the shipped template: the `title` is on the `lwc:else` branch only, so
+      it is absent while the rename input is up, and `.rstk-nav-section__title` really does carry
+      `overflow: hidden; white-space: nowrap; text-overflow: ellipsis`, which is what makes the
+      tooltip earn its place.
+- [x] false positive — that the truncation change breaks the rename input, the overflow menu or the
+      drag affordance, or that the two new stylesheet tests are written so they cannot fail. Read the
+      whole header: `.rstk-nav-section__rename` gained the matching `min-width: 0` in the same pass,
+      so the input shrinks exactly as the heading it replaces does; `lightning-button-menu` has no
+      rule at all and so keeps its default `flex-shrink: 1` with a min-content floor set by its own
+      fixed-size icon, which is why it does not squash; `.rstk-nav-section__add` is explicitly
+      `flex: 0 0 auto` with `white-space: nowrap`. The card's `draggable`/`tabindex` are on the
+      `<article>` and untouched. On the tests: they were mutated rather than trusted — deleting
+      `min-width: 0` and the ellipsis from `.rstk-nav-section__title` fails **1**, and replacing the
+      focus-ring `box-shadow` with `opacity: 1` fails **1**, so both bite on the property they
+      claim. `expect(base[0]).toContain("--slds-g-")` on its own is weak, but it is not the load
+      the rule carries: `npm run lint:slds-gate` and `no-slds-var-without-fallback` police hook
+      policy, and the negative `expect(css).not.toMatch(/prefers-color-scheme|--slds-c-|--lwc-/)` is
+      the assertion that catches the dark-mode escape hatch nothing else can.
+- [x] false positive — that the hand-rolled button stops behaving like a button. It is a native
+      `<button type="button">`, so Enter and Space fire `click` with no key handler of this
+      component's, and it sits in DOM order between the `<h2>` and the overflow menu, which is its
+      tab order. The one interaction worth checking is that Space on it does not also grab the whole
+      card: `handleCardKeydown` is bound on the `<article>` and returns immediately unless
+      `event.currentTarget === event.target`, and for a `<button>` in this same shadow root the
+      target is the button, so the guard holds and the section is not grabbed. It is never disabled,
+      and the hit area is ~27px tall (0.875rem text plus `spacing-1` top and bottom plus the 1px
+      border), which clears the 24x24 CSS-pixel target-size floor. `type="button"` itself survives
+      deletion with the suite green, but there is no `<form>` anywhere in this component tree for a
+      default `submit` to reach, so that is untested defensiveness rather than an untested behaviour.
+- [x] false positive — that a row of the mutation table has started surviving, or that row 6's
+      explanation for landing at 3 rather than 4 does not hold. Re-run against HEAD with a runner
+      that aborts on a pattern matching other than exactly once. Row 6's two wordings are not the
+      same mutation, which is the whole explanation: anchoring on `storedSource` (`const storedAt =
+      itemIndex;`) *also* deletes the `if (storedAt === undefined) return unchanged;` out-of-range
+      guard, so it takes down one extra test — and that pattern is non-unique in
+      `navigatorLayoutModel.js` (`renameItem` carries the identical statement), which is why the
+      runner aborted on it here exactly as the previous critic recorded. The narrower wording, the
+      resolved index run into `removeItem`'s own `filter` predicate, fails **3**, which is the number
+      the build recorded and above nothing. The rows this pass's fix actually rewrote all still bite
+      at or above their recorded counts: row 10 (the hand-rolled `<button>` block deleted) **26**,
+      row 14 (the `emptyMessage` getter emptied of its second half) **2**, row 29 (a picker entry's
+      `aria-label` dropped) **1**. So does the pass's own five: the assistive span deleted **2**, the
+      span made visible **3**, the section name put back in the visible wording **4**, the heading's
+      truncation dropped **1**, the focus ring taken off **1**. Two further mutations of my own on
+      this pass's code: the leading space dropped from the getter fails **1** (so the space is
+      pinned, and pinned on the computed name rather than on the string), and the `<button>` turned
+      into a `<div>` carrying the same `onclick` fails **20**. The only survivor found is the
+      blank-name fallback, raised above. `npm test` is 409 across 6 suites before and after every
+      mutation, and every file was restored — `git status` shows only this slice modified.
