@@ -23,12 +23,21 @@ block of ten or more lines is repeated across its methods.
       returns `null` rather than throwing when no layout is active — matching `activeName()`
 - [x] met `activatingOneLayoutClearsTheFlagOnTheOthers` and
       `activationStaysOneUpdateAcrossTwoHundredLayouts` obtain the active count from `activeCount()`
-      and the active id from `activeId()`; neither method still contains an inline
-      `Navigator_Layout__c` query
+      and the active id from `activeId()`; neither method still contains an inline copy of either
+      routed shape. Restated at the design gate on 2026-08-27: the earlier closing clause read "neither
+      method still contains an inline `Navigator_Layout__c` query", which was false word for word —
+      both methods open with a `WHERE Name = …` setup query, and those are Group D queries that the
+      criterion below requires to stay unchanged, so the two could not both hold literally
 - [x] met every `Assert` call in those two methods keeps its own message string, unchanged and at the call
       site — the messages are the only thing that distinguished the two duplicated blocks
-- [ ] no block of ten or more lines appears in more than one method anywhere in
-      `NavigatorLayoutControllerTest.cls`, per `.claude/rules/rstk-dry-enforcement.md`
+- [ ] neither block this spec's access-mode fix created still appears in more than one method:
+      `activatingOneLayoutClearsTheFlagOnTheOthers` and
+      `activationStaysOneUpdateAcrossTwoHundredLayouts` share no run of ten or more identical lines,
+      per `.claude/rules/rstk-dry-enforcement.md`. **Scoped to this spec's own duplication**, restated
+      at the design gate on 2026-08-27 — the `getLayouts()` `Test.startTest()` / `Test.stopTest()`
+      sandwich shared by the read-path tests predates this spec, was never covered by any pass of it,
+      and is excluded on the record (`spec.md`, `## Out of scope`). The earlier file-wide wording was
+      false of this file before the fix and after it
 - [x] met the owner-scoped queries in `activatingOneUsersLayoutDoesNotDisturbAnother` are unchanged and
       still inline, with their pointer comments intact — they are not duplicated and are deliberately
       out of scope (`spec.md`, `## Open questions`)
@@ -54,6 +63,11 @@ block of ten or more lines is repeated across its methods.
       to both inline copies — so the literal reading could be satisfied with no new helper at all, at
       the cost of deleting two Group D queries. Either way, no change to which queries this slice
       touches; the two routed shapes are the same set.
+
+      Superseded in text at the design gate on 2026-08-27: `devpath:slice` restated criterion 2 to say
+      what was built, so the reading no longer has to be carried here. Kept on file as the record of
+      how it was decided, and because the `layoutIdNamed(String)` observation is still the thing anyone
+      revisiting that clause would want.
 
 - [x] fixed — **Resolved at the design gate on 2026-08-27: option 1. Criterion 4 and `## Outcomes`
       bullet 2 mean the duplication this spec created, and this slice is complete as it stands.** The
