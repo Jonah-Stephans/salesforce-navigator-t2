@@ -4,7 +4,7 @@ depends_on:
 touches:
   - force-app/main/default/classes/NavigatorLayoutControllerTest.cls
 done: true
-fix_cycles: 4
+fix_cycles: 5
 ---
 
 # Route the duplicated active-layout queries through helpers
