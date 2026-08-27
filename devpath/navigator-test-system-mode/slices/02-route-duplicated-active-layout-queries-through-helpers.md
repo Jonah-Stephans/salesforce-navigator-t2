@@ -55,7 +55,20 @@ block of ten or more lines is repeated across its methods.
       the cost of deleting two Group D queries. Either way, no change to which queries this slice
       touches; the two routed shapes are the same set.
 
-- [ ] **Criterion 4 is stated file-wide, and a 14-line duplicated block in this file predates the
+- [x] fixed — **Resolved at the design gate on 2026-08-27: option 1. Criterion 4 and `## Outcomes`
+      bullet 2 mean the duplication this spec created, and this slice is complete as it stands.** The
+      engineer took the narrow scope on all three grounds the pause laid out, and the pre-existing
+      `getLayouts()` sandwich is now recorded under `spec.md`'s `## Out of scope` with those grounds
+      written down, rather than absorbed silently — a later reader finding a ten-line duplicate in this
+      file lands on that paragraph. `## Current state` and `## Design`'s routing section were updated to
+      match, `## Design`'s "nothing moves into the helper except the query" rule stands unrevised, and
+      the general question the two repo rules disagree on — whether touching a legacy file means owning
+      its pre-existing DRY violations — is on file under `## Open questions`, unanswered on purpose and
+      owned by whoever maintains `rstk-dry-enforcement.md` and `rstk-legacy-boyscout.md`. Criterion 4 is
+      restated by `devpath:slice` in the same session. Nothing further is built for this slice; what
+      remains is the deploy, the tick and `done: true`. Original pause text follows.
+
+      **Criterion 4 is stated file-wide, and a 14-line duplicated block in this file predates the
       spec entirely. Does this slice extract that too, or is criterion 4 about the blocks this spec
       created? Design decision needed.**
 

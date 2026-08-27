@@ -1,7 +1,6 @@
 ---
 type: bug
 intent_accepted: true
-design_approved: true
 ---
 
 # Navigator test verification queries silently inherited Apex's new default execution mode
@@ -33,8 +32,11 @@ progress, and still a failed deploy. `## Current state` holds the full inventory
   state regardless of which identity is running the test. Enumerated in `## Current state`, by
   enclosing method. **Deliberately no count here** — the number changes whenever a query is routed
   through a helper, and re-deriving it has already been wrong twice. The property is the Outcome.
-- No block of ten or more lines appears in more than one method in that file, per
-  `.claude/rules/rstk-dry-enforcement.md`.
+- No block of ten or more lines **that this spec's own change created** appears in more than one method
+  in that file, per `.claude/rules/rstk-dry-enforcement.md`. **Scoped to this spec's own duplication
+  deliberately**, decided at the design gate on 2026-08-27: the earlier file-wide wording was never true
+  of this file, before the fix or after it. The longer-standing duplicated block it was false about is
+  named under `## Out of scope`, so scoping this Outcome does not bury it.
 - `sf project deploy start --test-level RunLocalTests` against a freshly created scratch org holding
   none of this spec's metadata, with no permission set assigned to the org's default admin, deploys
   clean: the whole-payload deploy succeeds and every local test passes.
@@ -53,6 +55,24 @@ progress, and still a failed deploy. `## Current state` holds the full inventory
   rules) — a separate, non-Salesforce-metadata effort tracked outside devpath.
 - Auditing other Rootstock Apex codebases for the same latent API-67 default-mode risk. Real and
   worth doing, but a different repo's concern.
+- **The `getLayouts()` sandwich duplicated across `NavigatorLayoutControllerTest`'s read-path tests.**
+  Six methods open with the same shape — declare a `List<NavigatorLayoutController.LayoutDTO>`, then
+  `Test.startTest()` / `System.runAs(owner)` / `getLayouts()` / `Test.stopTest()`;
+  `anUnreadableFutureSchemaVersionIsReportedOnItsOwnRowRatherThanGuessedAt` and
+  `aStoredPayloadThatIsNotJsonIsReportedOnItsOwnRowRatherThanFailingTheRead` share fourteen
+  byte-identical lines of it, and ten-line windows also reach
+  `getLayoutsReturnsTheOwnersRowsInSortOrder` and `aV1RowIsUpgradedToV2OnRead`. Confirmed present on
+  `main`: it predates this spec, no pass of this spec surveyed it, and neither slice touched it.
+  **Excluded at the design gate on 2026-08-27, on three grounds.** The repeated lines *are*
+  `Test.startTest()` / `Test.stopTest()`, so extracting them moves Apex's governor-limit measurement
+  window out of the test body — in a suite whose bulk test,
+  `activationStaysOneUpdateAcrossTwoHundredLayouts`, exists to watch that window. Its only available
+  verification is a green test run, and `## Traps` is this spec's own case study in green proving nothing
+  here, which is the worst possible way to verify a structural refactor of six test methods riding
+  inside an access-mode bug fix. And `.claude/rules/rstk-legacy-boyscout.md` forbids the move in as many
+  words: "Do NOT refactor code you are not modifying for your current task." Recorded rather than
+  absorbed silently — a later reader finding a ten-line duplicate in this file should find this
+  paragraph, not conclude the fix missed it.
 
 ## Open questions
 
@@ -60,6 +80,17 @@ progress, and still a failed deploy. `## Current state` holds the full inventory
   `WITH USER_MODE`) also flag test-verification-helper queries that should instead declare
   `WITH SYSTEM_MODE`? The mirror case to the rule it already enforces. Owner: whoever maintains that
   rule; out of scope for this spec's own fix.
+- **When a change touches a legacy file, does it own that file's pre-existing DRY violations?** This
+  repo's two rules currently give contradictory answers, which is what made the scope decision above a
+  judgment call rather than a lookup: `.claude/rules/rstk-dry-enforcement.md`'s minimum pre-PR check is
+  to "scan all new/modified files for blocks of 10+ lines that appear in more than one method" — file-wide
+  on any modified file — while `.claude/rules/rstk-legacy-boyscout.md` lists "do NOT refactor code you
+  are not modifying for your current task" in its danger zone. Every spec touching a large legacy Apex
+  file hits the same fork. Deliberately recorded as the question rather than answered here: resolving it
+  properly means reading both rules against several real cases, and either rule's author may have meant
+  something narrower than the text says. Owner: whoever maintains those two rules. Out of scope for this
+  spec, which decided only its own case and said so in `## Out of scope`. The mirror of the
+  `rstk-security.md` question below.
 - The owner-scoped queries in `activatingOneUsersLayoutDoesNotDisturbAnother` — a `COUNT()` and a
   `SELECT Name`, each filtered on `Is_Active__c` and `OwnerId` — are near-variants of `activeCount()`
   and `activeName()` and stay inline. Each appears exactly once, so extracting
@@ -93,30 +124,37 @@ this design got wrong, and it is what puts the `COUNT()` queries below in scope.
 - `storedLayouts()` — selects all four custom fields, orders by `Sort_Order__c`. Called from 8
   write-path tests.
 - `sectionNameOf(String)` — selects `Layout_JSON__c`.
-- `activeCount()` — `COUNT()` filtered on `Is_Active__c`.
+- `activeCount()` — `COUNT()` filtered on `Is_Active__c`. Called from the two activation tests.
 - `activeName()` — selects `Name`, filtered on `Is_Active__c`; returns `null` when nothing is active.
+- `activeId()` — selects `Id`, filtered on `Is_Active__c`; returns `null` when nothing is active,
+  matching `activeName()`. Added by slice 02, called from the two activation tests.
 
 ### Group B — inline queries in test bodies. All declare `WITH SYSTEM_MODE` already.
 
 None sits inside a `System.runAs` block, so none bears on Outcome 3.
 
-| Enclosing method                                  | Query                                                                    | Custom field, and where       |
-| ------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------- |
-| `aV1RowIsUpgradedToV2OnRead`                      | `SELECT Schema_Version__c … LIMIT 1`                                     | `Schema_Version__c`, selected |
-| `activatingOneLayoutClearsTheFlagOnTheOthers`     | `SELECT COUNT() … WHERE Is_Active__c = TRUE`                             | `Is_Active__c`, filtered      |
-| `activatingOneLayoutClearsTheFlagOnTheOthers`     | `SELECT Id … WHERE Is_Active__c = TRUE LIMIT 1`                          | `Is_Active__c`, filtered      |
-| `activatingOneUsersLayoutDoesNotDisturbAnother`   | `SELECT COUNT() … WHERE Is_Active__c = TRUE AND OwnerId = :owner.Id`     | `Is_Active__c`, filtered      |
-| `activatingOneUsersLayoutDoesNotDisturbAnother`   | `SELECT Name … WHERE Is_Active__c = TRUE AND OwnerId = :peer.Id LIMIT 1` | `Is_Active__c`, filtered      |
-| `activationStaysOneUpdateAcrossTwoHundredLayouts` | `SELECT COUNT() … WHERE Is_Active__c = TRUE`                             | `Is_Active__c`, filtered      |
-| `activationStaysOneUpdateAcrossTwoHundredLayouts` | `SELECT Id … WHERE Is_Active__c = TRUE LIMIT 1`                          | `Is_Active__c`, filtered      |
+| Enclosing method                                | Query                                                                    | Custom field, and where       |
+| ----------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------- |
+| `aV1RowIsUpgradedToV2OnRead`                    | `SELECT Schema_Version__c … LIMIT 1`                                     | `Schema_Version__c`, selected |
+| `activatingOneUsersLayoutDoesNotDisturbAnother` | `SELECT COUNT() … WHERE Is_Active__c = TRUE AND OwnerId = :owner.Id`     | `Is_Active__c`, filtered      |
+| `activatingOneUsersLayoutDoesNotDisturbAnother` | `SELECT Name … WHERE Is_Active__c = TRUE AND OwnerId = :peer.Id LIMIT 1` | `Is_Active__c`, filtered      |
 
-**Two shapes in that table appear twice**, and after the access-mode fix expanded each from one line
-to six, the surrounding blocks became byte-identical across 24 lines in
-`activatingOneLayoutClearsTheFlagOnTheOthers` and `activationStaysOneUpdateAcrossTwoHundredLayouts`,
-differing only in two assertion message strings. That crosses
-`.claude/rules/rstk-dry-enforcement.md`'s ten-line threshold and is the remaining work — see
-`## Design`. The `COUNT()` shape is `activeCount()`'s body verbatim; the `SELECT Id` shape has no
-helper yet.
+Each of the three appears exactly once and stays inline, with its pointer comment — see
+`## Open questions` for why the owner-scoped pair is not duplication.
+
+**Four further inline sites were routed into helpers by slice 02 and no longer exist.** The
+access-mode fix had expanded two one-line queries into six-line ones, which turned a one-line
+duplication into a 24-line one: `activatingOneLayoutClearsTheFlagOnTheOthers` and
+`activationStaysOneUpdateAcrossTwoHundredLayouts` held byte-identical blocks differing only in two
+assertion message strings, crossing `.claude/rules/rstk-dry-enforcement.md`'s ten-line threshold. Both
+methods now take their active count from `activeCount()` and their active id from `activeId()`, and
+their pointer comments went away with the queries. Assertion messages stayed at the call sites. That
+duplication is gone, verified mechanically across every method in the file.
+
+**A longer-standing duplicated block in this file is deliberately not addressed** — the `getLayouts()`
+`Test.startTest()` / `Test.stopTest()` sandwich shared by six read-path tests, four of them across ten
+or more identical lines. It predates this spec, is confirmed present on `main`, and is excluded on the
+record in `## Out of scope`. Outcome 2 is scoped to this spec's own duplication for that reason.
 
 The owner-scoped pair in `activatingOneUsersLayoutDoesNotDisturbAnother` appears once each and is not
 duplication — see `## Open questions`.
@@ -171,10 +209,12 @@ this resolves the risk of the fix being misread later.
 
 ## Design
 
-**Entry point.** The existing 40 `@IsTest` methods in `NavigatorLayoutControllerTest`, run via `sf
-project deploy start --test-level RunLocalTests` (Outcome 2's own command, against a freshly created
-scratch org with no permission set on the default admin). No new test is written — the fix corrects
-existing verification queries so the existing suite reads each row's true state.
+**Entry point.** The existing `@IsTest` methods in `NavigatorLayoutControllerTest`, run via `sf project
+deploy start --test-level RunLocalTests` — the deploy Outcome's own command, against a freshly created
+scratch org with no permission set on the default admin. Confirmed unchanged at the design gate on
+2026-08-27: no new entry point, and no new test is written. The fix corrects existing verification
+queries so the existing suite reads each row's true state. (Named by content rather than by count or
+Outcome number, per this spec's convention — both have gone stale here before.)
 
 **The fix.** Add `WITH SYSTEM_MODE` to every query in Groups A and B of `## Current state`, placed
 after `WHERE` (where present) and before `ORDER BY` / `LIMIT`. Group A's helpers are shown here as the
@@ -332,6 +372,17 @@ blocks, and they are what a failure prints. Nothing moves into the helper except
 **The pointer comments on the routed queries go away with them** — the routed shapes now
 live in the helper block, directly under the full comment above `storedLayouts()`, so a pointer back
 to a comment four lines up would be noise. The remaining inline sites keep theirs.
+
+**Where the routing stops, decided at the design gate on 2026-08-27.** This routing covers the
+duplication *this spec's own fix created* and nothing else. Build paused on the question, because the
+slice's DRY criterion and Outcome 2 had both been written file-wide and the file does not satisfy that
+reading — the `getLayouts()` sandwich shared by six read-path tests predates the spec and always
+crossed the threshold. Both were restated to this spec's own duplication, and the pre-existing block is
+recorded under `## Out of scope` with the three grounds for excluding it. **The rule this routing
+follows — "nothing moves into the helper except the query" — therefore stands unrevised**, which was
+the other half of what the paused question would have forced: extracting the sandwich means taking
+`Test.startTest()` and `Test.stopTest()` inside a helper, and that rule is what forbids it. The general
+question the two repo rules disagree on is on file under `## Open questions`, unanswered on purpose.
 
 ## Traps
 
