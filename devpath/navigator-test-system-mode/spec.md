@@ -41,8 +41,8 @@ progress, and still a failed deploy. `## Current state` holds the full inventory
 - `sf project deploy start --test-level RunLocalTests` against a freshly created scratch org holding
   none of this spec's metadata, with no permission set assigned to the org's default admin, deploys
   clean: the whole-payload deploy succeeds and every local test passes.
-- `peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` — the two
-  `System.runAs` cross-user security tests — continue to pass, unchanged. Their own access-mode
+- `peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` — the two cross-user
+  security tests that hold Group C's bare queries — continue to pass, unchanged. Their own access-mode
   behavior, a peer user without the permission set being unable to read or touch another user's rows,
   is exactly what must not change.
 - No query inside a `System.runAs` block, and no query that reads or filters on only standard fields,
@@ -91,7 +91,7 @@ progress, and still a failed deploy. `## Current state` holds the full inventory
   properly means reading both rules against several real cases, and either rule's author may have meant
   something narrower than the text says. Owner: whoever maintains those two rules. Out of scope for this
   spec, which decided only its own case and said so in `## Out of scope`. The mirror of the
-  `rstk-security.md` question below.
+  `rstk-security.md` question above.
 - The owner-scoped queries in `activatingOneUsersLayoutDoesNotDisturbAnother` — a `COUNT()` and a
   `SELECT Name`, each filtered on `Is_Active__c` and `OwnerId` — are near-variants of `activeCount()`
   and `activeName()` and stay inline. Each appears exactly once, so extracting
@@ -101,7 +101,11 @@ progress, and still a failed deploy. `## Current state` holds the full inventory
 
 ## Current state
 
-`force-app/main/default/classes/NavigatorLayoutControllerTest.cls`, 32 SOQL sites.
+`force-app/main/default/classes/NavigatorLayoutControllerTest.cls`. **Deliberately no site total
+here.** The figure this line used to carry was invalidated by this spec's own slice 02 — four inline
+queries deleted, one helper added — and the Outcome that enumerates the affected queries already
+refuses to carry a count on exactly those grounds. Groups A to D below partition every SOQL site in
+the file between them, D being whatever the first three leave.
 
 **Queries below are identified by their enclosing method and their shape, never by line number.** Line
 numbers in this section went stale twice — the second time inside the very commit that was correcting
@@ -122,17 +126,27 @@ this design got wrong, and it is what puts the `COUNT()` queries below in scope.
 
 ### Group A — the verification helpers. All declare `WITH SYSTEM_MODE` already.
 
-- `storedLayouts()` — selects all four custom fields, orders by `Sort_Order__c`. Called from 8
-  write-path tests.
+- `storedLayouts()` — selects all four custom fields, orders by `Sort_Order__c`. Called only from
+  write-path tests, the ones that assert what a create or update actually stored.
 - `sectionNameOf(String)` — selects `Layout_JSON__c`.
-- `activeCount()` — `COUNT()` filtered on `Is_Active__c`. Called from the two activation tests.
+- `activeCount()` — `COUNT()` filtered on `Is_Active__c`. The most widely called of the five: every
+  test that asserts how many of a user's layouts are active goes through it. It held most of those
+  callers before this spec ever ran; slice 02's routing added two more.
 - `activeName()` — selects `Name`, filtered on `Is_Active__c`; returns `null` when nothing is active.
 - `activeId()` — selects `Id`, filtered on `Is_Active__c`; returns `null` when nothing is active,
-  matching `activeName()`. Added by slice 02, called from the two activation tests.
+  matching `activeName()`. Added by slice 02, and called from exactly the two methods whose inline
+  copies it replaced: `activatingOneLayoutClearsTheFlagOnTheOthers` and
+  `activationStaysOneUpdateAcrossTwoHundredLayouts`.
+
+**No caller counts here, deliberately.** Two of the three this list used to carry were false of the
+file — routing moves them, one of them was wrong from the survey commit onward, and a count of
+callers is decoration in a section whose job is to say which queries need an access mode. The
+properties above are what a reader can check by grepping a helper's name.
 
 ### Group B — inline queries in test bodies. All declare `WITH SYSTEM_MODE` already.
 
-None sits inside a `System.runAs` block, so none bears on Outcome 3.
+None sits inside a `System.runAs` block, so none bears on the Outcome that no query inside a `runAs`
+block has an access-mode declaration added or changed.
 
 | Enclosing method                                | Query                                                                    | Custom field, and where       |
 | ----------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------- |
@@ -144,18 +158,20 @@ Each of the three appears exactly once and stays inline, with its pointer commen
 `## Open questions` for why the owner-scoped pair is not duplication.
 
 **Four further inline sites were routed into helpers by slice 02 and no longer exist.** The
-access-mode fix had expanded two one-line queries into six-line ones, which turned a one-line
-duplication into a 24-line one: `activatingOneLayoutClearsTheFlagOnTheOthers` and
-`activationStaysOneUpdateAcrossTwoHundredLayouts` held byte-identical blocks differing only in two
-assertion message strings, crossing `.claude/rules/rstk-dry-enforcement.md`'s ten-line threshold. Both
-methods now take their active count from `activeCount()` and their active id from `activeId()`, and
-their pointer comments went away with the queries. Assertion messages stayed at the call sites. That
+access-mode fix had expanded two one-line queries into blocks of six and eight lines, and that pushed
+the region they sit in across `.claude/rules/rstk-dry-enforcement.md`'s ten-line threshold:
+`activatingOneLayoutClearsTheFlagOnTheOthers` and `activationStaysOneUpdateAcrossTwoHundredLayouts`
+held a 24-line block differing only in two assertion message strings, twelve of those lines identical
+and consecutive. Measured at `a848111~1`, the commit before the routing; the same region on `main` is
+ten lines whose longest identical run is six, under the threshold. Both methods now take their active
+count from `activeCount()` and their active id from `activeId()`, and their pointer comments went
+away with the queries. Assertion messages stayed at the call sites. That
 duplication is gone, verified mechanically across every method in the file.
 
 **A longer-standing duplicated block in this file is deliberately not addressed** — the `getLayouts()`
 `Test.startTest()` / `Test.stopTest()` sandwich shared by six read-path tests, four of them across ten
 or more identical lines. It predates this spec, is confirmed present on `main`, and is excluded on the
-record in `## Out of scope`. Outcome 2 is scoped to this spec's own duplication for that reason.
+record in `## Out of scope`. The DRY Outcome is scoped to this spec's own duplication for that reason.
 
 The owner-scoped pair in `activatingOneUsersLayoutDoesNotDisturbAnother` appears once each and is not
 duplication — see `## Open questions`.
@@ -195,18 +211,8 @@ so there is no pre-existing `WITH SYSTEM_MODE` precedent to point to.
 `.claude/rules/rstk-security.md` (applies to `**/*.cls`) says "ALL new SOQL must include
 `WITH USER_MODE`… flagged as must-fix by local PMD and GH Codacy," and never mentions `WITH
 SYSTEM_MODE`. Checked against this repo's actual CI (`.github/workflows/pr-checks.yml`): there is no
-PMD or Codacy job in it — the rule describes a scanner this repo does not run.
-
-Reference pattern, out of scope: `NavigatorLayoutController.ownLayouts()`
-(`NavigatorLayoutController.cls:388-402`) already declares `WITH USER_MODE`, documented in the class
-header as deliberate defense in depth. No test file in the repo declares an explicit access mode on
-any SOQL today — there is no existing precedent for `WITH SYSTEM_MODE` to point to.
-
-`.claude/rules/rstk-security.md` (scanner-enforced, applies to `**/*.cls`) says "ALL new SOQL must
-include `WITH USER_MODE`... flagged as must-fix by local PMD and GH Codacy," and never mentions `WITH
-SYSTEM_MODE`. Checked against this repo's actual CI (`.github/workflows/pr-checks.yml`): there is no
-PMD or Codacy job in it — the rule describes a scanner this repo doesn't run. See `## Design` for how
-this resolves the risk of the fix being misread later.
+PMD or Codacy job in it — the rule describes a scanner this repo does not run. See `## Design` for
+how that resolves the risk of the fix being misread later.
 
 ## Design
 
@@ -274,10 +280,18 @@ one — `## Current state`'s Group B table is the roster:
 // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
 Assert.areEqual(
   1,
-  [SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE WITH SYSTEM_MODE],
-  'Exactly one of a user\'s layouts may be active'
+  [SELECT Schema_Version__c FROM Navigator_Layout__c WITH SYSTEM_MODE LIMIT 1]
+    .Schema_Version__c,
+  'Upgrading on read must not write — the stored row stays at v1 until the user next saves'
 );
 ```
+
+That is the `aV1RowIsUpgradedToV2OnRead` row of the Group B table, read out of the file rather than
+composed, and the other two rows carry the identical pointer above the same treatment. **Illustrate
+this from a site the table actually holds** — an earlier draft showed an inline
+`SELECT COUNT() … WHERE Is_Active__c = TRUE`, which is one of the two copies the routing below
+deleted, so `## Design` was offering as its worked example of a surviving Group B site the precise
+shape its own routing section forbids.
 
 And the two Group C security tests get a comment at the method level, recording why their queries are
 bare — see the paragraph below on what that reason actually is:
@@ -343,10 +357,12 @@ house rule itself should be taught to distinguish "missing an access mode" from 
 this fix.
 
 **Routing the duplicated shapes through helpers.** The access-mode fix expanded two one-line queries
-into six-line ones, and in doing so turned a one-line duplication into a 24-line one:
-`activatingOneLayoutClearsTheFlagOnTheOthers` and `activationStaysOneUpdateAcrossTwoHundredLayouts`
-now hold byte-identical blocks differing only in two assertion message strings. That crosses
-`.claude/rules/rstk-dry-enforcement.md`'s ten-line threshold. This spec originally deferred
+into blocks of six and eight lines, and in doing so pushed the region they sit in across
+`.claude/rules/rstk-dry-enforcement.md`'s ten-line threshold: at `a848111~1`, the commit before the
+routing, `activatingOneLayoutClearsTheFlagOnTheOthers` and
+`activationStaysOneUpdateAcrossTwoHundredLayouts` held a 24-line block differing only in two
+assertion message strings, twelve of those lines identical and consecutive. This spec originally
+deferred
 helper-routing, and that deferral was reasoned about the pre-fix one-liners; it does not survive the
 blocks the fix created, so the routing is in scope.
 
@@ -387,7 +403,7 @@ unwarned.
 
 **Where the routing stops, decided at the design gate on 2026-08-27.** This routing covers the
 duplication *this spec's own fix created* and nothing else. Build paused on the question, because the
-slice's DRY criterion and Outcome 2 had both been written file-wide and the file does not satisfy that
+slice's DRY criterion and the DRY Outcome had both been written file-wide and the file does not satisfy that
 reading — the `getLayouts()` sandwich shared by six read-path tests predates the spec and always
 crossed the threshold. Both were restated to this spec's own duplication, and the pre-existing block is
 recorded under `## Out of scope` with the three grounds for excluding it. **The rule this routing
@@ -409,8 +425,9 @@ same warning at the code site, and every inline site points back to it.
 The default dev org for this project (`sfnav-t2`) has the permission set on its admin, so the whole
 suite passes there _with the bug fully present_ — verified. Only a freshly created scratch org with no
 permission set assigned to its default admin can fail this, and therefore only that org can pass it
-meaningfully. Any claim that this spec's Outcome 2 is met must name the org it was checked against and
-confirm `Salesforce_Navigator_User` is absent from it.
+meaningfully. Any claim that this spec's deploy Outcome — the clean `RunLocalTests` deploy against a
+freshly created scratch org holding none of this metadata — is met must name the org it was checked
+against and confirm `Salesforce_Navigator_User` is absent from it.
 
 **`WITH SYSTEM_MODE` suppresses CRUD/FLS, never sharing — so do not reason about this file as though an
 access-mode declaration could silently void a `System.runAs` security test.** An earlier version of this
@@ -435,9 +452,14 @@ is true, and the conclusion "so it can't hit FLS" does not follow.
 
 Confirmed directly, isolating the fix to an access-mode declaration and ruling out any other logic
 change: assigned `Salesforce_Navigator_User` to a fresh scratch org's default admin (no code touched),
-then ran the existing, unmodified test suite. 41 of 41 passed. The same suite, same org shape, admin
+then ran the existing, unmodified test suite. Every test passed. The same suite, same org shape, admin
 never granted the permission set: 26 of 40 fail, identically, across three separate fresh orgs and
 under `--dry-run`.
+
+(The investigation note records that clean run as "41 of 41". The class carries 40 `@IsTest` methods —
+on `main` and today — and every deploy this spec records reports 40 tests, so that figure is one out
+at source. The property, a clean run against an org whose admin holds the permission set, is what the
+evidence turns on and it is unaffected.)
 
 Root cause, from Salesforce's own release note: _"Database Operations Run in User Mode by Default, Not
 System Mode"_ — apex SOQL/SOSL/DML/Database methods default to user mode instead of system mode for

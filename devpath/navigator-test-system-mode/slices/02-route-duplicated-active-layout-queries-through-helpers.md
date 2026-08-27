@@ -591,7 +591,27 @@ false count and no new false distance, and I looked for both. But it rewrote a s
 colon and did not look at what the colon introduces, which is the first finding below. Two further stale
 counts turned up in the sweep, one of them created by this slice's own routing and never updated.
 
-- [ ] **`## Design`'s pointer exemplar is one of the four sites this slice's routing deleted — and the
+- [x] fixed — **swapped the illustration for a Group B site that survives, read out of the file rather
+      than composed.** `## Design`'s fenced `apex` block now shows the `Schema_Version__c` read from
+      `aV1RowIsUpgradedToV2OnRead` — pointer comment, query, expected value and assertion message
+      taken verbatim from `NavigatorLayoutControllerTest.cls:375-386`, collapsed onto one query line
+      to match the style of the other sketches in that section. A sentence under the fence names
+      which Group B row it is, says it was read out of the file, and records what the old block was
+      and why it was wrong, so the retraction stays legible instead of being silently disappeared.
+      The sentence *above* the fence is unchanged: "`## Current state`'s Group B table is the roster:"
+      was correct, and the defect was that its colon handed to a block the roster does not contain.
+
+      Checked before choosing the replacement rather than after. The file holds exactly three pointer
+      comments — 375, 921, 932 — above exactly three surviving inline `WITH SYSTEM_MODE` queries at
+      379, 925 and 936, matching the three rows of the Group B table one for one. The shape the old
+      block illustrated, an inline `SELECT COUNT() … WHERE Is_Active__c = TRUE` under a pointer
+      comment, appears nowhere in the file today; `git show a848111~1` has it at 891-901 inside
+      `activatingOneLayoutClearsTheFlagOnTheOthers`, which is exactly where this slice deleted it.
+      No acceptance criterion, `## Out of scope` paragraph or `## Traps` entry was touched, and no
+      code changed, so nothing was deployed.
+
+      Finding as raised:
+      **`## Design`'s pointer exemplar is one of the four sites this slice's routing deleted — and the
       sentence this fix pass rewrote is what introduces it.** The rewritten sentence ends "— `## Current
       state`'s Group B table is the roster:" and the colon hands straight to a fenced block (`spec.md`
       `## Design`) showing a pointer comment above an inline
@@ -613,7 +633,28 @@ counts turned up in the sweep, one of them created by this slice's own routing a
       self-contradiction. Swapping the illustrated query for one that survives, the `Schema_Version__c`
       read at 379 for instance, closes it; no code changes either way.
 
-- [ ] **`## Current state`'s headline figure, "32 SOQL sites", is this slice's own casualty and was never
+- [x] fixed — **deleted the figure rather than correcting it**, taking the disposal the critic
+      flagged as the better one. `## Current state`'s first line now reads
+      "`…NavigatorLayoutControllerTest.cls`. **Deliberately no site total here.**", followed by the
+      reason — the figure was invalidated by this spec's own slice 02, and the Outcome that
+      enumerates the affected queries already refuses to carry a count on those grounds — and by the
+      property the figure was reaching for: Groups A to D partition every SOQL site in the file
+      between them, D being whatever the first three leave. That is the section's own established
+      convention, the same one it applied to line numbers two paragraphs later, and it also dissolves
+      the arithmetic defect the critic named: with no headline total there is no sum for Group D to
+      contradict, and Group D was already defined as a remainder rather than as a count.
+
+      Re-derived rather than taken from the finding, and the numbers reproduce exactly: 29 `SELECT`
+      keywords at `f8ee171`, 32 on `main`, 32 at `a848111~1`. Net −3, which is this slice — four
+      inline sites deleted, `activeId()` added. The partition was checked too, since the replacement
+      sentence asserts it: Group A 5 (124, 1057, 1071, 1080, 1091), Group B 3 (379, 925, 936),
+      Group C 4 (262, 301, 971, 998), Group D 17 (45, 52, 96 against `Profile` / `PermissionSet` /
+      `User`, and fourteen against `Navigator_Layout__c` naming only `Id`, `Name`, `OwnerId` or
+      nothing). 5 + 3 + 4 + 17 = 29, so the four groups do partition the file with nothing left over
+      and nothing counted twice.
+
+      Finding as raised:
+      **`## Current state`'s headline figure, "32 SOQL sites", is this slice's own casualty and was never
       updated: the file holds 29.** Counted mechanically at `09100cf` — 29 `SELECT` keywords, no
       subqueries — against 32 at `a848111~1` and 32 on `main`. The difference is exactly this slice: four
       inline sites deleted (both `activeCount()` copies, both `activeId()` copies), one added
@@ -628,7 +669,33 @@ counts turned up in the sweep, one of them created by this slice's own routing a
       exactly those grounds two paragraphs later — so deleting the figure may serve better than
       correcting it. Either way 32 is wrong.
 
-- [ ] **Two of the three caller counts in `## Current state`'s Group A are false of the file.**
+- [x] fixed — **all three clauses re-derived, and all three replaced with properties rather than with
+      corrected counts.** Group A's bullets now read: `storedLayouts()` "Called only from write-path
+      tests, the ones that assert what a create or update actually stored"; `activeCount()` "The most
+      widely called of the five: every test that asserts how many of a user's layouts are active goes
+      through it. It held most of those callers before this spec ever ran; slice 02's routing added
+      two more"; and `activeId()` "called from exactly the two methods whose inline copies it
+      replaced", both named. A short paragraph under the list records that the counts were dropped on
+      purpose and why. The third clause the critic called true was rewritten with the other two —
+      `activeId()`'s callers really are two, but "the two activation tests" is not what they are, and
+      leaving it would have kept the phrase that made the false `activeCount()` clause read as
+      exhaustive.
+
+      Re-derived over the file, distinct enclosing methods, declarations excluded. `storedLayouts()`
+      nine (512, 546, 593, 627, 642, 701, 750, 792, 837 — the eight-count omitted
+      `updateRefusesANullLayoutId`, and nine is the count on `main` too, so that one was never this
+      spec's). `activeCount()` twelve (894, 1118, 1165, 1209, 1255, 1288, 1316, 1489, 1535, 1556,
+      1745, 1815), of which this slice added 894 and 1745. `activeId()` two (899, 1750) —
+      `activatingOneLayoutClearsTheFlagOnTheOthers` and
+      `activationStaysOneUpdateAcrossTwoHundredLayouts`. Both figures the critic gave are confirmed.
+      Why properties and not the corrected numbers: nine and twelve both move whenever a test is
+      added or a query routed, which is the failure this spec has now had four times, and a caller
+      count is decoration in a section whose job is to say which queries need an access mode. Each
+      replacement is greppable from the helper's own name, which is what `## Current state` says it
+      wants of everything it records.
+
+      Finding as raised:
+      **Two of the three caller counts in `## Current state`'s Group A are false of the file.**
       `activeCount()` is described as "Called from the two activation tests". It is called from twelve
       test methods, one call each: 894, 1118, 1165, 1209, 1255, 1288, 1316, 1489, 1535, 1556, 1745, 1815.
       This slice added two of them (894, 1745) and the line was written inside this spec, at `e494832`, so
@@ -683,3 +750,110 @@ hazard turns on and the mutation runs recorded above are its evidence.
 `.claude/rules/rstk-conventional-commits.md` prescribes. That confirms rather than disturbs the open box
 above: `2a1da02` is still the single mistyped commit on this branch and nothing since has compounded it.
 The box is left exactly as it stands, and no git history operation was performed or is proposed here.
+
+---
+
+**Fix pass, 2026-08-27 — the sweep beyond the three findings.** Run as a sweep of every factual claim
+in `spec.md` rather than as a pass against the three named findings, because the three passes before it
+each closed the finding they were given and left a sibling in the same section. Seven further defects
+turned up, all in `spec.md`, all corrected in the same pass. No new box is opened for any of them.
+
+- **A false-as-exhaustive apposition in `## Outcomes`.** The bullet naming
+  `peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` called them "the two
+  `System.runAs` cross-user security tests". They are not the only two: `System.runAs(peer)` also
+  carries cross-user assertions in `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack`,
+  `aUserCannotActivateAnotherUsersLayout`, `aUserCannotRenameAnotherUsersLayout`,
+  `aUserCannotDeleteAnotherUsersLayout` and `oneUsersLayoutListIsIndependentOfAnothers`. What actually
+  makes the named pair a pair is that they are the two security tests holding Group C's bare queries,
+  which is what `## Design` already calls them. The apposition now says that. **The two test names,
+  and everything the Outcome requires of them, are unchanged** — this corrects how they are described,
+  not what must hold.
+
+- **Two wrong Outcome-number cross-references, and two right ones retired with them.** Group B's
+  preamble said its queries bear on "Outcome 3"; Outcome 3 is the deploy Outcome, and the one about
+  `System.runAs` is the fifth. `## Traps`' green-proves-nothing entry said "Any claim that this spec's
+  Outcome 2 is met must name the org it was checked against"; Outcome 2 is the DRY Outcome, which has
+  nothing to say about org shape, and the deploy Outcome is plainly what was meant. Both now name the
+  Outcome by content. The two *correct* numbered references — `## Current state`'s "Outcome 2 is scoped
+  to this spec's own duplication" and `## Design`'s "the slice's DRY criterion and Outcome 2" — were
+  converted to "the DRY Outcome" as well, so no numbered Outcome reference is left in `spec.md`.
+  `## Design` already states this as the spec's convention ("Named by content rather than by count or
+  Outcome number … both have gone stale here before"); the section was not following it.
+
+- **"Two one-line queries into six-line ones … a 24-line one", in two sibling sentences.** Measured at
+  `a848111~1`: the `COUNT()` query expanded to six lines and the `SELECT Id … LIMIT 1` to eight, so
+  "six-line ones" was false of one of the two. The 24-line figure is right and stayed — lines 891-914
+  of that commit, differing in exactly the two assertion message strings — and the run that actually
+  crosses the ten-line threshold, twelve identical consecutive lines, was added because that is the
+  measurement the rule turns on. The whole claim is now anchored to `a848111~1` and to `main` (same
+  region, ten lines, longest run six), both immutable, so it cannot rot the way an unanchored figure
+  does. **Both instances were corrected** — the same sentence appears in `## Current state` and in
+  `## Design`, and fixing one is how the last three passes went wrong.
+
+- **A present-tense sentence describing a state this slice removed.** `## Design`'s routing paragraph
+  said the two methods "**now hold** byte-identical blocks differing only in two assertion message
+  strings". They have not held them since `a848111`. Rewritten to the past tense with the commit named.
+
+- **`## Current state`'s "Convention in the repo" carried both of its paragraphs twice, and the copies
+  disagreed.** One said "**Before this spec**, no test file in the repo declared an explicit access
+  mode on any SOQL" — true. The other said "No test file in the repo **declares** an explicit access
+  mode on any SOQL **today**" — false since slice 01: `NavigatorLayoutControllerTest` declares
+  `WITH SYSTEM_MODE` at eight query sites. Deleted the duplicate pair, kept the true past-tense
+  version, and carried onto it the one clause only the deleted copy held ("See `## Design` for how that
+  resolves the risk of the fix being misread later"). Two copies of a claim is a sibling defect waiting
+  to happen, which is this spec's whole failure history.
+
+- **A backwards position claim in `## Open questions`.** The legacy-file DRY entry closed "The mirror
+  of the `rstk-security.md` question **below**". That question is the section's first bullet — above,
+  not below. Corrected.
+
+- **`## Evidence`'s "41 of 41 passed".** The class carries exactly forty `@IsTest` methods, on `main`
+  and today, and every deploy this spec records reports forty tests, so 41 cannot be right of any run
+  against this suite. Replaced with the property, "Every test passed", plus a parenthetical recording
+  that the figure comes from `docs/research/salesforce-same-deploy-schema-race.md` and is one out at
+  source — without that note the next reader restores it. **The research note itself is not edited**:
+  it is outside `devpath/` and outside this spec's `touches`, and its own counts disagree with each
+  other in three places (26/40, 26/41, 41 of 41). Worth a separate look by whoever owns it.
+
+**Categories swept clean.** Every remaining numeral and number-word in `spec.md`, checked one at a
+time: `26 of 40`, `26/40 to 4/40`, `API-67`, the four custom fields, "exactly two users", Group C's
+"four" and "exactly one … inside a `System.runAs` block", Group D's "Three query `Profile`,
+`PermissionSet` and `User`", the `getLayouts()` sandwich's "six read-path tests, four of them across
+ten or more identical lines" and its "fourteen byte-identical lines" — all re-derived and all true.
+Every list of names: Group A's five helpers, Group B's three table rows against the three pointer
+comments in the file, Group C's four queries and their enclosing methods, the four custom fields
+against `Salesforce_Navigator_User`'s `fieldPermissions`. Every claim about the repo outside the file:
+`sourceApiVersion: 67.0`; the permission set is the only one in the repo and grants exactly those four
+fields; `makeUsers()` assigns it to `nvowner` and `nvpeer` and to nobody else;
+`NavigatorLayoutController.ownLayouts()` is `NavigatorLayoutController.cls:388-402` and declares
+`WITH USER_MODE` at 399, documented as defence in depth in the class header;
+`NavigatorLayoutControllerTest.cls:18` is the `private with sharing` declaration;
+`.claude/rules/rstk-security.md` applies to `**/*.cls`, says what is quoted, and never mentions
+`WITH SYSTEM_MODE`; `.github/workflows/pr-checks.yml` runs no PMD or Codacy job; both rule quotations
+in `## Open questions` are verbatim. Every cross-reference between sections resolves to a section that
+says what it is claimed to say. `## Traps` was read entry by entry: all four remain true and
+enforceable as written, the second only after its Outcome reference was corrected.
+
+**Checked and deliberately not raised or changed.** `## Out of scope`'s "Six methods open with the
+same shape" — six is right (`lookingWithoutChangingAnythingWritesNoRow`,
+`getLayoutsReturnsTheOwnersRowsInSortOrder`, `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack`,
+`aV1RowIsUpgradedToV2OnRead`, `anUnreadableFutureSchemaVersionIsReportedOnItsOwnRowRatherThanGuessedAt`,
+`aStoredPayloadThatIsNotJsonIsReportedOnItsOwnRowRatherThanFailingTheRead`), though only the first
+reaches the sandwich before any other setup, so "open with" is loose; the paragraph is out of bounds
+for this pass either way and the load-bearing count is sound. `## Evidence`'s "the two disproven
+hypotheses tried first (a same-deploy-transaction timing race; a metadata-propagation gap)" — the
+research note treats these as one hypothesis and its mechanism in one place and as separate framings in
+another, and its own count-word says "three" while naming two; on that reading "two" is as defensible as
+any alternative, and cutting it would be manufacturing a finding. `## Design`'s Group C comment sketch
+uses `//` where the code carries the same text inside the methods' `/** */` blocks, and the code's two
+copies differ ("only `Id` or no field at all" against "only `Id` and `Name`") where the sketch shows
+one — cosmetic, and regenerating from the sketch produces no false claim. One number in this file's own
+record is off and is left alone because it is the critic's text in a closed disposition: the first
+pass's "all 31 `activeCount()` / `activeName()` / `activeId()` call sites" is 28 call sites — 31 is the
+grep total including the three declarations — and the disposition does not turn on it.
+
+**Nothing under `force-app/` changed in this pass, so there was nothing to deploy and no deploy was
+run.** All edits are `spec.md` prose plus these dispositions. No acceptance criterion on either slice
+was touched, `fix_cycles` is untouched at 2, `done: true` stands, and the `- [ ] excess`
+`.prettierignore` box and the open `- [ ]` box on commit `2a1da02`'s type are exactly as they were. No
+git history operation of any kind was performed.
