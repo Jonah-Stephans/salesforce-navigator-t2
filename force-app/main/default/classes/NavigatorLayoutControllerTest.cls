@@ -111,13 +111,14 @@ private with sharing class NavigatorLayoutControllerTest {
   }
 
   // Deliberately WITH SYSTEM_MODE, not WITH USER_MODE (the convention everywhere
-  // else in this codebase): this and the three verification helpers that follow
-  // — sectionNameOf, activeCount, activeName — read the row's true state after a
-  // write, and the running identity (this project's org default admin, in a
-  // freshly created org) is never granted FLS on Navigator_Layout__c's custom
-  // fields — only the two System.runAs test users are. Reverting these four to
-  // WITH USER_MODE reintroduces "No such column" against exactly that org shape,
-  // which is the shape this project's own CI deploy gate creates.
+  // else in this codebase): this and the four verification helpers that follow
+  // — sectionNameOf, activeCount, activeName, activeId — read the row's true
+  // state after a write, and the running identity (this project's org default
+  // admin, in a freshly created org) is never granted FLS on
+  // Navigator_Layout__c's custom fields — only the two System.runAs test users
+  // are. Reverting these five to WITH USER_MODE reintroduces "No such column"
+  // against exactly that org shape, which is the shape this project's own CI
+  // deploy gate creates.
   private static List<Navigator_Layout__c> storedLayouts() {
     return [
       SELECT

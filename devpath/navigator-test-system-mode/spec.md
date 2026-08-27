@@ -225,10 +225,11 @@ instead, below.
 
 ```apex
 // Deliberately WITH SYSTEM_MODE, not WITH USER_MODE (the convention everywhere else in this
-// codebase): these four methods verify the row's true state after a write, and the running
-// identity (this project's org default admin, in a freshly created org) is never granted FLS on
-// Navigator_Layout__c's custom fields — only the two System.runAs test users are. Reverting this to
-// WITH USER_MODE reintroduces "No such column" against exactly that org shape.
+// codebase): this and the four verification helpers that follow — sectionNameOf, activeCount,
+// activeName, activeId — read the row's true state after a write, and the running identity (this
+// project's org default admin, in a freshly created org) is never granted FLS on
+// Navigator_Layout__c's custom fields — only the two System.runAs test users are. Reverting these
+// five to WITH USER_MODE reintroduces "No such column" against exactly that org shape.
 private static List<Navigator_Layout__c> storedLayouts() {
   return [
     SELECT Id, Name, OwnerId, Is_Active__c, Sort_Order__c, Schema_Version__c, Layout_JSON__c
@@ -261,8 +262,9 @@ private static String activeName() {
 ```
 
 The full comment is placed once, above `storedLayouts()` — the first affected query in file order. The
-other three helpers sit within 900 lines of it with nothing but test methods between, so they need no
-pointer. Group B's seven do, and get one:
+other four helpers sit within 900 lines of it with nothing but test methods between, so they need no
+pointer. `activeId()` is the fifth; it is added by the routing section below and is named in the
+comment's enumeration for the reason given there. Group B's seven do need a pointer, and get one:
 
 ```apex
 // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
@@ -372,7 +374,10 @@ blocks, and they are what a failure prints. Nothing moves into the helper except
 
 **The pointer comments on the routed queries go away with them** — the routed shapes now
 live in the helper block, directly under the full comment above `storedLayouts()`, so a pointer back
-to a comment four lines up would be noise. The remaining inline sites keep theirs.
+to a comment four lines up would be noise. The remaining inline sites keep theirs. That makes the
+enumeration in the comment above `storedLayouts()` the only route by which the revert warning reaches
+`activeId()` — so the enumeration names it, and its count reads five rather than four. Adding a helper
+to this block without extending that enumeration leaves the new helper unwarned.
 
 **Where the routing stops, decided at the design gate on 2026-08-27.** This routing covers the
 duplication *this spec's own fix created* and nothing else. Build paused on the question, because the

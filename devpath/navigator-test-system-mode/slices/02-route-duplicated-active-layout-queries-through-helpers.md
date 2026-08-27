@@ -207,7 +207,37 @@ Slice pass, 2026-08-27. Code under review is `a848111`
 committed code is what was read. Every claim below was checked against the file or the org, not against
 the diff alone.
 
-- [ ] **The `WITH SYSTEM_MODE` comment above `storedLayouts()` still names a closed set of four
+- [x] fixed — extended the enumeration in the `WITH SYSTEM_MODE` comment above `storedLayouts()`
+      (`NavigatorLayoutControllerTest.cls:113-121`) so it names `activeId()` and counts five: it now
+      reads "this and the four verification helpers that follow — sectionNameOf, activeCount,
+      activeName, activeId" and "Reverting these five to WITH USER_MODE reintroduces 'No such
+      column'". Nothing else in the comment changed, no query or access-mode declaration was
+      touched, and no code moved.
+
+      The two `spec.md` sites that generate this comment were updated with it, on the same grounds
+      as slice 01's fix passes: `## Design`'s worked sketch said "these four methods" and the prose
+      under it said "the other three helpers", so a reader regenerating the comment from the sketch
+      would have reproduced the defect verbatim. The sketch now carries the five-name enumeration,
+      and `## Design`'s routing section states outright what the critic established — the
+      enumeration is the only route by which the revert warning reaches `activeId()`, and adding a
+      helper to that block without extending it leaves the new helper unwarned. `## Current state`
+      Group A already listed all five helpers and needed no change; no acceptance criterion,
+      `## Out of scope` text or other comment was touched.
+
+      Deployed to the project default org `sfnav-t2` / `test-u85wlgi5uild@example.com` with
+      `sf project deploy start --test-level RunLocalTests` — no `--target-org`, and no
+      `--ignore-conflicts`: `Status: Succeeded`, deploy `0AfO800000ZaEwMKAV`, 1 component, 40
+      passing, 0 failing. The source-tracking conflict the previous worker hit did not recur, and
+      that was checked rather than assumed — the `NavigatorLayoutControllerTest` body stored in that
+      org was fetched through the Tooling API before deploying and is byte-identical to the
+      committed file apart from the trailing newline the API strips, so the mid-spec snapshot is
+      gone and there was nothing in the org left to discard. **That green is a regression check
+      only** — `Salesforce_Navigator_User` is assigned to that org's default admin, the exact wrong
+      org shape `spec.md` `## Traps` names — and criterion 7's `sysmode-verify-02` run remains the
+      load-bearing verification. No code changed in this pass, only comment text.
+
+      Finding as raised:
+      **The `WITH SYSTEM_MODE` comment above `storedLayouts()` still names a closed set of four
       helpers, and this slice added a fifth without extending it.**
       `force-app/main/default/classes/NavigatorLayoutControllerTest.cls:113-120` reads "this and the
       three verification helpers that follow — sectionNameOf, activeCount, activeName" and "Reverting
