@@ -4,7 +4,7 @@ depends_on:
 touches:
   - force-app/main/default/classes/NavigatorLayoutControllerTest.cls
 done: true
-fix_cycles: 2
+fix_cycles: 3
 ---
 
 # Route the duplicated active-layout queries through helpers
@@ -857,3 +857,198 @@ run.** All edits are `spec.md` prose plus these dispositions. No acceptance crit
 was touched, `fix_cycles` is untouched at 2, `done: true` stands, and the `- [ ] excess`
 `.prettierignore` box and the open `- [ ]` box on commit `2a1da02`'s type are exactly as they were. No
 git history operation of any kind was performed.
+
+---
+
+Slice pass, re-review of the granted sweep, 2026-08-27. Code under review is `8a4ff57`; the sweep under
+review is `git diff f8ee171 8a4ff57` — two `devpath/` files, prose only, `force-app/` untouched.
+`git diff a848111 HEAD -- force-app/` is still only the nine comment lines from `2a1da02`, so no code
+moved in this pass, no metadata changed and nothing was deployed. Working tree clean. **Line numbers
+below are as of `8a4ff57`**, which is the same numbering the two passes above used.
+
+**The three findings the sweep was given are closed**, each checked against the file rather than
+against the text of the fix. The `## Design` exemplar: the fenced block now carries the
+`Schema_Version__c` read, and it is byte-faithful to `NavigatorLayoutControllerTest.cls:375-386` modulo
+the stated collapse of the seven-line query expression onto one line — same pointer comment, same
+expected `1`, same `.Schema_Version__c` navigation, same message. It really is row 1 of the Group B
+table, it is a site that still exists, and the prose under the fence ("the other two rows carry the
+identical pointer above the same treatment") holds: 921 and 932 are byte-identical to 375, and 925/936
+take `WITH SYSTEM_MODE` in the same position. The site total: the headline figure is gone rather than
+corrected, and the property that replaced it is true — see the partition re-derivation below. The Group
+A caller counts: the counts are gone, but two of the three properties that replaced them are false, and
+that is the first finding.
+
+**The seven further changes the sweep made, one at a time.** Five are true as written. One is true but
+leaves standing the very defect it was fixing. One is false in two of its three clauses.
+
+1. **`## Outcomes`' `runAs` apposition — the diagnosis is right, the replacement is not exhaustive
+   either.** The old text, "the two `System.runAs` cross-user security tests", was false: the five
+   further methods the sweep names all carry cross-user assertions, confirmed in the file. But the
+   replacement, "the two cross-user security tests that hold Group C's bare queries", narrows seven to
+   **three**, not to two — `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack` holds Group C's
+   query at 301 and is on the sweep's own list of cross-user tests. Second finding below.
+2. **The two wrong Outcome cross-references — true, and the retirement is complete.** Numbering the
+   `## Outcomes` bullets in file order: 1 access mode, 2 DRY, 3 deploy, 4 the two security tests, 5 no
+   `runAs` query touched. Group B's "Outcome 3" did mean the fifth; `## Traps`' "Outcome 2" did mean
+   the third. Both now name the Outcome by content, both correctly. Grepping the whole of `spec.md` for
+   `Outcome [0-9]` returns nothing, so the claim that no numbered reference is left is true.
+3. **"Six-line ones" — true, and the figures it froze reproduce.** At `a848111~1` the `COUNT()`
+   expression spans six lines (894-899) and the `SELECT Id … LIMIT 1` eight (905-912), so "six-line
+   ones" was false of one of the two and "blocks of six and eight lines" is right. On `main` both are
+   one line each, so "expanded two one-line queries" is right. The 24-line block is 891-914 against
+   1745-1768, differing in exactly the two message strings; the longest identical consecutive run
+   across the two methods at that commit is **twelve** (888-899 against 1742-1753), computed rather
+   than eyeballed. On `main` the same region is **ten** lines (865-874) and the longest identical run
+   is **six** (862-867 against 1680-1685). Every figure the sweep kept is true at the commit it names.
+   `a848111~1` is `1763b01` and immutable; `main` is a branch rather than a commit, so "both immutable"
+   in the disposition above is loose — but `## Current state` already anchors the `getLayouts()`
+   sandwich to `main` the same way, so this is the section's convention rather than a new hazard.
+4. **The present-tense sentence — true.** `## Design`'s routing paragraph now reads "at `a848111~1`,
+   the commit before the routing … **held** a 24-line block". The state it describes has not existed
+   since `a848111`, and the sentence now says so.
+5. **The duplicated "Convention in the repo" pair — true, and nothing load-bearing was lost.** The
+   deleted copy's "No test file in the repo **declares** an explicit access mode on any SOQL **today**"
+   was indeed false: the file declares `WITH SYSTEM_MODE` at eight query sites (133, 381, 928, 939,
+   1060, 1074, 1083, 1094). The surviving past-tense version is true — on `main` the only
+   `WITH USER_MODE` strings in the test class are three prose mentions inside the docblock at 247-256,
+   not declarations on SOQL, and the repo holds only two `.cls` files. The one clause only the deleted
+   copy held ("See `## Design` for how that resolves the risk…") was carried over, as claimed. The only
+   other thing the deletion dropped is the parenthetical "(scanner-enforced, …)", which the very next
+   sentence contradicts and which `rstk-security.md` carries in its own header; not load-bearing.
+6. **"Below" that meant "above" — true.** The `rstk-security.md` scanner question is the first bullet
+   of `## Open questions`; the legacy-file DRY question is the second and now points up.
+7. **`## Evidence`'s "41 of 41" — true, in both halves.** The class carries 40 `@IsTest` methods at
+   `8a4ff57` and 40 on `main` (41 `@IsTest` tokens, one of them the class-level annotation at 17), and
+   every deploy this spec records reports 40. The research note really does say "41 of 41 passing,
+   100%" at line 34, and really does disagree with itself — 26/40 at line 6, 26/41 at line 12. The note
+   itself was not edited, correctly: it is outside `devpath/` and outside `touches`.
+
+- [ ] **`## Current state` Group A's `activeCount()` bullet replaced a false count with two false
+      properties.** The bullet now reads "The most widely called of the five: every test that asserts
+      how many of a user's layouts are active goes through it." Both clauses are new text, and both are
+      false of the file.
+
+      **"The most widely called of the five" is `activeName()`, not `activeCount()`.** Counted
+      mechanically over the file, declarations and comment mentions excluded: `activeName()` 14 call
+      sites (1121, 1170, 1214, 1260, 1293, 1321, 1346, 1372, 1412, 1494, 1540, 1559, 1689, 1820),
+      `activeCount()` 12 (894, 1118, 1165, 1209, 1255, 1288, 1316, 1489, 1535, 1556, 1745, 1815),
+      `sectionNameOf()` 10, `storedLayouts()` 9, `activeId()` 2. Fourteen against twelve, and fourteen
+      distinct enclosing methods against twelve — `activeCount()` is the second most widely called on
+      either measure. The pass that produced this bullet re-derived `storedLayouts()`, `activeCount()`
+      and `activeId()` and never counted `activeName()`, which is the only one of the five that would
+      have falsified the superlative.
+
+      **"Every test that asserts how many of a user's layouts are active goes through it" has a
+      counterexample two subsections away.** `activatingOneUsersLayoutDoesNotDisturbAnother` asserts
+      exactly that at 922-931 — `Assert.areEqual(1, [SELECT COUNT() … WHERE Is_Active__c = TRUE AND
+      OwnerId = :owner.Id WITH SYSTEM_MODE], 'One user activating a layout must not clear another
+      user's active flag')` — and does not go through `activeCount()`. That query is row 2 of
+      `## Current state`'s own Group B table, and `## Open questions` calls it a "near-variant of
+      `activeCount()`" and records why it stays inline. So the universal is contradicted by two other
+      sections of the same document. It is also the strictly owner-scoped form of the question, where
+      `activeCount()` is org-wide (`WHERE Is_Active__c = TRUE`, no `OwnerId`) and only reads as
+      per-user because each calling test seeds one user.
+
+      The bullet's third clause is true and was checked: "It held most of those callers before this
+      spec ever ran; slice 02's routing added two more" — `main` has 10 `activeCount()` call sites,
+      today's 12 are those plus 894 and 1745.
+
+      Why this is worth a box rather than a note. The sweep's stated remit was "do not introduce a new
+      claim you have not verified", and its stated reason for replacing counts with properties was that
+      "each replacement is greppable from the helper's own name". Both of these are greppable, both
+      fail the grep, and a property is harder to falsify by inspection than a wrong number — a reader
+      who trusts "the most widely called" has no arithmetic to check it against. The clause the pass
+      before this one called out as making the false `activeCount()` line "read as exhaustive" has been
+      rewritten into a clause that is exhaustive and false. Fixing it costs one sentence: drop the
+      superlative and the universal, keep the true third clause, and say what `activeCount()` is —
+      `COUNT()` filtered on `Is_Active__c`, the org-wide active count, with the owner-scoped variants
+      recorded in Group B and `## Open questions`. No code involved.
+
+- [ ] **`## Outcomes`' replacement apposition is still false-as-exhaustive, by the sweep's own
+      standard.** The bullet now reads "`peerCannotReadAnotherUsersLayouts` and
+      `aUserCannotUpdateAnotherUsersLayout` — the two cross-user security tests that hold Group C's
+      bare queries". Group C's four bare queries sit in **three** methods, not two: 262 in
+      `peerCannotReadAnotherUsersLayouts`, 301 in `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack`,
+      971 and 998 in `aUserCannotUpdateAnotherUsersLayout` — which is what `## Current state`'s own
+      Group C list says. And the sweep's disposition immediately above names
+      `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack` first on its list of methods that carry
+      cross-user assertions. So the new discriminator narrows the seven cross-user tests to three, and
+      the remaining narrowing is done by the words "security tests" — a term `spec.md` never defines,
+      and which `## Current state` Group C uses circularly ("it is in neither of the two security
+      tests"). Read as a restrictive clause, which is how the sweep read the sentence it was replacing,
+      it is false for the same reason and by one fewer.
+
+      Lower weight than the finding above: nothing regenerates code from this apposition, the two test
+      names are right, and what the Outcome *requires* of them is unchanged and true. Raised because
+      the sweep's entire justification for touching this sentence was that its apposition was not
+      exhaustive, and the replacement is not exhaustive either — which is the sibling-defect pattern
+      the sweep pass was granted to end. A discriminator that does hold is available in the file: these
+      are the two methods that carry a method-level comment explaining why their queries are bare
+      (229-238 and 953-962), which is also what `## Design` promises of exactly two methods.
+
+**Everything else in the sweep re-derived from the file and standing.** The partition, which is the
+sentence that replaced the deleted site total: 29 `SELECT` keywords, no subqueries; Group A 5 (124,
+1057, 1071, 1080, 1091), Group B 3 (379, 925, 936), Group C 4 (262, 301, 971, 998), Group D 17 (45
+`Profile`, 52 `PermissionSet`, 96 `User`, and fourteen against `Navigator_Layout__c` naming only `Id`,
+`Name`, `OwnerId` or nothing — 175, 679, 815, 874, 1049, 1397, 1437, 1463, 1596, 1621, 1647, 1684,
+1717, 1825). 5 + 3 + 4 + 17 = 29, no gap and no overlap, so the partition claim is true as stated.
+Group B's three all sit outside any `runAs` (379 after `Test.stopTest()` at 348; 925 and 936 after
+`Test.stopTest()` at 919), so the rewritten Group B preamble is true. `storedLayouts()`'s replacement
+property is true: all nine callers (512, 546, 593, 627, 642, 701, 750, 792, 837) call
+`NavigatorLayoutController.createLayout` or `updateLayout` and then assert what was stored, including
+`updateRefusesANullLayoutId`, which asserts what the refused update did *not* store. `activeId()`'s is
+true: 899 and 1750 only, in `activatingOneLayoutClearsTheFlagOnTheOthers` and
+`activationStaysOneUpdateAcrossTwoHundredLayouts`, and those are exactly the two methods whose inline
+`SELECT Id … WHERE Is_Active__c = TRUE … LIMIT 1` copies stood at `a848111~1` (905-912 and 1759-1766).
+Criterion 4 re-derived independently: the longest identical consecutive run shared by the two routed
+methods is **six** (889-894 against 1740-1745), and a file-wide scan for any 10-line window occurring
+more than once returns only the `getLayouts()` sandwich, at 187-190, 341, 408-412 and 469-473 — the
+same four methods and the same regions as before, all present on `main`. `## Out of scope`'s figures
+for that sandwich are true: six methods share the shape, four of them across ten or more identical
+lines, and `anUnreadableFutureSchemaVersionIsReportedOnItsOwnRowRatherThanGuessedAt` against
+`aStoredPayloadThatIsNotJsonIsReportedOnItsOwnRowRatherThanFailingTheRead` is **fourteen** byte-identical
+lines exactly. The repo-level claims the sweep says it checked all hold: `sourceApiVersion` is `67.0`;
+`Salesforce_Navigator_User` is the only permission set and grants `fieldPermissions` on exactly
+`Is_Active__c`, `Layout_JSON__c`, `Schema_Version__c` and `Sort_Order__c`; `makeUsers()` assigns it to
+`nvowner` and `nvpeer` and nobody else; `NavigatorLayoutController.cls:388-402` is `ownLayouts()` with
+`WITH USER_MODE` at 399; `NavigatorLayoutControllerTest.cls:18` is `private with sharing`;
+`rstk-security.md` declares `paths: **/*.cls` (and `**/*.trigger`) and never mentions
+`WITH SYSTEM_MODE`; `.github/workflows/pr-checks.yml` runs seven jobs and none is PMD or Codacy; both
+rule quotations in `## Open questions` are verbatim. `## Traps` was read entry by entry against the
+file and all four remain true and enforceable as written — the first still has three inline pointer
+sites to reach (375, 921, 932) and the enumeration for the five helpers; the second now names the
+deploy Outcome by content and its "confirm `Salesforce_Navigator_User` is absent" clause carries the
+org-shape requirement the Outcome states; the third's "three of the four do not sit inside a `runAs`"
+is right (262, 971, 998 outside, 301 inside); the fourth's field list matches Group D. Criterion 7 is
+untouched by this pass — no `force-app/` file has changed since `2a1da02` — so the `sysmode-verify-02`
+evidence still describes the committed code; not re-run.
+
+**The four items the sweep reported without fixing, checked; three are genuinely out of bounds and one
+is genuinely harmless.** `## Out of scope`'s "Six methods open with the same shape" — the six named are
+the six, verified, and "open with" is loose exactly as reported: only
+`lookingWithoutChangingAnythingWritesNoRow` reaches the sandwich after a single setup line, the other
+five insert rows first. The section is out of bounds for a critique pass and every load-bearing figure
+in it is true, so leaving it is right. `## Evidence`'s "the two disproven hypotheses" — the note's
+line 46 reads "all three now-superseded framings: same-transaction race, and the two-step split",
+counting three while naming two, and line 50 treats the propagation gap as the *mechanism* of the race
+rather than a second hypothesis; on that record "two" is as defensible as any alternative and the
+evidence does not turn on it. `docs/research/salesforce-same-deploy-schema-race.md` disagreeing with
+itself — confirmed (26/40, 26/41, 41 of 41) and confirmed outside `devpath/` and outside `touches`; the
+right disposal is the parenthetical note `## Evidence` now carries plus a separate look by whoever owns
+the note. The stale "31 call sites" inside the closed `false positive` box — the true figure is 28
+(12 + 14 + 2), 31 being the grep total with the three declarations included, and the disposition turns
+only on whether any call site asserts `0` active or a `null` result. None does, re-checked. Leaving a
+number inside a closed disposition is correct; rewriting a previous critic's disproof is not this
+pass's to do.
+
+**No trap written.** The trigger is binary — a confirmed finding whose cause is a test that passed
+while the code was wrong — and neither finding above has a test anywhere on its path. Both are
+`spec.md` prose: a false superlative and a false universal in one `## Current state` bullet, and a
+non-exhaustive apposition in an `## Outcomes` bullet. No Apex test can reach either, and no test could
+have caught either. The `## Traps` entries were re-read against the file and all four stand.
+
+**Nothing under `force-app/` changed in this pass and nothing was deployed.** The only edits are
+`fix_cycles: 2` becoming `fix_cycles: 3` and this block. No acceptance criterion on either slice was
+touched, `done: true` stands, `## Out of scope` was not edited, and the `- [ ] excess` `.prettierignore`
+box and the open `- [ ]` box on commit `2a1da02`'s type are byte-for-byte as they were. No git history
+operation of any kind was performed or is proposed.
