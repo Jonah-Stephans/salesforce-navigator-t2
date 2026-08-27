@@ -3,6 +3,7 @@ depends_on:
   - devpath/navigator-test-system-mode/slices/01-declare-system-mode-on-verification-queries.md
 touches:
   - force-app/main/default/classes/NavigatorLayoutControllerTest.cls
+done: true
 ---
 
 # Route the duplicated active-layout queries through helpers
@@ -30,7 +31,7 @@ block of ten or more lines is repeated across its methods.
       criterion below requires to stay unchanged, so the two could not both hold literally
 - [x] met every `Assert` call in those two methods keeps its own message string, unchanged and at the call
       site — the messages are the only thing that distinguished the two duplicated blocks
-- [ ] neither block this spec's access-mode fix created still appears in more than one method:
+- [x] met neither block this spec's access-mode fix created still appears in more than one method:
       `activatingOneLayoutClearsTheFlagOnTheOthers` and
       `activationStaysOneUpdateAcrossTwoHundredLayouts` share no run of ten or more identical lines,
       per `.claude/rules/rstk-dry-enforcement.md`. **Scoped to this spec's own duplication**, restated
@@ -169,6 +170,22 @@ metadata and was never assigned to anyone but the two `@TestSetup` users. `sf pr
 Slice 01's org `sysmode-verify` was still alive and still permission-set-free, but it already holds
 this spec's metadata from that slice's deploy, so it is no longer a freshly created org and a new one
 was created instead.
+
+**Default-org deploy, and the source-tracking conflict it hit first** — not a deviation, recorded
+because the command run was not the bare one. `sf project deploy start` against the project default
+org (`sfnav-t2` / `test-u85wlgi5uild@example.com`) failed on the CLI's own conflict check: source
+tracking reported `NavigatorLayoutControllerTest` changed in the org. The org's stored body was
+fetched through the Tooling API and diffed before anything was overwritten. It is a mid-spec snapshot
+— slice 01's four Group A helpers carry `WITH SYSTEM_MODE`, but none of Group B's inline sites do and
+neither `activeId()` nor the routed call sites exist. It matches no commit on this branch and not
+`main`. Every line it holds that the branch does not is a line the branch deliberately changed, so
+overwriting it discards no work. Deployed with `--ignore-conflicts` on that basis, and with
+`--test-level RunLocalTests` so the tests actually ran: `Status: Succeeded`, deploy id
+`0AfO800000ZaCuXKAV`, 40 passing, 0 failing. **That green proves nothing about this spec's bug** —
+`Salesforce_Navigator_User` is assigned to two users in this org, one of them the default admin
+`test-u85wlgi5uild@example.com`, which is the exact wrong org shape `spec.md`'s `## Traps` names.
+Criterion 7's `sysmode-verify-02` run above is the one that carries weight; no code changed between
+the two runs.
 
 **`.prettierignore` does not cover `devpath/`** — not a deviation either, recorded because it damages
 every artifact this spec writes. The entry reads `dev-path/`, with a hyphen, under the comment
