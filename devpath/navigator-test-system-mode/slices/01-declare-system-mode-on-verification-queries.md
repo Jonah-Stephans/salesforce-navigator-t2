@@ -30,70 +30,80 @@ package and passes `RunLocalTests` cleanly.
 
 ## Deviations
 
-- [ ] **The spec's inventory of four affected queries is incomplete, and criterion 3 cannot be met
-      without contradicting criterion 5. Design decision needed.**
+- [x] fixed — **Resolved at the design gate on 2026-08-27: widen to all 11 queries.** The engineer
+      chose to fix the seven inline queries as well and to restate the too-broad criterion as the
+      invariant it was reaching for. `## Design`, `## Current state`, `## Outcomes` and `## Traps` on
+      `spec.md` were rewritten accordingly, and an independent re-scan of all 32 SOQL sites in the file
+      confirmed the seven-query inventory below is complete — there is no eighth. Two options recorded
+      here were rejected: keeping the scope at four (forfeits Outcome 2) and switching to a
+      `@TestSetup` permission-set grant (a different design). Routing the duplicated queries through
+      helpers, a third possibility raised during the conversation, is now on file under
+      `## Open questions` as its own follow-up. Original pause text follows.
 
-      The four helpers now declare `WITH SYSTEM_MODE` and the fix works — against a freshly created
-          scratch org with no permission set on the default admin, failures dropped from the spec's
-          reported 26/40 to **4/40**. But the deploy still fails, so criterion 3 is unmet.
+      **The spec's inventory of four affected queries is incomplete, and criterion 3 cannot be met
+          without contradicting criterion 5. Design decision needed.**
 
-          Verified against scratch org `sysmode-verify` / `test-o7yifj7p7zwv@example.com`, created
-          2026-08-27T12:18:50Z, `Salesforce_Navigator_User` confirmed absent from the org (0 rows in
-          `PermissionSet`), i.e. exactly the org shape criterion 3 names. `sf project deploy start
-          --test-level RunLocalTests --target-org sysmode-verify` → `Status: Failed`, Passing 36,
-          Failing 4:
+          The four helpers now declare `WITH SYSTEM_MODE` and the fix works — against a freshly created
+              scratch org with no permission set on the default admin, failures dropped from the spec's
+              reported 26/40 to **4/40**. But the deploy still fails, so criterion 3 is unmet.
 
-          - `activatingOneLayoutClearsTheFlagOnTheOthers` — line 876 —
-            `System.QueryException: No such column 'Is_Active__c' on entity 'Navigator_Layout__c'`
-          - `activatingOneUsersLayoutDoesNotDisturbAnother` — line 905 — same, `Is_Active__c`
-          - `activationStaysOneUpdateAcrossTwoHundredLayouts` — line 1701 — same, `Is_Active__c`
-          - `aV1RowIsUpgradedToV2OnRead` — line 365 —
-            `System.QueryException: No such column 'Schema_Version__c'`
+              Verified against scratch org `sysmode-verify` / `test-o7yifj7p7zwv@example.com`, created
+              2026-08-27T12:18:50Z, `Salesforce_Navigator_User` confirmed absent from the org (0 rows in
+              `PermissionSet`), i.e. exactly the org shape criterion 3 names. `sf project deploy start
+              --test-level RunLocalTests --target-org sysmode-verify` → `Status: Failed`, Passing 36,
+              Failing 4:
 
-          **Where `## Design` went wrong.** Its "Left alone, and why it's safe" paragraph reasons that
-          "`COUNT()` selects no fields at all". That is true of the bare `[SELECT COUNT() FROM
-          Navigator_Layout__c]` at line 241, but FLS also applies to fields referenced in a `WHERE`
-          clause — so `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` *does*
-          touch a permission-set-only custom field and *does* throw "No such column". `## Current
-          state`'s inventory missed every inline verification query written directly into a test body
-          rather than routed through a helper.
+              - `activatingOneLayoutClearsTheFlagOnTheOthers` — line 876 —
+                `System.QueryException: No such column 'Is_Active__c' on entity 'Navigator_Layout__c'`
+              - `activatingOneUsersLayoutDoesNotDisturbAnother` — line 905 — same, `Is_Active__c`
+              - `activationStaysOneUpdateAcrossTwoHundredLayouts` — line 1701 — same, `Is_Active__c`
+              - `aV1RowIsUpgradedToV2OnRead` — line 365 —
+                `System.QueryException: No such column 'Schema_Version__c'`
 
-          **Full inventory of what else needs the same treatment** — 7 queries in 4 test methods, none
-          of them inside a `System.runAs` block, so none of them bear on criterion 4:
+              **Where `## Design` went wrong.** Its "Left alone, and why it's safe" paragraph reasons that
+              "`COUNT()` selects no fields at all". That is true of the bare `[SELECT COUNT() FROM
+              Navigator_Layout__c]` at line 241, but FLS also applies to fields referenced in a `WHERE`
+              clause — so `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` *does*
+              touch a permission-set-only custom field and *does* throw "No such column". `## Current
+              state`'s inventory missed every inline verification query written directly into a test body
+              rather than routed through a helper.
 
-          | Line | Query | Why it fails |
-          |---|---|---|
-          | 365 | `[SELECT Schema_Version__c FROM Navigator_Layout__c LIMIT 1]` | custom field selected |
-          | 876 | `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` | custom field in `WHERE` |
-          | 881 | `[SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1]` | custom field in `WHERE` |
-          | 905 | `SELECT COUNT() … WHERE Is_Active__c = TRUE AND OwnerId = :owner.Id` | custom field in `WHERE` |
-          | 914 | `SELECT Name … WHERE Is_Active__c = TRUE AND OwnerId = :peer.Id LIMIT 1` | custom field in `WHERE` |
-          | 1701 | `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` | custom field in `WHERE` |
-          | 1706 | `[SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1]` | custom field in `WHERE` |
+              **Full inventory of what else needs the same treatment** — 7 queries in 4 test methods, none
+              of them inside a `System.runAs` block, so none of them bear on criterion 4:
 
-          Only 4 of the 7 appear in the failure list because a test stops at its first failing
-          assertion; lines 881, 914 and 1706 sit after a query that already threw.
+              | Line | Query | Why it fails |
+              |---|---|---|
+              | 365 | `[SELECT Schema_Version__c FROM Navigator_Layout__c LIMIT 1]` | custom field selected |
+              | 876 | `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` | custom field in `WHERE` |
+              | 881 | `[SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1]` | custom field in `WHERE` |
+              | 905 | `SELECT COUNT() … WHERE Is_Active__c = TRUE AND OwnerId = :owner.Id` | custom field in `WHERE` |
+              | 914 | `SELECT Name … WHERE Is_Active__c = TRUE AND OwnerId = :peer.Id LIMIT 1` | custom field in `WHERE` |
+              | 1701 | `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` | custom field in `WHERE` |
+              | 1706 | `[SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1]` | custom field in `WHERE` |
 
-          Confirmed untouched and still safe, exactly as `## Design` claims: line 241
-          (`[SELECT COUNT() FROM Navigator_Layout__c]`, no field anywhere) and line 965
-          (`[SELECT Name … WHERE Id = :ownersLayoutId]`, standard fields only) — the two
-          `System.runAs` security tests' own queries. Both tests passed in both orgs.
+              Only 4 of the 7 appear in the failure list because a test stops at its first failing
+              assertion; lines 881, 914 and 1706 sit after a query that already threw.
 
-          **The decision.** Adding `WITH SYSTEM_MODE` to those 7 queries is the fix that makes
-          criterion 3 / Outcome 2 achievable, but it directly contradicts criterion 5 and Outcome 4
-          ("No SOQL outside these four methods has an access-mode declaration added or changed"). One
-          of the two has to give. Options, for whoever owns the design:
+              Confirmed untouched and still safe, exactly as `## Design` claims: line 241
+              (`[SELECT COUNT() FROM Navigator_Layout__c]`, no field anywhere) and line 965
+              (`[SELECT Name … WHERE Id = :ownersLayoutId]`, standard fields only) — the two
+              `System.runAs` security tests' own queries. Both tests passed in both orgs.
 
-          1. Widen the scope to all 11 queries (the 4 helpers + these 7) and restate criterion 5 /
-             Outcome 4 as "no query inside a `System.runAs` block, and no query that reads only
-             standard fields, is touched" — which is the invariant the design was actually reaching for.
-          2. Keep the scope at four and drop criterion 3 / Outcome 2 to a partial claim, leaving the
-             package still undeployable against a fresh org — which forfeits the spec's stated point.
-          3. A different fix shape entirely (e.g. granting the permission set to the running admin in
-             `@TestSetup`), which is a different design, not this one.
+              **The decision.** Adding `WITH SYSTEM_MODE` to those 7 queries is the fix that makes
+              criterion 3 / Outcome 2 achievable, but it directly contradicts criterion 5 and Outcome 4
+              ("No SOQL outside these four methods has an access-mode declaration added or changed"). One
+              of the two has to give. Options, for whoever owns the design:
 
-          Option 1 looks right but it is not mine to choose. Paused here; the seven queries are
-          **not** edited.
+              1. Widen the scope to all 11 queries (the 4 helpers + these 7) and restate criterion 5 /
+                 Outcome 4 as "no query inside a `System.runAs` block, and no query that reads only
+                 standard fields, is touched" — which is the invariant the design was actually reaching for.
+              2. Keep the scope at four and drop criterion 3 / Outcome 2 to a partial claim, leaving the
+                 package still undeployable against a fresh org — which forfeits the spec's stated point.
+              3. A different fix shape entirely (e.g. granting the permission set to the running admin in
+                 `@TestSetup`), which is a different design, not this one.
+
+              Option 1 looks right but it is not mine to choose. Paused here; the seven queries are
+              **not** edited.
 
 - [ ] excess — `.claude/rules/rstk-lwc-standards.md`, `.claude/rules/rstk-slds2-ux-standards.md`,
       `docs/research/salesforce-same-deploy-schema-race.md`, `job`. All four were already dirty or
