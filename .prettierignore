@@ -12,3 +12,8 @@ coverage/
 # dev-path bookkeeping. Byte-zero front matter is already inside prettier's
 # front-matter carve-out, so this is belt and braces rather than the fix.
 dev-path/
+# devpath/ is the live tree; the entry above names an older, separate directory.
+# Without this line prettier --write re-indents continuation paragraphs inside a
+# list item by four spaces on every pass, never converging, until fenced blocks
+# reparse as nested indented code.
+devpath/

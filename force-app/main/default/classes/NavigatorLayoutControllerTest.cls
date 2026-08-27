@@ -888,28 +888,14 @@ private with sharing class NavigatorLayoutControllerTest {
     }
     Test.stopTest();
 
-    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       1,
-      [
-        SELECT COUNT()
-        FROM Navigator_Layout__c
-        WHERE Is_Active__c = TRUE
-        WITH SYSTEM_MODE
-      ],
+      activeCount(),
       'Exactly one of a user\'s layouts may be active'
     );
-    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       targetId,
-      [
-        SELECT Id
-        FROM Navigator_Layout__c
-        WHERE Is_Active__c = TRUE
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ]
-      .Id,
+      activeId(),
       'The layout that was activated must be the one left active'
     );
   }
@@ -1097,6 +1083,17 @@ private with sharing class NavigatorLayoutControllerTest {
       LIMIT 1
     ];
     return active.isEmpty() ? null : active[0].Name;
+  }
+
+  private static Id activeId() {
+    List<Navigator_Layout__c> active = [
+      SELECT Id
+      FROM Navigator_Layout__c
+      WHERE Is_Active__c = TRUE
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return active.isEmpty() ? null : active[0].Id;
   }
 
   /**
@@ -1742,28 +1739,14 @@ private with sharing class NavigatorLayoutControllerTest {
     }
     Test.stopTest();
 
-    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       1,
-      [
-        SELECT COUNT()
-        FROM Navigator_Layout__c
-        WHERE Is_Active__c = TRUE
-        WITH SYSTEM_MODE
-      ],
+      activeCount(),
       'Exactly one layout may be active however many the user owns'
     );
-    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       targetId,
-      [
-        SELECT Id
-        FROM Navigator_Layout__c
-        WHERE Is_Active__c = TRUE
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ]
-      .Id,
+      activeId(),
       'The activated layout must be the survivor out of 200'
     );
     Assert.isTrue(

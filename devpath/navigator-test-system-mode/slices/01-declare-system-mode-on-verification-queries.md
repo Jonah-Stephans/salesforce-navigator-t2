@@ -223,7 +223,15 @@ sysmode-verify` returned `Status: Succeeded`, Deploy ID `0AfRu00000fjy3dKAA`, 40
       14 name only `Id`, `Name`, `OwnerId` or nothing, checked individually — only the arithmetic is
       wrong.
 
-- [ ] **The fix inflated a one-line duplication into a 24-line one, against
+- [x] fixed — by slice 02's helper routing,
+      `devpath/navigator-test-system-mode/slices/02-route-duplicated-active-layout-queries-through-helpers.md`.
+      Both inline `COUNT()` copies now call `activeCount()` and both `SELECT Id` copies call a new
+      `activeId()` beside `activeName()`, so the two 24-line blocks are gone and the two methods share
+      no block of ten or more lines. The assertion messages stayed at the call sites. (A separate
+      14-line duplicated block in four other methods of the same file predates this spec and is paused
+      for a design decision under slice 02's `## Deviations` — it is not what this finding named.)
+      Finding as raised:
+      **The fix inflated a one-line duplication into a 24-line one, against
       `.claude/rules/rstk-dry-enforcement.md`.** Lines 887-910 in
       `activatingOneLayoutClearsTheFlagOnTheOthers` and lines 1736-1759 in
       `activationStaysOneUpdateAcrossTwoHundredLayouts` are now byte-identical across 24 lines except
