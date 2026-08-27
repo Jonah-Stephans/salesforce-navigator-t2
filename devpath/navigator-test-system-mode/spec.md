@@ -19,11 +19,11 @@ Deploying the whole spec into an org holding none of it — the exact scenario a
 meant to exercise — fails every time. Fix every affected query to declare the access mode it actually
 needs.
 
-Eleven queries are affected, not four. The first cut of this design named only the four that live in
-named helper methods and reasoned that the rest were safe; that reasoning was wrong in a specific way
-(`## Design`), and seven inline queries written directly into test bodies were missed. Correcting the
-first four took the failure count from 26/40 to 4/40 against a fresh scratch org — real progress, and
-still a failed deploy.
+Far more queries are affected than the first cut of this design found. It named only the four that live
+in named helper methods and reasoned that the rest were safe; that reasoning was wrong in a specific
+way (`## Design`), and every verification query written inline in a test body was missed. Correcting
+just the four helpers took the failure count from 26/40 to 4/40 against a fresh scratch org — real
+progress, and still a failed deploy. `## Current state` holds the full inventory.
 
 ## Outcomes
 
