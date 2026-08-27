@@ -4,6 +4,7 @@ depends_on:
 touches:
   - force-app/main/default/classes/NavigatorLayoutControllerTest.cls
 done: true
+fix_cycles: 0
 ---
 
 # Route the duplicated active-layout queries through helpers
@@ -200,3 +201,112 @@ continuation indent and both therefore report `[warn]` under `prettier --check`;
 in `.prettierignore`, deliberately not taken here because it is outside anything this spec designed.
 
 ## Critique findings
+
+Slice pass, 2026-08-27. Code under review is `a848111`
+(`git diff a848111~1 a848111 -- force-app/`); `git diff a848111 HEAD -- force-app/` is empty, so the
+committed code is what was read. Every claim below was checked against the file or the org, not against
+the diff alone.
+
+- [ ] **The `WITH SYSTEM_MODE` comment above `storedLayouts()` still names a closed set of four
+      helpers, and this slice added a fifth without extending it.**
+      `force-app/main/default/classes/NavigatorLayoutControllerTest.cls:113-120` reads "this and the
+      three verification helpers that follow — sectionNameOf, activeCount, activeName" and "Reverting
+      **these four** to WITH USER_MODE reintroduces 'No such column' against exactly that org shape".
+      `activeId()` (line 1088) is a fifth `WITH SYSTEM_MODE` helper and appears in neither the
+      enumeration nor the count. It also carries no pointer comment of its own, correctly, because
+      `spec.md` `## Design` justifies omitting one on the grounds that the routed shapes "live in the
+      helper block, directly under the full comment above `storedLayouts()`" — so the enumeration is
+      the *only* route by which the warning was ever going to reach `activeId()`, and it excludes it.
+      `spec.md` `## Traps` designates this comment as the thing that "carries the same warning at the
+      code site". Confirmed by mutation rather than argued: reverting **only** `activeId()` to
+      `WITH USER_MODE` and validating against `sysmode-verify-02`
+      (`sf project deploy start --dry-run --test-level RunLocalTests`, deploy `0Afdh000009pUzpCAE`)
+      runs 40 tests and fails exactly two — `activatingOneLayoutClearsTheFlagOnTheOthers` and
+      `activationStaysOneUpdateAcrossTwoHundredLayouts`, both
+      `System.QueryException: No such column 'Is_Active__c' on entity 'Navigator_Layout__c'`. That is
+      precisely the mutation the comment exists to warn a reader off, in precisely the helper the
+      comment does not name. Also `.claude/rules/rstk-preserve-documentation.md` §1: documentation a
+      refactor makes inaccurate is updated, not left standing. One clause in one comment; no code moves.
+      Worth noting for whoever writes it: the comment also sits 947 lines above the helper block it
+      describes, so the enumeration is doing more work than proximity is.
+
+- [x] false positive — **criterion 4 ticked against code that does not satisfy it.** Re-derived
+      mechanically over exactly the two named methods (`activatingOneLayoutClearsTheFlagOnTheOthers`,
+      lines 863-901; `activationStaysOneUpdateAcrossTwoHundredLayouts`, lines 1705-1766): the longest
+      run of identical consecutive lines they share is **five** — `Test.stopTest();`, blank,
+      `Assert.areEqual(`, `1,`, `activeCount(),` — diverging at the assertion message, which is what
+      criterion 3 intends. The next longest runs are four (`LIMIT 1` / `]` / `.Id;` / blank, and `);` /
+      `Assert.areEqual(` / `targetId,` / `activeId(),`). A file-wide scan for any 10-line window
+      occurring more than once returns only the pre-existing `getLayouts()` sandwich, at lines 186-198,
+      340, 407-419 and 468-480. Nothing this spec created is duplicated anywhere in the file.
+
+- [x] false positive — **the `getLayouts()` sandwich left duplicated across four methods violates
+      `.claude/rules/rstk-dry-enforcement.md`'s file-wide pre-PR scan, so criterion 4's narrow scope
+      buries a live violation.** Raised, checked against `spec.md` `## Out of scope`, and all three
+      recorded grounds hold on inspection. The repeated lines really are the `Test.startTest()` /
+      `System.runAs(owner)` / `getLayouts()` / `Test.stopTest()` sandwich (read at 186-198), so a
+      helper would have to swallow the governor-limit window — in a file whose bulk test measures
+      inside exactly that window (`Limits.getQueries()` at line 1728). `.claude/rules/rstk-legacy-boyscout.md`
+      really does list "Do NOT refactor code you are not modifying for your current task" in its danger
+      zone, and slice 02 modifies none of those four methods. And the block is confirmed present on
+      `main`, so no pass of this spec created it. The rule-versus-rule conflict is on file under
+      `## Open questions` with a named owner, which is the right place for it. Nothing to fix here.
+
+- [x] false positive — **criterion 7 ticked on evidence only the slice author could see.**
+      Independently re-checked against the live org rather than taken on the slice's word, because
+      `spec.md` `## Traps` says a green run against the wrong org shape proves nothing. Scratch org
+      `sysmode-verify-02` / `test-oj3vfo8h6fyw@example.com` / `00Ddh00000CKfDMEA1` exists and is active.
+      Its default admin holds exactly one `PermissionSetAssignment` and it is profile-owned
+      (`X00ex00000018ozh_128_09_04_12_1`); `Salesforce_Navigator_User` is assigned to no user in the org
+      at all. `DeployRequest 0Afdh000009p97KCAQ` reads `Succeeded`, `CheckOnly false`, `TestLevel
+      RunLocalTests`, 15 components deployed, 40 tests completed, 0 test errors. The
+      `NavigatorLayoutControllerTest` body stored in that org is byte-identical to the committed file
+      except for the trailing newline the Tooling API strips — so the green run was against this slice's
+      code, not a mid-spec snapshot like the one the default org was holding. Criterion 7 stands.
+
+- [x] false positive — **`activeId()`'s `active.isEmpty() ? null : active[0].Id` null branch is never
+      executed, so criterion 1 is ticked against an unexercised path.** It is unexercised by
+      construction, and symmetrically so: across all 31 `activeCount()` / `activeName()` / `activeId()`
+      call sites in the file, none asserts `0` active and none asserts a `null` name, so `activeName()`'s
+      identical branch has never run either — which is exactly the "matching `activeName()`" the
+      criterion asks for. `spec.md` `## Design` states the consequence outright: "Neither form changes
+      whether a test passes, only how it reads when it fails." A branch that by definition only changes
+      failure text cannot be asserted on by a suite that passes.
+
+- [x] false positive — **the four `// WITH SYSTEM_MODE is deliberate here — see the note above
+      storedLayouts().` pointer comments deleted at the routed call sites, against
+      `.claude/rules/rstk-preserve-documentation.md` §3 ("do not remove `//` comments that explain
+      … non-obvious behavior").** Each pointer explained a `WITH` clause on a query that no longer
+      exists at that site — both queries moved into `activeCount()` and `activeId()` — so keeping them
+      would leave four comments pointing at nothing. The three inline sites that kept their queries kept
+      their pointers, verified in the file at lines 374, 920 and 931. `spec.md` `## Design` authorises
+      the removal in as many words. What the removal did leave stale is the comment those pointers
+      pointed *at*, which is the open finding above and a different defect.
+
+- [x] false positive — **`activeId()` carries no ApexDoc.**
+      `.claude/rules/rstk-apex-standards.md` requires ApexDoc on "all public methods and constructors in
+      **new** Apex classes", and for pre-existing files says to add it "only to methods you modify or
+      add". `activeId()` is `private`, in a pre-existing class, and its four sibling verification
+      helpers — `storedLayouts()`, `sectionNameOf()`, `activeCount()`, `activeName()` — carry none
+      either. Documenting one of five would read as an inconsistency rather than a fix, and the rule's
+      stated reason for the pre-existing-file clause is to keep diff noise down.
+
+- [x] false positive — **routing two call sites into shared helpers weakens the access-mode
+      protection, because one reverted helper now breaks two tests instead of two sites breaking one
+      each.** Backwards: fewer sites carrying the declaration means fewer places to get it wrong, and
+      the mutation run above shows a single-helper revert still fails loudly and names both callers.
+      Checked the related `## Traps` hazard too — neither routed call site sits inside a `System.runAs`
+      block (both are after `Test.stopTest()`, lines 891-900 and 1742-1751), so no access-mode
+      declaration moved into a `runAs` context and Outcome 5 is untouched. The one place a routed helper
+      *is* called from inside a `runAs` — `activeCount()` / `activeName()` at lines 1159-1173 — predates
+      this slice and is unchanged by it.
+
+**Criteria 1, 2, 3, 5 and 6, checked and standing.** `activeId()` sits directly below `activeName()` at
+lines 1088-1097 with `WITH SYSTEM_MODE` and the null-safe return; both named methods take their count
+from `activeCount()` and their id from `activeId()` with no inline copy of either shape left; all seven
+`Assert` calls across the two methods — two in `activatingOneLayoutClearsTheFlagOnTheOthers`, five in
+`activationStaysOneUpdateAcrossTwoHundredLayouts` — keep their own message strings at the call site,
+unchanged word for word from the pre-slice file; the two owner-scoped queries in
+`activatingOneUsersLayoutDoesNotDisturbAnother` are untouched at lines 920-943 with both pointer comments
+intact; and the diff touches no Group C or Group D query — `layoutIdNamed()` at line 1047 and both
+`WHERE Name = …` setup queries are byte-for-byte as they were.
