@@ -1,7 +1,6 @@
 ---
 type: bug
 intent_accepted: true
-design_approved: true
 ---
 
 # Navigator test verification queries silently inherited Apex's new default execution mode
@@ -30,8 +29,11 @@ still a failed deploy.
 
 - Every verification query in `NavigatorLayoutControllerTest.cls` that reads or filters on a
   `Navigator_Layout__c` custom field explicitly declares `WITH SYSTEM_MODE`, so it reads a row's true
-  state regardless of which identity is running the test. Eleven queries, enumerated in
-  `## Current state`.
+  state regardless of which identity is running the test. Enumerated in `## Current state`, by
+  enclosing method. **Deliberately no count here** — the number changes whenever a query is routed
+  through a helper, and re-deriving it has already been wrong twice. The property is the Outcome.
+- No block of ten or more lines appears in more than one method in that file, per
+  `.claude/rules/rstk-dry-enforcement.md`.
 - `sf project deploy start --test-level RunLocalTests` against a freshly created scratch org holding
   none of this spec's metadata, with no permission set assigned to the org's default admin, deploys
   clean: the whole-payload deploy succeeds and every local test passes.
@@ -57,86 +59,91 @@ still a failed deploy.
   `WITH USER_MODE`) also flag test-verification-helper queries that should instead declare
   `WITH SYSTEM_MODE`? The mirror case to the rule it already enforces. Owner: whoever maintains that
   rule; out of scope for this spec's own fix.
-- **`NavigatorLayoutControllerTest` duplicates two query shapes that already exist as helpers, and that
-  duplication is what let this bug survive the first survey.** `activeCount()`'s body is retyped
-  verbatim inline at lines 876 and 1701; `[SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE
-LIMIT 1].Id` appears at 881 and 1706 with no helper at all; lines 906 and 915 are owner-scoped
-  variants of `activeCount()` and `activeName()`. Routing all six through helpers — plus a new
-  `activeId()`, `activeCountFor(Id)`, `activeNameFor(Id)` — would leave exactly one site per query
-  shape where access mode has to be reasoned about, and would satisfy this repo's DRY rule, which those
-  bodies currently violate. Deliberately **not** done here: rewiring four test methods risks producing
-  a test that still passes while checking something other than what it was written to check, which is a
-  worse failure than the one being fixed and wants a spec where the rewiring is what's under review.
-  Considered and rejected for this spec at the design gate, not overlooked.
+- The owner-scoped queries in `activatingOneUsersLayoutDoesNotDisturbAnother` — a `COUNT()` and a
+  `SELECT Name`, each filtered on `Is_Active__c` and `OwnerId` — are near-variants of `activeCount()`
+  and `activeName()` and stay inline. Each appears exactly once, so extracting
+  `activeCountFor(Id)` / `activeNameFor(Id)` would add a helper per caller and remove no duplication;
+  the DRY rule's trigger is a block appearing in more than one method. If a third caller ever wants
+  either shape, that is when they become helpers.
 
 ## Current state
 
-`force-app/main/default/classes/NavigatorLayoutControllerTest.cls`, 1786 lines, 32 SOQL sites. Line
-numbers below are current — the four helpers already carry the fix from the first build pass, so the
-file has shifted 17 lines from the numbers in this spec's git history.
+`force-app/main/default/classes/NavigatorLayoutControllerTest.cls`, 32 SOQL sites.
+
+**Queries below are identified by their enclosing method and their shape, never by line number.** Line
+numbers in this section went stale twice — the second time inside the very commit that was correcting
+them, because that commit expanded two comment blocks and shifted every number it had just written.
+Method names survive every edit and are greppable; the numbers added a precision no reader could rely
+on. Neither is a file length quoted here, for the same reason.
 
 The custom fields at issue are `Is_Active__c`, `Layout_JSON__c`, `Schema_Version__c` and
 `Sort_Order__c`. Their FLS lives only in `Salesforce_Navigator_User`
 (`force-app/main/default/permissionsets/Salesforce_Navigator_User/`), the only permission set in the
-repo. `@TestSetup` (`makeUsers()`, lines 39–75) assigns it to exactly two users, `nvowner` and
-`nvpeer` — the `System.runAs` identities — never to the org's default admin, which is the identity
-that runs every query outside a `runAs` block.
+repo. `@TestSetup` (`makeUsers()`) assigns it to exactly two users, `nvowner` and `nvpeer` — the
+`System.runAs` identities — never to the org's default admin, which is the identity that runs every
+query outside a `runAs` block.
 
 **Field-level security applies to a field named anywhere in a query — the `SELECT` list, the `WHERE`
 clause, or `ORDER BY` — not only to fields whose values come back.** That is the fact the first cut of
 this design got wrong, and it is what puts the `COUNT()` queries below in scope.
 
-### Group A — the four helpers. Already fixed, in the pause commit on this branch.
+### Group A — the verification helpers. All declare `WITH SYSTEM_MODE` already.
 
-- `storedLayouts()` (121–135) — selects all four custom fields, orders by `Sort_Order__c`. Called from
-  8 write-path tests.
-- `sectionNameOf(String)` (1020–1034) — selects `Layout_JSON__c`. Used ~10 times.
-- `activeCount()` (1036–1043) — `COUNT()` filtered on `Is_Active__c`. Used ~10 times.
-- `activeName()` (1045–1055) — selects `Name`, filtered on `Is_Active__c`. Used ~13 times.
+- `storedLayouts()` — selects all four custom fields, orders by `Sort_Order__c`. Called from 8
+  write-path tests.
+- `sectionNameOf(String)` — selects `Layout_JSON__c`.
+- `activeCount()` — `COUNT()` filtered on `Is_Active__c`.
+- `activeName()` — selects `Name`, filtered on `Is_Active__c`; returns `null` when nothing is active.
 
-### Group B — seven inline queries. Not yet fixed; this is the remaining work.
+### Group B — inline queries in test bodies. All declare `WITH SYSTEM_MODE` already.
 
 None sits inside a `System.runAs` block, so none bears on Outcome 3.
 
-| Line | Test method                                              | Query                                                                    | Custom field, and where       |
-| ---- | -------------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------- |
-| 365  | `aV1RowIsUpgradedToV2OnRead` (319)                       | `SELECT Schema_Version__c FROM Navigator_Layout__c LIMIT 1`              | `Schema_Version__c`, selected |
-| 876  | `activatingOneLayoutClearsTheFlagOnTheOthers` (847)      | `SELECT COUNT() … WHERE Is_Active__c = TRUE`                             | `Is_Active__c`, filtered      |
-| 881  | same                                                     | `SELECT Id … WHERE Is_Active__c = TRUE LIMIT 1`                          | `Is_Active__c`, filtered      |
-| 906  | `activatingOneUsersLayoutDoesNotDisturbAnother` (887)    | `SELECT COUNT() … WHERE Is_Active__c = TRUE AND OwnerId = :owner.Id`     | `Is_Active__c`, filtered      |
-| 915  | same                                                     | `SELECT Name … WHERE Is_Active__c = TRUE AND OwnerId = :peer.Id LIMIT 1` | `Is_Active__c`, filtered      |
-| 1701 | `activationStaysOneUpdateAcrossTwoHundredLayouts` (1663) | `SELECT COUNT() … WHERE Is_Active__c = TRUE`                             | `Is_Active__c`, filtered      |
-| 1706 | same                                                     | `SELECT Id … WHERE Is_Active__c = TRUE LIMIT 1`                          | `Is_Active__c`, filtered      |
+| Enclosing method                                  | Query                                                                    | Custom field, and where       |
+| ------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------- |
+| `aV1RowIsUpgradedToV2OnRead`                      | `SELECT Schema_Version__c … LIMIT 1`                                     | `Schema_Version__c`, selected |
+| `activatingOneLayoutClearsTheFlagOnTheOthers`     | `SELECT COUNT() … WHERE Is_Active__c = TRUE`                             | `Is_Active__c`, filtered      |
+| `activatingOneLayoutClearsTheFlagOnTheOthers`     | `SELECT Id … WHERE Is_Active__c = TRUE LIMIT 1`                          | `Is_Active__c`, filtered      |
+| `activatingOneUsersLayoutDoesNotDisturbAnother`   | `SELECT COUNT() … WHERE Is_Active__c = TRUE AND OwnerId = :owner.Id`     | `Is_Active__c`, filtered      |
+| `activatingOneUsersLayoutDoesNotDisturbAnother`   | `SELECT Name … WHERE Is_Active__c = TRUE AND OwnerId = :peer.Id LIMIT 1` | `Is_Active__c`, filtered      |
+| `activationStaysOneUpdateAcrossTwoHundredLayouts` | `SELECT COUNT() … WHERE Is_Active__c = TRUE`                             | `Is_Active__c`, filtered      |
+| `activationStaysOneUpdateAcrossTwoHundredLayouts` | `SELECT Id … WHERE Is_Active__c = TRUE LIMIT 1`                          | `Is_Active__c`, filtered      |
 
-Only four of the seven appear in the current failure list, because a test method stops at its first
-failing assertion — 881, 915 and 1706 sit behind a query that already threw.
+**Two shapes in that table appear twice**, and after the access-mode fix expanded each from one line
+to six, the surrounding blocks became byte-identical across 24 lines in
+`activatingOneLayoutClearsTheFlagOnTheOthers` and `activationStaysOneUpdateAcrossTwoHundredLayouts`,
+differing only in two assertion message strings. That crosses
+`.claude/rules/rstk-dry-enforcement.md`'s ten-line threshold and is the remaining work — see
+`## Design`. The `COUNT()` shape is `activeCount()`'s body verbatim; the `SELECT Id` shape has no
+helper yet.
+
+The owner-scoped pair in `activatingOneUsersLayoutDoesNotDisturbAnother` appears once each and is not
+duplication — see `## Open questions`.
 
 ### Group C — four queries that stay bare, and why.
 
-Line numbers here are as the file stands after Group B was fixed, so they run ahead of Group B's table
-above. Exactly one of the four sits inside a `System.runAs` block; the other three run at the default
-admin identity.
+Exactly one of the four sits inside a `System.runAs` block; the other three run at the default admin
+identity.
 
-- 257 — in `peerCannotReadAnotherUsersLayouts` (236), after `Test.stopTest()`, outside any `runAs`.
-  Bare `COUNT()`, no field named anywhere.
-- 296 — in `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack` (276), inside `System.runAs(owner)`.
-  `COUNT()` filtered on `Id`. This is the only Group C query inside a `runAs` block, and it is in
-  neither of the two security tests.
-- 975, 1002 — in `aUserCannotUpdateAnotherUsersLayout` (969), both outside any `runAs`: `SELECT Id …
-LIMIT 1` before the `runAs` write, and `SELECT Name … WHERE Id = :ownersLayoutId` after
-  `Test.stopTest()`.
+- `peerCannotReadAnotherUsersLayouts` — bare `COUNT()`, no field named anywhere, after
+  `Test.stopTest()` and outside any `runAs`.
+- `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack` — `COUNT()` filtered on `Id`, inside
+  `System.runAs(owner)`. This is the only Group C query inside a `runAs` block, and it is in neither
+  of the two security tests.
+- `aUserCannotUpdateAnotherUsersLayout` — two, both outside any `runAs`: `SELECT Id … LIMIT 1` before
+  the `runAs` write, and `SELECT Name … WHERE Id = :ownersLayoutId` after `Test.stopTest()`.
 
 None of the four needs a declaration: each names only `Id`, `Name` or nothing at all, and FLS cannot
 restrict those on a custom object. Adding one would also not void anything — see `## Design` and
 `## Traps` for why the earlier claim that it would was wrong.
 
-### Group D — the remaining 17 sites. Out of scope, and safe by coincidence rather than by structure.
+### Group D — everything else. Out of scope, and safe by coincidence rather than by structure.
 
-32 SOQL sites in the file, less the 11 of Groups A and B and the 4 of Group C, leaves 17. Three query
-`Profile`, `PermissionSet` and `User` (45, 52, 96) — a different object entirely. The other 14 read
-`Navigator_Layout__c` but name only `Id`, `Name`, `OwnerId` or nothing at all (bare `COUNT()`), none of
-which FLS can restrict on a custom object. They are safe today because of which fields they happen to
-name. See `## Traps`.
+Whatever remains after Groups A, B and C. Three query `Profile`, `PermissionSet` and `User` — a
+different object entirely, all inside `@TestSetup`'s `makeUsers()` and `userWith(String)`. The rest
+read `Navigator_Layout__c` but name only `Id`, `Name`, `OwnerId` or nothing at all (bare `COUNT()`),
+none of which FLS can restrict on a custom object. They are safe today because of which fields they
+happen to name. See `## Traps`.
 
 ### Convention in the repo
 
@@ -168,10 +175,11 @@ project deploy start --test-level RunLocalTests` (Outcome 2's own command, again
 scratch org with no permission set on the default admin). No new test is written — the fix corrects
 existing verification queries so the existing suite reads each row's true state.
 
-**The fix.** Add `WITH SYSTEM_MODE` to each of the eleven queries in Groups A and B of
-`## Current state`, placed after `WHERE` (where present) and before `ORDER BY` / `LIMIT`. Group A's
-four are already done and are shown here as the worked pattern; Group B's seven take the same
-treatment, in place, each with a one-line pointer to the comment above `storedLayouts()`.
+**The fix.** Add `WITH SYSTEM_MODE` to every query in Groups A and B of `## Current state`, placed
+after `WHERE` (where present) and before `ORDER BY` / `LIMIT`. Group A's helpers are shown here as the
+worked pattern; Group B's inline queries take the same treatment in place, each with a one-line
+pointer to the comment above `storedLayouts()` — except the two shapes that are routed into helpers
+instead, below.
 
 ```apex
 // Deliberately WITH SYSTEM_MODE, not WITH USER_MODE (the convention everywhere else in this
@@ -266,18 +274,18 @@ Each of the two security test methods still gets a method-level comment, so that
 the bareness is considered rather than overlooked — but the comment says the true reason above, not the
 false one.
 
-**Comment placement.** The full explanatory comment sits once above `storedLayouts()`, as before. Each
-of the seven Group B sites gets a one-line pointer back to it. The seven are scattered from line 365 to
-1706, and the trap this spec records — someone reverting to `WITH USER_MODE` to match house convention
-— is triggered by a person reading one site, not the file; a pointer is the only thing that reaches
-them. The two Group C test methods get their own comment, per above.
+**Comment placement.** The full explanatory comment sits once above `storedLayouts()`. Every Group B
+site that remains inline after the routing gets a one-line pointer back to it. Those sites are
+scattered across the file, and the trap this spec records — someone reverting to `WITH USER_MODE` to
+match house convention — is triggered by a person reading one site, not the file; a pointer is the
+only thing that reaches them. The helpers need no pointer, sitting under the comment already. The two
+Group C security tests get their own comment, per above.
 
-**A stated limit.** After this fix the file contains 11 queries declaring `WITH SYSTEM_MODE`, the 4 of
-Group C left deliberately bare, and 14 more against `Navigator_Layout__c` that need no
-declaration **only because of which fields they currently name** (`## Current state`, Group D). Adding
-a custom field to any of their `WHERE` clauses later reintroduces this bug in a file where a dozen
-neighbours already carry the fix. Nothing in this design prevents that, and no code change here would;
-it is recorded in `## Traps` because that is what the next Build worker reads.
+**A stated limit.** Group D's queries against `Navigator_Layout__c` need no declaration **only because
+of which fields they currently name** (`## Current state`). Adding a custom field to any of their
+`WHERE` clauses later reintroduces this bug, in a file where their neighbours already carry the fix
+and therefore look like they cover it. Nothing in this design prevents that, and no code change here
+would; it is recorded in `## Traps` because that is what the next Build worker reads.
 
 **Scanner risk, resolved.** No suppression annotation is added. This repo's CI runs no PMD or Codacy
 job (`## Current state`), so there's nothing to trip over an explicit `WITH SYSTEM_MODE`. Whether the
@@ -285,20 +293,53 @@ house rule itself should be taught to distinguish "missing an access mode" from 
 `SYSTEM_MODE` on purpose" is the mirror case already on file under `## Open questions`, unchanged by
 this fix.
 
-**Not done here, and deliberately.** Six of the seven Group B queries duplicate a shape that already
-exists as a helper. Routing them through helpers instead of annotating them is the better end state and
-is recorded under `## Open questions` as its own piece of work — rejected for this spec because
-rewiring four test methods risks a test that passes while checking the wrong thing.
+**Routing the duplicated shapes through helpers.** The access-mode fix expanded two one-line queries
+into six-line ones, and in doing so turned a one-line duplication into a 24-line one:
+`activatingOneLayoutClearsTheFlagOnTheOthers` and `activationStaysOneUpdateAcrossTwoHundredLayouts`
+now hold byte-identical blocks differing only in two assertion message strings. That crosses
+`.claude/rules/rstk-dry-enforcement.md`'s ten-line threshold. This spec originally deferred
+helper-routing, and that deferral was reasoned about the pre-fix one-liners; it does not survive the
+blocks the fix created, so the routing is in scope.
+
+Two shapes, both duplicated across exactly those two methods:
+
+- **`SELECT COUNT() … WHERE Is_Active__c = TRUE`** — already exists as `activeCount()`. Both inline
+  copies are deleted and the call sites call it.
+- **`SELECT Id … WHERE Is_Active__c = TRUE LIMIT 1`** — no helper today. Add `activeId()` beside the
+  others, and both call sites call it.
+
+```apex
+private static Id activeId() {
+  List<Navigator_Layout__c> active = [
+    SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE WITH SYSTEM_MODE LIMIT 1
+  ];
+  return active.isEmpty() ? null : active[0].Id;
+}
+```
+
+**`activeId()` returns `null` on an empty result rather than throwing, matching `activeName()`
+directly above it.** This is the only behavioural difference in the whole change and it is worth
+naming: the inline form it replaces is `[… LIMIT 1].Id`, which throws `List has no rows for
+assignment` when nothing is active. Under the helper, a test with no active row fails on its assertion
+— `expected <a01…> actual null`, carrying the assertion's own message — instead of on a query
+exception. **Neither form changes whether a test passes**, only how it reads when it fails, and the
+existing convention two lines up is the null-safe one.
+
+**The assertion messages stay at the call sites.** They are the only thing that distinguishes the two
+blocks, and they are what a failure prints. Nothing moves into the helper except the query.
+
+**The pointer comments on the routed queries go away with them** — the routed shapes now
+live in the helper block, directly under the full comment above `storedLayouts()`, so a pointer back
+to a comment four lines up would be noise. The remaining inline sites keep theirs.
 
 ## Traps
 
-Reverting any of the eleven `WITH SYSTEM_MODE` declarations added by this fix back to `WITH USER_MODE`
-— to match this codebase's otherwise-universal convention — silently reintroduces the bug this spec
-fixes. It won't fail against a normally-provisioned dev org (whose admin usually already has broad
-FLS); it only fails against a freshly created scratch org whose default admin holds no permission set,
-which is exactly the shape of org this project's own CI deploy gate creates. The comment above
-`storedLayouts()` carries the same warning at the code site, and each of the seven inline sites points
-back to it.
+Reverting any `WITH SYSTEM_MODE` declaration added by this fix back to `WITH USER_MODE` — to match this
+codebase's otherwise-universal convention — silently reintroduces the bug this spec fixes. It won't
+fail against a normally-provisioned dev org (whose admin usually already has broad FLS); it only fails
+against a freshly created scratch org whose default admin holds no permission set, which is exactly the
+shape of org this project's own CI deploy gate creates. The comment above `storedLayouts()` carries the
+same warning at the code site, and every inline site points back to it.
 
 **A test that passes under a green deploy against the wrong org shape proves nothing about this bug.**
 The default dev org for this project (`sfnav-t2`) has the permission set on its admin, so the whole
@@ -309,20 +350,20 @@ confirm `Salesforce_Navigator_User` is absent from it.
 
 **`WITH SYSTEM_MODE` suppresses CRUD/FLS, never sharing — so do not reason about this file as though an
 access-mode declaration could silently void a `System.runAs` security test.** An earlier version of this
-spec said exactly that, and it is wrong: `NavigatorLayoutControllerTest` is `private with sharing`
-(line 18), and under `WITH SYSTEM_MODE` record sharing is still controlled by the class's sharing
-keyword. What `peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` each prove
+spec said exactly that, and it is wrong: `NavigatorLayoutControllerTest` is declared
+`private with sharing`, and under `WITH SYSTEM_MODE` record sharing is still controlled by the class's
+sharing keyword. What `peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` each prove
 is the `NavigatorLayoutController` call made inside its `System.runAs(peer)` block, which no
 declaration on a test-class query can reach. The four Group C queries stay bare because they need
 nothing — they name only `Id`, `Name` or no field at all — and three of the four do not sit inside a
 `runAs` block in the first place. If you ever need to check whether a change voids one of these tests,
 look at the controller call inside the `runAs`, not at the verification query after it.
 
-**Fourteen queries against `Navigator_Layout__c` are safe only because of which fields they name, not
-because of where they sit** (`## Current state`, Group D — `Id`, `Name`, `OwnerId`, bare `COUNT()`).
-FLS applies to a field named anywhere in a query, including one that only appears in a `WHERE` clause —
-so adding any custom field to any of their filters reintroduces this bug, in a file where eleven
-neighbours already carry the fix and therefore look like they cover it. **This is the exact mistake
+**Group D's queries against `Navigator_Layout__c` are safe only because of which fields they name, not
+because of where they sit** (`## Current state` — `Id`, `Name`, `OwnerId`, bare `COUNT()`). FLS applies
+to a field named anywhere in a query, including one that only appears in a `WHERE` clause — so adding
+any custom field to any of their filters reintroduces this bug, in a file where their neighbours
+already carry the fix and therefore look like they cover it. **This is the exact mistake
 that produced the first, incomplete version of this design:** the premise "`COUNT()` selects no fields"
 is true, and the conclusion "so it can't hit FLS" does not follow.
 
