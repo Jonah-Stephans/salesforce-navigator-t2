@@ -923,7 +923,48 @@ leaves standing the very defect it was fixing. One is false in two of its three 
    100%" at line 34, and really does disagree with itself — 26/40 at line 6, 26/41 at line 12. The note
    itself was not edited, correctly: it is outside `devpath/` and outside `touches`.
 
-- [ ] **`## Current state` Group A's `activeCount()` bullet replaced a false count with two false
+- [x] fixed — **struck the superlative and the universal, and struck the third clause with them;
+      wrote nothing in their place.** Group A's `activeCount()` bullet now reads in full:
+      "`activeCount()` — `COUNT()` filtered on `Is_Active__c`." Struck verbatim, being everything that
+      followed that full stop: "The most widely called of the five: every test that asserts how many of
+      a user's layouts are active goes through it. It held most of those callers before this spec ever
+      ran; slice 02's routing added two more."
+
+      **No replacement sentence was composed and no new claim of fact was written** — not a corrected
+      superlative, not a corrected count, not a property. That is the pass rather than an omission in
+      it. The clause struck here is what a previous pass wrote while replacing a false figure, and it
+      survived a round of review the figure would not have, because a false superlative reads as
+      considered judgment where a false number is falsifiable by counting. Nothing new to verify is
+      nothing new to get wrong.
+
+      **Why the third clause went too, though the critic verified it true.** Two reasons, the first
+      sufficient on its own. It could not stand where it stood: "those callers" drew its antecedent
+      from the universal immediately above it, so keeping it meant re-pointing the pronoun — new words
+      carrying a caller-history claim, which is precisely what this pass is not to write. And on the
+      test the scope set, whether it tells a reader of this section what they need in order to know
+      which queries need an access mode, it does not — when `activeCount()` acquired its callers bears
+      on no access mode, and the paragraph a few lines below already says in the section's own voice
+      that a count of callers is decoration here. What remains is the identification, in the same shape
+      `sectionNameOf(String)`'s bullet already carries, so the bullet implies neither a superlative nor
+      a universal by sitting alone.
+
+      **Checked after the deletion rather than assumed.** `grep -n` over `spec.md` for "most widely
+      called", "widely called", "goes through it", "those callers" and "of the five" returns nothing,
+      so the struck phrases are gone and no surviving sentence quoted them. "caller" still returns the
+      `## Open questions` mentions of `activeCountFor(Id)` / `activeNameFor(Id)` and the "**No caller
+      counts here, deliberately**" paragraph; "activeCount" still returns that near-variant mention,
+      the `## Design` sketch and its routing bullet, and this bullet. Each of those reads the same
+      after the strike as before it. The "**No caller counts here, deliberately**" paragraph was
+      re-read whole and still reads true: its "two of the three this list used to carry were false" is
+      past tense about the counts the list carried before the sweep, and its closing sentence says the
+      properties above are greppable rather than that each bullet carries one. `storedLayouts()`'s and
+      `activeId()`'s bullets were left exactly as they stood, and deliberately not made "consistent"
+      with this one — the critic verified both of their properties true.
+
+      Nothing under `force-app/` changed, so there was nothing to deploy and no deploy was run.
+
+      Finding as raised:
+      **`## Current state` Group A's `activeCount()` bullet replaced a false count with two false
       properties.** The bullet now reads "The most widely called of the five: every test that asserts
       how many of a user's layouts are active goes through it." Both clauses are new text, and both are
       false of the file.
@@ -964,7 +1005,33 @@ leaves standing the very defect it was fixing. One is false in two of its three 
       `COUNT()` filtered on `Is_Active__c`, the org-wide active count, with the owner-scoped variants
       recorded in Group B and `## Open questions`. No code involved.
 
-- [ ] **`## Outcomes`' replacement apposition is still false-as-exhaustive, by the sweep's own
+- [x] fixed — **struck the apposition; the two method names stand as the identification.** The
+      `## Outcomes` bullet now reads in full: "`peerCannotReadAnotherUsersLayouts` and
+      `aUserCannotUpdateAnotherUsersLayout` continue to pass, unchanged. Their own access-mode
+      behavior, a peer user without the permission set being unable to read or touch another user's
+      rows, is exactly what must not change." Struck verbatim, with the em dashes that bracketed it:
+      "— the two cross-user security tests that hold Group C's bare queries —".
+
+      **The discriminator the critic offered was not substituted, and no other was composed.** The
+      finding names one that holds — the method-level comment explaining why the queries are bare —
+      and it is deliberately not taken, because taking it would be writing a new claim of fact, which
+      is what this pass exists not to do. The apposition was a gloss on two names that were already
+      the identification; it needs no successor.
+
+      **Checked after the deletion rather than assumed.** `grep -n` over `spec.md` for "cross-user",
+      "Group C's bare" and "bare queries" returns nothing. The two method names still resolve
+      elsewhere without the gloss — `## Current state` Group C describes each one's queries by shape
+      and `runAs` position, `## Design` names the pair as the tests whose proof is the
+      `NavigatorLayoutController` call inside `System.runAs(peer)`, and `## Traps` says the same — and
+      each of those sentences reads the same after the strike as before it. The rest of the bullet is
+      unaltered and needs the gloss for nothing: "Their own access-mode behavior …" takes its
+      antecedent from the two names, not from the apposition, and what the Outcome requires of the two
+      tests is untouched.
+
+      Nothing under `force-app/` changed, so there was nothing to deploy and no deploy was run.
+
+      Finding as raised:
+      **`## Outcomes`' replacement apposition is still false-as-exhaustive, by the sweep's own
       standard.** The bullet now reads "`peerCannotReadAnotherUsersLayouts` and
       `aUserCannotUpdateAnotherUsersLayout` — the two cross-user security tests that hold Group C's
       bare queries". Group C's four bare queries sit in **three** methods, not two: 262 in

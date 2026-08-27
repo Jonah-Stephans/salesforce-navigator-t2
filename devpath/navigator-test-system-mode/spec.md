@@ -41,10 +41,9 @@ progress, and still a failed deploy. `## Current state` holds the full inventory
 - `sf project deploy start --test-level RunLocalTests` against a freshly created scratch org holding
   none of this spec's metadata, with no permission set assigned to the org's default admin, deploys
   clean: the whole-payload deploy succeeds and every local test passes.
-- `peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` — the two cross-user
-  security tests that hold Group C's bare queries — continue to pass, unchanged. Their own access-mode
-  behavior, a peer user without the permission set being unable to read or touch another user's rows,
-  is exactly what must not change.
+- `peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` continue to pass,
+  unchanged. Their own access-mode behavior, a peer user without the permission set being unable to
+  read or touch another user's rows, is exactly what must not change.
 - No query inside a `System.runAs` block, and no query that reads or filters on only standard fields,
   has an access-mode declaration added or changed.
 
@@ -129,9 +128,7 @@ this design got wrong, and it is what puts the `COUNT()` queries below in scope.
 - `storedLayouts()` — selects all four custom fields, orders by `Sort_Order__c`. Called only from
   write-path tests, the ones that assert what a create or update actually stored.
 - `sectionNameOf(String)` — selects `Layout_JSON__c`.
-- `activeCount()` — `COUNT()` filtered on `Is_Active__c`. The most widely called of the five: every
-  test that asserts how many of a user's layouts are active goes through it. It held most of those
-  callers before this spec ever ran; slice 02's routing added two more.
+- `activeCount()` — `COUNT()` filtered on `Is_Active__c`.
 - `activeName()` — selects `Name`, filtered on `Is_Active__c`; returns `null` when nothing is active.
 - `activeId()` — selects `Id`, filtered on `Is_Active__c`; returns `null` when nothing is active,
   matching `activeName()`. Added by slice 02, and called from exactly the two methods whose inline
