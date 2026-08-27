@@ -149,7 +149,13 @@ block of ten or more lines is repeated across its methods.
       Criterion 4 is left unticked and `done: true` is not written. Everything else in this slice is
       built, deployed and green.
 
-- [ ] excess — `.prettierignore`, outside this slice's `touches`. Changed deliberately by the
+- [x] false positive — `touches` was incomplete. The line is load-bearing for this spec's own
+      artifacts: without it `lint-staged` runs prettier over the slice files on every commit and
+      re-indents their continuation paragraphs without converging, which is what was corrupting the
+      pause box this commit existed to preserve. A change that a spec's own bookkeeping cannot
+      survive without is in that spec's scope. Closed at the engineer's instruction on 2026-08-27.
+      Box as raised:
+      excess — `.prettierignore`, outside this slice's `touches`. Changed deliberately by the
       orchestrator before the pause commit, not swept in by `git add -A`: one line adding `devpath/`
       beside the existing `dev-path/` entry. Verified first — `prettier --write` on a copy of these
       two slice files adds four spaces of continuation indent per pass and does not converge, and at

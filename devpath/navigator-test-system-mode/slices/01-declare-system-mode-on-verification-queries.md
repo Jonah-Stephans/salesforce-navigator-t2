@@ -138,7 +138,15 @@ identity is running the test, so a freshly created scratch org's default admin, 
                   Option 1 looks right but it is not mine to choose. Paused here; the seven queries are
                   **not** edited.
 
-- [ ] excess — `.claude/rules/rstk-lwc-standards.md`, `.claude/rules/rstk-slds2-ux-standards.md`,
+- [x] false positive — for three of the four: `touches` was simply incomplete. The two
+      `.claude/rules` files are the engineer's own edits to this repo's scaffolding and
+      `docs/research/salesforce-same-deploy-schema-race.md` is the investigation trail this spec's
+      `## Evidence` cites by path, so all three belong with this work rather than outside it.
+      **`job` is not one of them** — it is a 9-byte shell artifact reading `NO - red`, now tracked
+      from `29b24fd`, and calling it in scope would be false. It is not a devpath question and no
+      disposition here can delete a file; raised with the engineer on 2026-08-27 to be removed in a
+      commit of its own. Closed at the engineer's instruction. Box as raised:
+      excess — `.claude/rules/rstk-lwc-standards.md`, `.claude/rules/rstk-slds2-ux-standards.md`,
       `docs/research/salesforce-same-deploy-schema-race.md`, `job`. All four were already dirty or
       untracked in the working tree before this slice started and are outside its `touches`;
       `git add -A` on the pause commit swept them in. The two `.claude/rules` files are the
