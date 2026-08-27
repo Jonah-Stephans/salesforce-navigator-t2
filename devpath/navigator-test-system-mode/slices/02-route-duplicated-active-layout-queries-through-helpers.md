@@ -499,7 +499,15 @@ the two sentences it rewrote — the two findings below.
       enumeration is what actually carries the warning, as `## Design`'s routing section now says
       outright.
 
-- [ ] **Commit `2a1da02` is typed `fix(test):` for a change that is documentation only, which
+- [x] won't fix — a commit-message type is not worth rewriting published history for. The branch is
+      pushed and `2a1da02` is a published commit; correcting the type means `--amend` and a
+      force-push, and the cost of that outweighs one mistyped subject line on a spec branch. The
+      finding is right and stands on the record: `2a1da02` is the single outlier, and the four
+      commits after it are all correctly typed `docs(spec):`, so nothing compounded it. Decided by
+      the engineer at the fix cap on 2026-08-27; written here at their instruction rather than by
+      their own hand, which is a departure from `devpath`'s rule that this disposition is a human's
+      hand edit everywhere it appears. Finding as raised:
+      **Commit `2a1da02` is typed `fix(test):` for a change that is documentation only, which
       `.claude/rules/rstk-conventional-commits.md` types `docs`.** The rule lists `docs` as
       "Documentation only changes" and `fix` as "A bug fix". All three files in the commit are prose:
       nine comment lines in the `.cls`, three `## Design` paragraphs, one slice-file disposition. The
