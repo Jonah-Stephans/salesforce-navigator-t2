@@ -3,7 +3,7 @@ depends_on:
 touches:
   - force-app/main/default/classes/NavigatorLayoutControllerTest.cls
 done: true
-fix_cycles: 0
+fix_cycles: 1
 ---
 
 # Declare WITH SYSTEM_MODE on the eleven test verification queries
@@ -51,15 +51,15 @@ identity is running the test, so a freshly created scratch org's default admin, 
       only — no change to which queries are touched.
 
       While placing it, two attribution slips in `spec.md`'s `## Current state`, Group C surfaced. They
-                  change nothing about the work — all four queries are untouched either way — but a later reader
-                  should not trust the line as written. (a) Line 289 is inside
-                  `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack`, not
-                  `peerCannotReadAnotherUsersLayouts`. (b) Group C's claim that "all four are inside a
-                  `System.runAs` block" holds only for 289; 250, 938 and 965 all run at the default admin identity,
-                  outside any `runAs`. They are safe for the reason `## Design` gives second and calls stronger —
-                  they name only `Id`, `Name` or nothing — and they must stay bare for the reason it gives first,
-                  which is about what the two tests prove and does not depend on where the query sits. The comments
-                  as written say that, so they are true of each method as it actually is.
+                      change nothing about the work — all four queries are untouched either way — but a later reader
+                      should not trust the line as written. (a) Line 289 is inside
+                      `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack`, not
+                      `peerCannotReadAnotherUsersLayouts`. (b) Group C's claim that "all four are inside a
+                      `System.runAs` block" holds only for 289; 250, 938 and 965 all run at the default admin identity,
+                      outside any `runAs`. They are safe for the reason `## Design` gives second and calls stronger —
+                      they name only `Id`, `Name` or nothing — and they must stay bare for the reason it gives first,
+                      which is about what the two tests prove and does not depend on where the query sits. The comments
+                      as written say that, so they are true of each method as it actually is.
 
 - [x] fixed — **Resolved at the design gate on 2026-08-27: widen to all 11 queries.** The engineer
       chose to fix the seven inline queries as well and to restate the too-broad criterion as the
@@ -72,69 +72,69 @@ identity is running the test, so a freshly created scratch org's default admin, 
       `## Open questions` as its own follow-up. Original pause text follows.
 
       **The spec's inventory of four affected queries is incomplete, and criterion 3 cannot be met
-                          without contradicting criterion 5. Design decision needed.**
+                              without contradicting criterion 5. Design decision needed.**
 
-                          The four helpers now declare `WITH SYSTEM_MODE` and the fix works — against a freshly created
-                              scratch org with no permission set on the default admin, failures dropped from the spec's
-                              reported 26/40 to **4/40**. But the deploy still fails, so criterion 3 is unmet.
+                              The four helpers now declare `WITH SYSTEM_MODE` and the fix works — against a freshly created
+                                  scratch org with no permission set on the default admin, failures dropped from the spec's
+                                  reported 26/40 to **4/40**. But the deploy still fails, so criterion 3 is unmet.
 
-                              Verified against scratch org `sysmode-verify` / `test-o7yifj7p7zwv@example.com`, created
-                              2026-08-27T12:18:50Z, `Salesforce_Navigator_User` confirmed absent from the org (0 rows in
-                              `PermissionSet`), i.e. exactly the org shape criterion 3 names. `sf project deploy start
-                              --test-level RunLocalTests --target-org sysmode-verify` → `Status: Failed`, Passing 36,
-                              Failing 4:
+                                  Verified against scratch org `sysmode-verify` / `test-o7yifj7p7zwv@example.com`, created
+                                  2026-08-27T12:18:50Z, `Salesforce_Navigator_User` confirmed absent from the org (0 rows in
+                                  `PermissionSet`), i.e. exactly the org shape criterion 3 names. `sf project deploy start
+                                  --test-level RunLocalTests --target-org sysmode-verify` → `Status: Failed`, Passing 36,
+                                  Failing 4:
 
-                              - `activatingOneLayoutClearsTheFlagOnTheOthers` — line 876 —
-                                `System.QueryException: No such column 'Is_Active__c' on entity 'Navigator_Layout__c'`
-                              - `activatingOneUsersLayoutDoesNotDisturbAnother` — line 905 — same, `Is_Active__c`
-                              - `activationStaysOneUpdateAcrossTwoHundredLayouts` — line 1701 — same, `Is_Active__c`
-                              - `aV1RowIsUpgradedToV2OnRead` — line 365 —
-                                `System.QueryException: No such column 'Schema_Version__c'`
+                                  - `activatingOneLayoutClearsTheFlagOnTheOthers` — line 876 —
+                                    `System.QueryException: No such column 'Is_Active__c' on entity 'Navigator_Layout__c'`
+                                  - `activatingOneUsersLayoutDoesNotDisturbAnother` — line 905 — same, `Is_Active__c`
+                                  - `activationStaysOneUpdateAcrossTwoHundredLayouts` — line 1701 — same, `Is_Active__c`
+                                  - `aV1RowIsUpgradedToV2OnRead` — line 365 —
+                                    `System.QueryException: No such column 'Schema_Version__c'`
 
-                              **Where `## Design` went wrong.** Its "Left alone, and why it's safe" paragraph reasons that
-                              "`COUNT()` selects no fields at all". That is true of the bare `[SELECT COUNT() FROM
-                              Navigator_Layout__c]` at line 241, but FLS also applies to fields referenced in a `WHERE`
-                              clause — so `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` *does*
-                              touch a permission-set-only custom field and *does* throw "No such column". `## Current
-                              state`'s inventory missed every inline verification query written directly into a test body
-                              rather than routed through a helper.
+                                  **Where `## Design` went wrong.** Its "Left alone, and why it's safe" paragraph reasons that
+                                  "`COUNT()` selects no fields at all". That is true of the bare `[SELECT COUNT() FROM
+                                  Navigator_Layout__c]` at line 241, but FLS also applies to fields referenced in a `WHERE`
+                                  clause — so `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` *does*
+                                  touch a permission-set-only custom field and *does* throw "No such column". `## Current
+                                  state`'s inventory missed every inline verification query written directly into a test body
+                                  rather than routed through a helper.
 
-                              **Full inventory of what else needs the same treatment** — 7 queries in 4 test methods, none
-                              of them inside a `System.runAs` block, so none of them bear on criterion 4:
+                                  **Full inventory of what else needs the same treatment** — 7 queries in 4 test methods, none
+                                  of them inside a `System.runAs` block, so none of them bear on criterion 4:
 
-                              | Line | Query | Why it fails |
-                              |---|---|---|
-                              | 365 | `[SELECT Schema_Version__c FROM Navigator_Layout__c LIMIT 1]` | custom field selected |
-                              | 876 | `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` | custom field in `WHERE` |
-                              | 881 | `[SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1]` | custom field in `WHERE` |
-                              | 905 | `SELECT COUNT() … WHERE Is_Active__c = TRUE AND OwnerId = :owner.Id` | custom field in `WHERE` |
-                              | 914 | `SELECT Name … WHERE Is_Active__c = TRUE AND OwnerId = :peer.Id LIMIT 1` | custom field in `WHERE` |
-                              | 1701 | `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` | custom field in `WHERE` |
-                              | 1706 | `[SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1]` | custom field in `WHERE` |
+                                  | Line | Query | Why it fails |
+                                  |---|---|---|
+                                  | 365 | `[SELECT Schema_Version__c FROM Navigator_Layout__c LIMIT 1]` | custom field selected |
+                                  | 876 | `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` | custom field in `WHERE` |
+                                  | 881 | `[SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1]` | custom field in `WHERE` |
+                                  | 905 | `SELECT COUNT() … WHERE Is_Active__c = TRUE AND OwnerId = :owner.Id` | custom field in `WHERE` |
+                                  | 914 | `SELECT Name … WHERE Is_Active__c = TRUE AND OwnerId = :peer.Id LIMIT 1` | custom field in `WHERE` |
+                                  | 1701 | `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` | custom field in `WHERE` |
+                                  | 1706 | `[SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1]` | custom field in `WHERE` |
 
-                              Only 4 of the 7 appear in the failure list because a test stops at its first failing
-                              assertion; lines 881, 914 and 1706 sit after a query that already threw.
+                                  Only 4 of the 7 appear in the failure list because a test stops at its first failing
+                                  assertion; lines 881, 914 and 1706 sit after a query that already threw.
 
-                              Confirmed untouched and still safe, exactly as `## Design` claims: line 241
-                              (`[SELECT COUNT() FROM Navigator_Layout__c]`, no field anywhere) and line 965
-                              (`[SELECT Name … WHERE Id = :ownersLayoutId]`, standard fields only) — the two
-                              `System.runAs` security tests' own queries. Both tests passed in both orgs.
+                                  Confirmed untouched and still safe, exactly as `## Design` claims: line 241
+                                  (`[SELECT COUNT() FROM Navigator_Layout__c]`, no field anywhere) and line 965
+                                  (`[SELECT Name … WHERE Id = :ownersLayoutId]`, standard fields only) — the two
+                                  `System.runAs` security tests' own queries. Both tests passed in both orgs.
 
-                              **The decision.** Adding `WITH SYSTEM_MODE` to those 7 queries is the fix that makes
-                              criterion 3 / Outcome 2 achievable, but it directly contradicts criterion 5 and Outcome 4
-                              ("No SOQL outside these four methods has an access-mode declaration added or changed"). One
-                              of the two has to give. Options, for whoever owns the design:
+                                  **The decision.** Adding `WITH SYSTEM_MODE` to those 7 queries is the fix that makes
+                                  criterion 3 / Outcome 2 achievable, but it directly contradicts criterion 5 and Outcome 4
+                                  ("No SOQL outside these four methods has an access-mode declaration added or changed"). One
+                                  of the two has to give. Options, for whoever owns the design:
 
-                              1. Widen the scope to all 11 queries (the 4 helpers + these 7) and restate criterion 5 /
-                                 Outcome 4 as "no query inside a `System.runAs` block, and no query that reads only
-                                 standard fields, is touched" — which is the invariant the design was actually reaching for.
-                              2. Keep the scope at four and drop criterion 3 / Outcome 2 to a partial claim, leaving the
-                                 package still undeployable against a fresh org — which forfeits the spec's stated point.
-                              3. A different fix shape entirely (e.g. granting the permission set to the running admin in
-                                 `@TestSetup`), which is a different design, not this one.
+                                  1. Widen the scope to all 11 queries (the 4 helpers + these 7) and restate criterion 5 /
+                                     Outcome 4 as "no query inside a `System.runAs` block, and no query that reads only
+                                     standard fields, is touched" — which is the invariant the design was actually reaching for.
+                                  2. Keep the scope at four and drop criterion 3 / Outcome 2 to a partial claim, leaving the
+                                     package still undeployable against a fresh org — which forfeits the spec's stated point.
+                                  3. A different fix shape entirely (e.g. granting the permission set to the running admin in
+                                     `@TestSetup`), which is a different design, not this one.
 
-                              Option 1 looks right but it is not mine to choose. Paused here; the seven queries are
-                              **not** edited.
+                                  Option 1 looks right but it is not mine to choose. Paused here; the seven queries are
+                                  **not** edited.
 
 - [ ] excess — `.claude/rules/rstk-lwc-standards.md`, `.claude/rules/rstk-slds2-ux-standards.md`,
       `docs/research/salesforce-same-deploy-schema-race.md`, `job`. All four were already dirty or
@@ -260,3 +260,63 @@ sysmode-verify` returned `Status: Succeeded`, Deploy ID `0AfRu00000fjy3dKAA`, 40
       criterion 4 requires, and `.claude/rules/rstk-preserve-documentation.md` forbids displacing the
       existing block, which is why they are appended rather than placed above `@IsTest`. The
       placement is right; only the wording is wrong, which is the first finding above.
+
+- [ ] **Acceptance criterion 4 still requires the false premise finding 1 removed, and is ticked
+      `[x] met`.** The criterion reads that each Group C comment states "that declaring an access mode
+      on them leaves the test passing while it verifies nothing". The comments now at
+      `NavigatorLayoutControllerTest.cls:228-237` and `:966-975` say the opposite in as many words —
+      "Nor would declaring one void this test" — and `spec.md` `## Design` and `## Traps` entry 3 now
+      agree with the comments. Verified: the comments are right and the criterion is wrong. The
+      exposure is that the criterion is the durable instruction, so the next reader reconciling code
+      against criteria has a written mandate to put the false sentence back. Acceptance criteria are
+      Slice's to write, which is why the fix pass left it alone; recording it so it gets restated to
+      what the comments actually say — that these queries need no declaration because they name only
+      `Id`, `Name` or nothing, and that declaring one would neither buy nor cost anything.
+
+- [ ] **Acceptance criterion 7 names "the twenty-one listed as Group D"; `spec.md` now lists 17.** The
+      third fixed finding corrected `## Current state`, `## Design` and `## Traps` entry 4 to 17
+      remaining sites, 14 of them against `Navigator_Layout__c`. Criterion 7 was not corrected with
+      them and still cites 21, so the box is ticked `[x] met` against a set the spec no longer
+      contains. Independently re-derived against the file as it stands: 32 SOQL sites; 11 declaring
+      `WITH SYSTEM_MODE` (queries at 123, 378, 895, 906, 938, 949, 1070, 1084, 1093, 1749, 1760); 4 in
+      Group C (261, 300, 984, 1011); leaving 17 — 3 on `Profile`/`PermissionSet`/`User` (45, 52, 96)
+      and 14 on `Navigator_Layout__c` (174, 678, 814, 873, 1062, 1399, 1439, 1465, 1598, 1623, 1649,
+      1686, 1719, 1841), each naming only `Id`, `Name`, `OwnerId` or nothing, checked individually.
+      The substance of criterion 7 holds — all 21 of those sites are unchanged — only its count is the
+      double-count that finding 3 removed everywhere else.
+
+- [ ] **The fix's own comment expansion invalidated the line numbers it wrote into `## Current state`,
+      Group C in the same commit.** The second fixed finding claims Group C was rewritten with
+      "current line numbers". They were current at `f2c64fc`; `7fe728e` then added 4 lines to the
+      ApexDoc above `peerCannotReadAnotherUsersLayouts` and 5 more to the one above
+      `aUserCannotUpdateAnotherUsersLayout`, so every number in that section is now short by 4 or 9.
+      Verified against the file: query 257 → 261 and method 236 → 240; query 296 → 300 and method
+      276 → 280; queries 975 → 984 and 1002 → 1011, method 969 → 978. The attributions the finding was
+      actually about are correct and no query moved between methods — this is the numbers only. It
+      matters because Group C is the one section this spec's history says a later reader must be able
+      to trust, and in the current file 984 is the query inside `aUserCannotUpdateAnotherUsersLayout`
+      while 975 is a line of that method's ApexDoc.
+
+- [ ] **The rest of `## Current state` still describes the file as it stood before Group B was fixed,
+      under a heading that asserts otherwise.** Not reached by the earlier passes, which looked at
+      Groups C and D only. `spec.md:74-76` says "1786 lines, 32 SOQL sites. Line numbers below are
+      current"; the file is 1845 lines (32 sites is right). Group A's ranges are stale by 46 for three
+      of its four — `sectionNameOf` is 1066-1080 not 1020-1034, `activeCount` 1082-1089 not 1036-1043,
+      `activeName` 1091-1100 not 1045-1055; only `storedLayouts` (121-135) still matches. Group B is
+      headed "Not yet fixed; this is the remaining work" and its table carries the pre-fix numbers 365,
+      876, 881, 906, 915, 1701 and 1706 — all seven are fixed, at 378, 895, 906, 938, 949, 1749 and
+      1760 — while "Only four of the seven appear in the current failure list" describes a failure list
+      that no longer exists. Group D's 17 was counted against the current file and Group C's numbers
+      against the file one commit ago, so one section now mixes three vintages while claiming one.
+      This spec's own history is a case study in a trusted `## Current state` being wrong; leaving it
+      describing a file that no longer exists rebuilds that setup for whoever reads it next.
+
+- [x] false positive — I raised that `7fe728e` rewrote text inside two existing ApexDoc blocks, which
+      `.claude/rules/rstk-preserve-documentation.md` ("Do not strip comments… never delete it") would
+      forbid. Disproved: the replaced sentences were not pre-existing documentation.
+      `git show main:…/NavigatorLayoutControllerTest.cls | grep "deliberately bare"` returns nothing —
+      that paragraph was introduced by this slice's own build pass at `29b24fd`/`f2c64fc` to satisfy
+      criterion 4. The rule protects documentation the change did not author; correcting a false
+      sentence this slice wrote three commits earlier is not stripping it. Everything on those two
+      blocks that predates the slice — the isolation-Outcome paragraph and the write-half paragraph —
+      is intact.
