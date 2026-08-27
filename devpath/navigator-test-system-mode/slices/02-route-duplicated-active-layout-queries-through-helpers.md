@@ -1195,7 +1195,39 @@ raising it: the fix would be to compose a discriminator, and the last two attemp
 bare queries" — were each false, the second by one fewer than the first. Two names with no gloss is the
 stable state, not a gap. What is wrong in that bullet is a different clause, and it is the finding below.
 
-- [ ] **`## Outcomes`' surviving description of the two security tests is false of the file: the peer
+- [x] fixed — **struck the bullet's second sentence whole; nothing replaced it.** The Outcome now
+      reads in full: "`peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout`
+      continue to pass, unchanged." Both halves of the gloss were checked against the file before
+      cutting and both are as raised. `makeUsers()` builds a `PermissionSetAssignment` for every
+      `User` in the list it inserts — the loop at 65-74, over
+      `newStandardUser(standardProfileId, OWNER_ALIAS)` and
+      `newStandardUser(standardProfileId, PEER_ALIAS)` — so `nvpeer` holds
+      `Salesforce_Navigator_User`, and that is the identity the struck clause described as being
+      without it. What stops the peer is the `NavigatorLayoutController` call inside
+      `System.runAs(peer)`: `getLayouts()` at 251 with the empty DTO list asserted at 255-259, and
+      the `AuraHandledException` caught at 986-988. That is the proof `## Design` and `## Traps`'
+      third entry were rewritten to name, and not the access mode the struck clause credited it to.
+
+      **Deleted rather than reworded, and no replacement clause was written.** `## Design`
+      (322-335) and `## Traps`' third entry (429-438) were read against the file before the cut
+      rather than taken from the finding, and both already carry what these two tests prove — so
+      the gloss held no explanation its removal loses. The two test names stay, and so does the
+      requirement this Outcome exists to state: both tests pass, and neither is modified. That is
+      what `devpath:integrate` checks the built spec against here, and it is checkable by running
+      the suite and diffing the two methods.
+
+      Checked afterwards rather than by re-reading the sentence just edited. Grepping `spec.md` for
+      "access-mode behavior" and for "without the permission set" returns nothing, so no other
+      sentence leant on the struck words; the only hits anywhere are in this file's
+      `## Critique findings`, both quoting the sentence historically. `## Outcomes` gained and lost
+      no bullet, so anything referring to an Outcome by position is unmoved, and the bullets either
+      side are byte-for-byte as they were. `## Current state`'s "of the two security tests" at 184
+      names neither test and did not depend on the apposition. No acceptance criterion,
+      `## Out of scope` paragraph, `## Traps` entry or `## Current state` line was touched, and
+      `fix_cycles` was not written. Nothing under `force-app/` changed, so nothing was deployed.
+
+      Finding as raised:
+      **`## Outcomes`' surviving description of the two security tests is false of the file: the peer
       user *holds* the permission set.** The bullet the strike edited now reads in full:
       "`peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` continue to pass,
       unchanged. Their own access-mode behavior, **a peer user without the permission set** being unable

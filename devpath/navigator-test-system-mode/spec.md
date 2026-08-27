@@ -42,8 +42,7 @@ progress, and still a failed deploy. `## Current state` holds the full inventory
   none of this spec's metadata, with no permission set assigned to the org's default admin, deploys
   clean: the whole-payload deploy succeeds and every local test passes.
 - `peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` continue to pass,
-  unchanged. Their own access-mode behavior, a peer user without the permission set being unable to
-  read or touch another user's rows, is exactly what must not change.
+  unchanged.
 - No query inside a `System.runAs` block, and no query that reads or filters on only standard fields,
   has an access-mode declaration added or changed.
 
