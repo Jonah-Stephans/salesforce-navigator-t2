@@ -51,15 +51,12 @@ fails every time. Fix the four affected queries to declare the access mode they 
 
 ## Current state
 
-Survey dispatched one researcher, since all four Outcomes cluster on a single file and a single pattern:
-`force-app/main/default/classes/NavigatorLayoutControllerTest.cls` (1769 lines).
-
-**The four target methods, verbatim, all with no `WITH` clause today:**
+`force-app/main/default/classes/NavigatorLayoutControllerTest.cls` (1769 lines). The four target
+methods, verbatim, all with no `WITH` clause today:
 
 - `storedLayouts()` (lines 113–126) — `SELECT Id, Name, OwnerId, Is_Active__c, Sort_Order__c,
 Schema_Version__c, Layout_JSON__c FROM Navigator_Layout__c ORDER BY Sort_Order__c NULLS LAST, Name`.
-  Called from 8 write-path tests (e.g. `savingAlwaysStampsAndWritesTheCurrentVersion`,
-  `aNewLayoutGoesAfterTheHighestSortOrderEvenAfterADelete`) to re-query what actually landed.
+  Called from 8 write-path tests to re-query what actually landed.
 - `sectionNameOf(String layoutName)` (lines 1011–1024) — `SELECT Layout_JSON__c FROM
 Navigator_Layout__c WHERE Name = :layoutName LIMIT 1`. Used ~10 times across the switching/rename
   test block.
@@ -69,45 +66,100 @@ TRUE`. Used ~10 times to assert the "exactly one active" invariant.
 LIMIT 1`. Used ~13 times alongside `activeCount()`.
 
 All four read `Is_Active__c`, `Layout_JSON__c`, `Schema_Version__c`, and/or `Sort_Order__c` — exactly
-the custom fields whose FLS lives only in the `Salesforce_Navigator_User` permission set (below).
+the custom fields whose FLS lives only in `Salesforce_Navigator_User`
+(`force-app/main/default/permissionsets/Salesforce_Navigator_User/`), the only permission set in the
+repo. `@TestSetup` (`makeUsers()`, lines 39–75) assigns it to exactly two users, `nvowner` and
+`nvpeer` — the `System.runAs` identities — never to the org's default admin, which is the identity
+that runs every bare query outside a `runAs` block, including all four target methods.
 
-**The two `System.runAs` security tests, confirmed untouched by scope:**
-`peerCannotReadAnotherUsersLayouts` (lines 219–244) and `aUserCannotUpdateAnotherUsersLayout` (lines
-922–959) never call any of the four target methods. Each has its own bare, unannotated verification
-query run _outside_ its `System.runAs` block (`[SELECT COUNT() FROM Navigator_Layout__c]` at line 241;
-`[SELECT Name FROM Navigator_Layout__c WHERE Id = :ownersLayoutId]` at line 956) — these are the same
-shape of gap the four target methods have, but they sit outside this spec's four named methods and so
-outside its Outcomes. Not touched by this fix.
+The two `System.runAs` security tests (`peerCannotReadAnotherUsersLayouts`, lines 219–244;
+`aUserCannotUpdateAnotherUsersLayout`, lines 922–959) never call any of the four target methods and
+are confirmed untouched by scope.
 
-**`@TestSetup` (`makeUsers()`, lines 39–75):** assigns `Salesforce_Navigator_User` to exactly two
-users — `nvowner` and `nvpeer`, the two `System.runAs` identities. No assignment anywhere in this file,
-or anywhere else in the repo, ever targets the org's default admin — the identity that runs every bare
-`[SELECT ...]` outside a `runAs` block, including all four target methods.
+Reference pattern, out of scope: `NavigatorLayoutController.ownLayouts()`
+(`NavigatorLayoutController.cls:388-402`) already declares `WITH USER_MODE`, documented in the class
+header as deliberate defense in depth. No test file in the repo declares an explicit access mode on
+any SOQL today — there is no existing precedent for `WITH SYSTEM_MODE` to point to.
 
-**`Salesforce_Navigator_User` (the only permission set in the repo)**
-(`force-app/main/default/permissionsets/Salesforce_Navigator_User/`): grants object CRUD (create,
-delete, edit, read; not modify-all/view-all) plus field-level read/edit on exactly
-`Is_Active__c`, `Layout_JSON__c`, `Schema_Version__c`, `Sort_Order__c` on `Navigator_Layout__c`. No
-other permission set or profile-level FLS override exists for this object anywhere in `force-app/`.
+`.claude/rules/rstk-security.md` (scanner-enforced, applies to `**/*.cls`) says "ALL new SOQL must
+include `WITH USER_MODE`... flagged as must-fix by local PMD and GH Codacy," and never mentions `WITH
+SYSTEM_MODE`. Checked against this repo's actual CI (`.github/workflows/pr-checks.yml`): there is no
+PMD or Codacy job in it — the rule describes a scanner this repo doesn't run. See `## Design` for how
+this resolves the risk of the fix being misread later.
 
-**Reference pattern, out of scope:** `NavigatorLayoutController.ownLayouts()`
-(`NavigatorLayoutController.cls:388-402`) already reads `WITH USER_MODE` paired with an explicit
-`WHERE OwnerId = :UserInfo.getUserId()`, documented in the class header as deliberate defense in depth.
-All of the controller's DML already uses `Database.insert/update/delete(..., AccessLevel.USER_MODE)`.
+## Design
 
-**No existing precedent for `WITH SYSTEM_MODE` anywhere in the repo.** A repo-wide grep for
-`WITH USER_MODE|WITH SYSTEM_MODE|SECURITY_ENFORCED|AccessLevel\.(USER|SYSTEM)_MODE` across
-`force-app/` turns up matches only in `NavigatorLayoutController.cls` (production, `WITH USER_MODE`)
-and in prose doc-comments inside the test file that describe the controller's behavior — never inside
-an actual query clause. No test file in the repo declares an explicit access mode on any SOQL today.
+**Entry point.** The existing 40 `@IsTest` methods in `NavigatorLayoutControllerTest`, run via `sf
+project deploy start --test-level RunLocalTests` (Outcome 2's own command, against a freshly created
+scratch org with no permission set on the default admin). No new test is written — the fix corrects
+four existing verification helpers so the existing suite reads each row's true state.
 
-**`.claude/rules/rstk-security.md` (scanner-enforced, applies to `**/*.cls`):** _"ALL new SOQL must
-include `WITH USER_MODE`... Violations are flagged as must-fix by local PMD and GH Codacy
-(ApexCRUDViolation)."_ It also deprecates `WITH SECURITY_ENFORCED` in favor of `WITH USER_MODE`.
-**The rule never mentions `WITH SYSTEM_MODE` at all** — there is no house convention anywhere for when
-a test-verification helper should declare it instead. This is exactly what the spec's Open Questions
-section already flags as a mirror case for whoever maintains that rule, out of scope for this fix
-itself — but the design conversation should confirm the fix won't read as a scanner violation.
+**The fix.** Add `WITH SYSTEM_MODE` to each of the four queries above, placed after `WHERE` (where
+present) and before `ORDER BY` / `LIMIT`:
+
+```apex
+// Deliberately WITH SYSTEM_MODE, not WITH USER_MODE (the convention everywhere else in this
+// codebase): these four methods verify the row's true state after a write, and the running
+// identity (this project's org default admin, in a freshly created org) is never granted FLS on
+// Navigator_Layout__c's custom fields — only the two System.runAs test users are. Reverting this to
+// WITH USER_MODE reintroduces "No such column" against exactly that org shape.
+private static List<Navigator_Layout__c> storedLayouts() {
+  return [
+    SELECT Id, Name, OwnerId, Is_Active__c, Sort_Order__c, Schema_Version__c, Layout_JSON__c
+    FROM Navigator_Layout__c
+    WITH SYSTEM_MODE
+    ORDER BY Sort_Order__c NULLS LAST, Name
+  ];
+}
+
+private static String sectionNameOf(String layoutName) {
+  return String.valueOf(
+    firstSectionOf(
+        [SELECT Layout_JSON__c FROM Navigator_Layout__c WHERE Name = :layoutName WITH SYSTEM_MODE LIMIT 1]
+          .Layout_JSON__c
+      )
+      .get('name')
+  );
+}
+
+private static Integer activeCount() {
+  return [SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE WITH SYSTEM_MODE];
+}
+
+private static String activeName() {
+  List<Navigator_Layout__c> active = [
+    SELECT Name FROM Navigator_Layout__c WHERE Is_Active__c = TRUE WITH SYSTEM_MODE LIMIT 1
+  ];
+  return active.isEmpty() ? null : active[0].Name;
+}
+```
+
+The comment is placed once, above `storedLayouts()` — the first of the four in file order — rather
+than repeated four times; the four methods sit within 900 lines of each other with nothing but test
+methods between them, so one comment at the top of the group covers all four.
+
+**Left alone, and why it's safe.** The two `System.runAs` tests' own bare queries (line 241:
+`[SELECT COUNT() FROM Navigator_Layout__c]`; line 956: `[SELECT Name FROM Navigator_Layout__c WHERE
+Id = :ownersLayoutId].Name`) are not touched. `COUNT()` selects no fields at all, and `Name` is a
+standard field visible by default regardless of permission-set assignment — neither touches the four
+custom fields whose FLS lives only in `Salesforce_Navigator_User`. They were never going to hit "No
+such column," so Outcome 4 (no query outside the four methods changes behavior) holds structurally,
+not just by omission.
+
+**Scanner risk, resolved.** No suppression annotation is added. This repo's CI runs no PMD or Codacy
+job (`## Current state`), so there's nothing to trip over an explicit `WITH SYSTEM_MODE`. Whether the
+house rule itself should be taught to distinguish "missing an access mode" from "declares
+`SYSTEM_MODE` on purpose" is the mirror case already on file under `## Open questions`, unchanged by
+this fix.
+
+## Traps
+
+Reverting the four `WITH SYSTEM_MODE` declarations added by this fix back to `WITH USER_MODE` — to
+match this codebase's otherwise-universal convention — silently reintroduces the bug this spec fixes.
+It won't fail against a normally-provisioned dev org (whose admin usually already has broad FLS); it
+only fails against a freshly created scratch org whose default admin holds no permission set, which is
+exactly the shape of org this project's own CI deploy gate creates. The inline comment above
+`storedLayouts()` carries the same warning at the code site.
 
 ## Evidence
 
