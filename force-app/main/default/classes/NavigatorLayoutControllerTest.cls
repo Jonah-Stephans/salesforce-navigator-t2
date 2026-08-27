@@ -224,6 +224,13 @@ private with sharing class NavigatorLayoutControllerTest {
    * The peer half of the isolation Outcome. The role-hierarchy half is not
    * assertable here — see `## Deviations` on the slice: "Grant Access Using
    * Hierarchies" is not expressible in the Metadata API at all.
+   *
+   * The queries in this method are deliberately bare — no `WITH` clause,
+   * unlike the verification helpers above. This test proves a peer user
+   * cannot reach another user's rows, and that proof only means anything
+   * under user mode. Declaring an access mode on them — `WITH SYSTEM_MODE`,
+   * to match the helpers — leaves this test passing while it verifies
+   * nothing at all.
    */
   @IsTest
   static void peerCannotReadAnotherUsersLayouts() {
@@ -360,9 +367,15 @@ private with sharing class NavigatorLayoutControllerTest {
       'The column count must survive the v1 to v2 upgrade'
     );
 
+    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       1,
-      [SELECT Schema_Version__c FROM Navigator_Layout__c LIMIT 1]
+      [
+        SELECT Schema_Version__c
+        FROM Navigator_Layout__c
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ]
       .Schema_Version__c,
       'Upgrading on read must not write — the stored row stays at v1 until the user next saves'
     );
@@ -871,14 +884,28 @@ private with sharing class NavigatorLayoutControllerTest {
     }
     Test.stopTest();
 
+    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       1,
-      [SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE],
+      [
+        SELECT COUNT()
+        FROM Navigator_Layout__c
+        WHERE Is_Active__c = TRUE
+        WITH SYSTEM_MODE
+      ],
       'Exactly one of a user\'s layouts may be active'
     );
+    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       targetId,
-      [SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1].Id,
+      [
+        SELECT Id
+        FROM Navigator_Layout__c
+        WHERE Is_Active__c = TRUE
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ]
+      .Id,
       'The layout that was activated must be the one left active'
     );
   }
@@ -900,21 +927,25 @@ private with sharing class NavigatorLayoutControllerTest {
     }
     Test.stopTest();
 
+    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       1,
       [
         SELECT COUNT()
         FROM Navigator_Layout__c
         WHERE Is_Active__c = TRUE AND OwnerId = :owner.Id
+        WITH SYSTEM_MODE
       ],
       'One user activating a layout must not clear another user\'s active flag'
     );
+    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       'Peer second',
       [
         SELECT Name
         FROM Navigator_Layout__c
         WHERE Is_Active__c = TRUE AND OwnerId = :peer.Id
+        WITH SYSTEM_MODE
         LIMIT 1
       ]
       .Name,
@@ -927,6 +958,12 @@ private with sharing class NavigatorLayoutControllerTest {
    * id must not be enough to change their layout — and the refusal must not
    * distinguish "not yours" from "does not exist", or the id becomes an
    * oracle for whether a given layout exists.
+   *
+   * The queries in this method are deliberately bare — no `WITH` clause,
+   * unlike the verification helpers above. This test proves one user cannot
+   * write another user's row, and that proof only means anything under user
+   * mode. Declaring an access mode on them — `WITH SYSTEM_MODE`, to match the
+   * helpers — leaves this test passing while it verifies nothing at all.
    */
   @IsTest
   static void aUserCannotUpdateAnotherUsersLayout() {
@@ -1696,14 +1733,28 @@ private with sharing class NavigatorLayoutControllerTest {
     }
     Test.stopTest();
 
+    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       1,
-      [SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE],
+      [
+        SELECT COUNT()
+        FROM Navigator_Layout__c
+        WHERE Is_Active__c = TRUE
+        WITH SYSTEM_MODE
+      ],
       'Exactly one layout may be active however many the user owns'
     );
+    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       targetId,
-      [SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1].Id,
+      [
+        SELECT Id
+        FROM Navigator_Layout__c
+        WHERE Is_Active__c = TRUE
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ]
+      .Id,
       'The activated layout must be the survivor out of 200'
     );
     Assert.isTrue(
