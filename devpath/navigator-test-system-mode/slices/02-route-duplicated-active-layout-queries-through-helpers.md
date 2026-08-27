@@ -4,7 +4,7 @@ depends_on:
 touches:
   - force-app/main/default/classes/NavigatorLayoutControllerTest.cls
 done: true
-fix_cycles: 0
+fix_cycles: 1
 ---
 
 # Route the duplicated active-layout queries through helpers
@@ -340,3 +340,137 @@ unchanged word for word from the pre-slice file; the two owner-scoped queries in
 `activatingOneUsersLayoutDoesNotDisturbAnother` are untouched at lines 920-943 with both pointer comments
 intact; and the diff touches no Group C or Group D query — `layoutIdNamed()` at line 1047 and both
 `WHERE Name = …` setup queries are byte-for-byte as they were.
+
+---
+
+Slice pass, re-review of the fix above, 2026-08-27. Code under review is `2a1da02`; the fix under review
+is `git diff 186329d 2a1da02` — three files, comment and prose only. Working tree clean.
+**Line numbers below are as of `2a1da02`, not `a848111`.** The fix grew the `storedLayouts()` comment
+from eight lines to nine, so every number recorded in the pass above is one lower than the same line is
+today; those numbers are still correct against the baseline that pass declares, and are left alone.
+
+**The fix closes its finding, and that was tested rather than read.** Two checks, neither of them
+reading the comment and agreeing with it.
+
+Mutation, re-run independently rather than taken from the record above. `activeId()` alone reverted to
+`WITH USER_MODE` in a scratch copy — one line, 1094, with `diff` against the committed file confirming
+nothing else moved — then dry-run deployed against `sysmode-verify-02` (`sf project deploy start
+--dry-run --test-level RunLocalTests`, deploy `0Afdh000009pLtJCAU`). `Status: Failed`, 40 tests, 38
+completed, **2 test errors**: `activatingOneLayoutClearsTheFlagOnTheOthers` and
+`activationStaysOneUpdateAcrossTwoHundredLayouts`, both `System.QueryException: No such column
+'Is_Active__c' on entity 'Navigator_Layout__c'`, both with `Class.NavigatorLayoutControllerTest.activeId:
+line 1090` at the head of the stack. The org shape was re-confirmed first rather than assumed:
+`sysmode-verify-02` holds one `PermissionSet` row named `Salesforce_Navigator_User`, deployed as
+metadata, and **zero** `PermissionSetAssignment` rows for it. So the clause the fix added — "Reverting
+these five to WITH USER_MODE reintroduces 'No such column'" — is now verified true of the fifth rather
+than asserted of it.
+
+Exhaustiveness, which is the stronger check and the one the finding actually turns on. The finding was
+not "one name is missing" but "the enumeration is the *only* route by which the warning reaches a
+helper, and it excludes one". Derived mechanically over every `WITH SYSTEM_MODE` **query** site in the
+file, asking of each whether it is named in the enumeration or carries a pointer comment above it.
+Eight sites, all reached: 133 `storedLayouts`, 1060 `sectionNameOf`, 1074 `activeCount`, 1083
+`activeName`, 1094 `activeId` — enumerated; 381, 928, 939 — pointered, from the three pointer comments
+at 375, 921 and 932. **No site is unreached, and the enumerated set is exactly the set of helpers that
+declare `WITH SYSTEM_MODE`** — five named, five present, no sixth. The count and the membership both
+hold, so the finding is closed and closed generally rather than by patching the one name.
+
+**Checked what the fix might have broken or weakened; on the code side it broke nothing.** The
+`NavigatorLayoutControllerTest` hunk is nine comment lines replacing eight. No query, no `WITH` clause,
+no assertion, no assertion message, no method and no brace moved — confirmed by reading the file rather
+than the diff. The DRY properties were re-derived from scratch and are unchanged: the longest run of
+identical consecutive lines shared by the two routed methods is six, and a file-wide scan for a 10-line
+window occurring more than once returns only the pre-existing `getLayouts()` sandwich, at the same five
+window regions it occupies on `main`. On `spec.md`, the three hunks all land inside `## Design` — no
+Outcome, no `## Out of scope` paragraph, no `## Traps` entry, no `## Current state` line and no
+`## Open questions` entry was touched. On this file, the only change is inside `## Critique findings`.
+No acceptance criterion moved. **What the fix did weaken is `## Design`'s own internal consistency**, in
+the two sentences it rewrote — the two findings below.
+
+- [ ] **`spec.md` `## Design` still reads "Group B's seven do need a pointer, and get one", and after
+      this slice's routing Group B is three.** The fix pass rewrote that literal sentence — `git diff
+      186329d 2a1da02` shows "Group B's seven do, and get one:" becoming "Group B's seven do need a
+      pointer, and get one:" — in the same edit that corrected "the other **three** helpers" to "the
+      other **four** helpers" one clause earlier. One count in the sentence was brought up to date and
+      its neighbour in the same sentence was not. Seven is the pre-routing membership: `## Current
+      state`'s Group B table now holds **three** rows and says "Each of the three appears exactly once
+      and stays inline, with its pointer comment", above a paragraph headed "**Four further inline
+      sites were routed into helpers by slice 02 and no longer exist**". The file agrees — exactly
+      three pointer comments, at 375, 921 and 932, counted mechanically. `## Design` also contradicts
+      itself twice over: "The fix" paragraph says Group B takes a pointer "**except the two shapes that
+      are routed into helpers instead**", and "Comment placement" says "Every Group B site **that
+      remains inline after the routing** gets a one-line pointer back to it". This is the same defect
+      class the fix pass existed to close — a `## Design` count that the routing invalidated — and it
+      matters for the same reason that pass gave in its own justification: `## Design` is what a reader
+      regenerates the code from. A reader regenerating pointers from this sentence looks for seven
+      inline sites, finds three, and the obvious way to reconcile the difference is to restore pointers
+      to the four routed shapes — which `## Design`'s own routing section says must not have them. One
+      word in one sentence; no code involved.
+
+- [ ] **`spec.md` `## Design`'s "the other four helpers sit within 900 lines of it" is false of all
+      four, and that number is the sentence's own justification for why they need no pointer.**
+      Measured at `2a1da02` from the `storedLayouts()` declaration at 122: `sectionNameOf` 931 lines
+      below, `activeCount` 947, `activeName` 956, `activeId` **967**. None is within 900. Lower weight
+      than the finding above and **not created by the fix** — it was already false at `a848111~1`,
+      where the furthest of the then-three was 970 lines down — but the fix pass rewrote this exact
+      clause, "other three" to "other four", without checking the number it was left holding, and the
+      new fourth is the furthest of them. The previous pass had already measured the true distance and
+      written it down ("the comment also sits 947 lines above the helper block it describes, so the
+      enumeration is doing more work than proximity is"), so the correction was on file at the moment
+      the clause was edited. Either restate the distance or drop the appeal to proximity; the
+      enumeration is what actually carries the warning, as `## Design`'s routing section now says
+      outright.
+
+- [ ] **Commit `2a1da02` is typed `fix(test):` for a change that is documentation only, which
+      `.claude/rules/rstk-conventional-commits.md` types `docs`.** The rule lists `docs` as
+      "Documentation only changes" and `fix` as "A bug fix". All three files in the commit are prose:
+      nine comment lines in the `.cls`, three `## Design` paragraphs, one slice-file disposition. The
+      slice file says so itself, in this section — "No code changed in this pass, only comment text."
+      This spec's other commits follow the rule (`docs(spec):` on the four spec-only commits,
+      `refactor(test):` on the one that changed code), so `fix(test):` is the outlier rather than the
+      house style. **Raised rather than disposed, because the disposal is a judgment I do not own:**
+      the branch is already pushed — `origin/navigator-test-system-mode` is at `2a1da02` — so
+      correcting it means `--amend` and a force-push over a published commit, and a reviewer may well
+      judge a commit-message type not worth rewriting shared history for. Recording it so that call is
+      made rather than missed.
+
+- [x] false positive — **the `## Design` sketch and the code comment have drifted, so a reader
+      regenerating the comment from the sketch reproduces the defect.** This is the failure mode the
+      fix pass's own rationale names, so it was checked word for word rather than assumed closed. They
+      agree on everything load-bearing: the same opening clause, the same "this and the four
+      verification helpers that follow", the same four names in the same order, the same "Reverting
+      these five to WITH USER_MODE reintroduces 'No such column'". The single divergence is a trailing
+      ", which is the shape this project's own CI deploy gate creates" that the code carries and the
+      sketch does not — it predates this fix on both sides (`a848111` has it in the code and not in the
+      sketch) and it is additive, not contradictory: regenerating from the sketch drops a true clause,
+      it does not produce a false one. `## Design` also now reconciles why the sketch shows four
+      helpers and the enumeration names five, in the sentence "`activeId()` is the fifth; it is added
+      by the routing section below". Nothing to fix.
+
+- [x] false positive — **the routed helpers' `WITH SYSTEM_MODE` protection is now single-point, so a
+      revert of the whole helper block would go unnoticed where per-site declarations would not.**
+      Re-raised against the mutation evidence rather than the earlier pass's reasoning, and it does not
+      survive: the dry-run above reverted one helper and the deploy *failed*, naming both callers by
+      method in the stack. A revert of more helpers fails harder, not more quietly — reverting all five
+      is the 26-of-40 failure `## Intent` describes. There is no configuration of this file in which a
+      reverted `WITH SYSTEM_MODE` passes against the org shape `## Traps` names.
+
+**The seven `false positive` dispositions above were re-checked against their recorded disproofs and
+all seven stand.** Independently re-verified rather than accepted: `sysmode-verify-02` is live and holds
+zero assignments of `Salesforce_Navigator_User`; the `getLayouts()` sandwich is present on `main` at the
+same five duplicated-window regions; none of the 31 call sites of the three routed helpers asserts `0`
+active or a `null` result, so `activeId()`'s null branch and `activeName()`'s are unexercised
+symmetrically; `activeId()` is `private` and its four siblings carry no ApexDoc either; the three
+surviving pointer comments sit at sites that kept their queries; and neither routed call site sits
+inside a `System.runAs` block — both follow `Test.stopTest()`, at 892-901 and 1743-1752 — so no
+access-mode declaration moved into a `runAs` context and Outcome 5 is untouched. One trivial correction
+to a recorded number, which changes no disposition: the longest identical run shared by the two routed
+methods is **six**, not five — the disproof starts its count at `Test.stopTest();` and the closing brace
+of the `System.runAs(owner)` block above it is shared too. Six is as far under the ten-line threshold as
+five was, so criterion 4 holds either way.
+
+**No trap written.** The trigger is binary — a confirmed finding whose cause is a test that passed while
+the code was wrong — and neither confirmed finding has a test anywhere on its path. Both are `spec.md`
+prose defects: a stale count and a stale distance, in sentences no Apex test can reach. The mutation
+this slice's hazard actually turns on is already covered by the first `## Traps` entry, and the mutation
+run above is fresh evidence that entry is enforceable rather than a further trap.
