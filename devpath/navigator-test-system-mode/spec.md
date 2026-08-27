@@ -464,3 +464,25 @@ code compiled at API 67.0+.
 
 Full investigation trail, including the two disproven hypotheses tried first (a same-deploy-transaction
 timing race; a metadata-propagation gap) and why each was ruled out: `docs/research/salesforce-same-deploy-schema-race.md`.
+
+## Outcome checks
+
+- [x] met — Every query naming a `Navigator_Layout__c` custom field declares `WITH SYSTEM_MODE`
+- [x] met — No block of ten or more lines this spec created recurs across methods in that file
+- [x] met — Fresh org `sysmode-verify-02`, admin permission-set-free, `RunLocalTests` deploy clean, 40/40
+- [x] met — `peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` byte-identical to `main`
+- [x] met — No `runAs`-internal query and no standard-fields-only query had a declaration added or changed
+
+      The last one was checked twice, because the first checker returned `unmet` on it. Its ground:
+      `activeCount()` and `activeName()` gained `WITH SYSTEM_MODE`, and
+      `noSequenceOfSwitchesLeavesTwoActiveOrNone` calls both from inside a `System.runAs(owner)` block,
+      so a declaration now reaches a query that *executes* under a `runAs` identity. Two facts decided
+      it the other way: that method is byte-identical between `main` and `HEAD`, so this spec routed
+      nothing into a `runAs` block, and both helper bodies sit outside any `runAs` block. The spec reads
+      the clause lexically throughout — `## Current state` Group B says "None **sits inside** a
+      `System.runAs` block", and Group A refuses caller-based classification outright ("No caller counts
+      here, deliberately"). Under that reading all eight touched queries are outside, and the concern the
+      clause guards — a declaration voiding a sharing proof — cannot arise anyway, per `## Traps`:
+      `WITH SYSTEM_MODE` never suppresses sharing, and this caller is not one of the two security tests.
+      Recorded because the Outcome's English is genuinely ambiguous read cold, and the next reader should
+      not have to re-derive this.
