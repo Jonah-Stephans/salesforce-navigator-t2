@@ -1,6 +1,7 @@
 ---
 type: bug
 intent_accepted: true
+design_approved: true
 ---
 
 # Navigator test verification queries silently inherited Apex's new default execution mode
