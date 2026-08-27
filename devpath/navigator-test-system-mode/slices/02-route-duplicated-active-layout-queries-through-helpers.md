@@ -4,7 +4,7 @@ depends_on:
 touches:
   - force-app/main/default/classes/NavigatorLayoutControllerTest.cls
 done: true
-fix_cycles: 1
+fix_cycles: 2
 ---
 
 # Route the duplicated active-layout queries through helpers
@@ -552,3 +552,134 @@ the code was wrong — and neither confirmed finding has a test anywhere on its 
 prose defects: a stale count and a stale distance, in sentences no Apex test can reach. The mutation
 this slice's hazard actually turns on is already covered by the first `## Traps` entry, and the mutation
 run above is fresh evidence that entry is enforceable rather than a further trap.
+
+---
+
+Slice pass, re-review of the second fix, 2026-08-27. Code under review is `09100cf`; the fix under review
+is `git diff d6ffa41 09100cf` — two `devpath/` files, prose only. `git diff a848111 HEAD -- force-app/` is
+the nine-line comment change from `2a1da02` and nothing else, so no code moved in this pass, no metadata
+changed and nothing was deployed. Working tree clean. **Line numbers below are as of `09100cf`**, which is
+the same numbering the pass above used.
+
+**Both findings are closed, and each closure was checked against the file rather than against the text of
+the fix.**
+
+The Group B count. `## Design` no longer states a Group B membership anywhere — established by grepping the
+whole of `spec.md` for every numeral and number-word, not by re-reading the two sentences that were edited.
+The only surviving "seven" is the historical one, and it is genuinely historical in every instance: the
+paragraph now reads "the seven it missed **were written** inline mid-assertion", past tense, followed by an
+explicit disclaimer that it is the first inventory's miss rather than today's membership. Its arithmetic
+reconciles with the roster it defers to — seven missed, less the four `## Current state` records as routed
+away, leaves three, which is what the Group B table holds. And the table is a roster that says what
+`## Design` now claims it says: three rows, each one a query that is still in the file and still carries a
+pointer comment — 375/379 (`Schema_Version__c`), 921/925 (owner-scoped `COUNT()`), 932/936 (peer-scoped
+`Name`) — and no fourth pointer comment exists anywhere in the file. Nothing was left dangling by the
+removal: the rewritten sentence stands on its own and matches "Comment placement" word for word, as
+intended.
+
+The proximity claim. Re-measured from the `storedLayouts()` declaration at 122 rather than trusting the
+record: `sectionNameOf` 1053, `activeCount` 1069, `activeName` 1078, `activeId` 1089 — 931, 947, 956 and 967
+lines below. None within 900, so the clause really was false of all four and dropping the appeal rather than
+restating a figure is the right disposal. The reason that replaced it is true and mechanically checkable:
+the file holds exactly eight `WITH SYSTEM_MODE` **query** sites — 133, 381, 928, 939, 1060, 1074, 1083, 1094
+— of which the five helper sites are named one by one in the comment at 113-121 and the three inline sites
+carry pointers at 375, 921 and 932. No site is unreached, and the three corrected sentences now give the
+same reason.
+
+**Did the second fix pass break the pattern?** Not in the way the two before it did — it introduced no new
+false count and no new false distance, and I looked for both. But it rewrote a sentence that ends in a
+colon and did not look at what the colon introduces, which is the first finding below. Two further stale
+counts turned up in the sweep, one of them created by this slice's own routing and never updated.
+
+- [ ] **`## Design`'s pointer exemplar is one of the four sites this slice's routing deleted — and the
+      sentence this fix pass rewrote is what introduces it.** The rewritten sentence ends "— `## Current
+      state`'s Group B table is the roster:" and the colon hands straight to a fenced block (`spec.md`
+      `## Design`) showing a pointer comment above an inline
+      `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE WITH SYSTEM_MODE]` carrying the
+      message `'Exactly one of a user\'s layouts may be active'`. That block is not a Group B site and is
+      not in the roster the sentence just pointed at. It is verbatim what stood at `a848111~1` lines
+      891-901 inside `activatingOneLayoutClearsTheFlagOnTheOthers` — pointer comment, query and assertion
+      message together — which is one of the two `activeCount()` copies this slice routed away. That
+      message now sits at line 895 on an `activeCount()` call with no pointer comment above it, exactly as
+      `## Design`'s own routing section requires ("The pointer comments on the routed queries go away with
+      them"). So `## Design` offers as its worked example of a surviving Group B site the precise code its
+      routing section says must no longer exist, and none of the three rows actually in the Group B table
+      has that shape — one selects `Schema_Version__c`, the other two are further filtered on `OwnerId`.
+      This is the same failure mode as the finding this pass closed and carries the same consequence its
+      own justification names: a reader regenerating pointers from `## Design` restores a pointer plus an
+      inline copy at a routed site. **Not created by this fix pass** — the block was accurate before the
+      routing and has been stale since `a848111` — but this pass rewrote the sentence above it and re-aimed
+      that sentence at a roster the block contradicts, which is where a stale illustration became a
+      self-contradiction. Swapping the illustrated query for one that survives, the `Schema_Version__c`
+      read at 379 for instance, closes it; no code changes either way.
+
+- [ ] **`## Current state`'s headline figure, "32 SOQL sites", is this slice's own casualty and was never
+      updated: the file holds 29.** Counted mechanically at `09100cf` — 29 `SELECT` keywords, no
+      subqueries — against 32 at `a848111~1` and 32 on `main`. The difference is exactly this slice: four
+      inline sites deleted (both `activeCount()` copies, both `activeId()` copies), one added
+      (`activeId()`), net −3. It is the first line of the section, and the second fix pass has just made
+      that section the authority `## Design` defers to — for the Group B roster in the sentence it
+      rewrote, and for figures generally in its own recorded reasoning ("`## Current state` is the section
+      that holds this spec's figures"). It also makes the section's arithmetic wrong for any reader who
+      does it: Group A (5) + Group B (3) + Group C (4) = 12, so "Group D — everything else" reads as 20
+      sites when it is 17. Same defect class as the two findings this pass closed, created by the same
+      commit that created them. Worth noting for whoever fixes it: `## Current state`'s own stated
+      convention is to drop a number that rots rather than restate it — it abandoned line numbers on
+      exactly those grounds two paragraphs later — so deleting the figure may serve better than
+      correcting it. Either way 32 is wrong.
+
+- [ ] **Two of the three caller counts in `## Current state`'s Group A are false of the file.**
+      `activeCount()` is described as "Called from the two activation tests". It is called from twelve
+      test methods, one call each: 894, 1118, 1165, 1209, 1255, 1288, 1316, 1489, 1535, 1556, 1745, 1815.
+      This slice added two of them (894, 1745) and the line was written inside this spec, at `e494832`, so
+      it reads as though the routing gave `activeCount()` its callers when it already had ten.
+      `activeId()`'s identically worded clause is true — 899 and 1750, and nothing else — which is what
+      makes the `activeCount()` one read as exhaustive. `storedLayouts()` is described as "Called from 8
+      write-path tests"; it is called from nine distinct methods, at 512, 546, 593, 627, 642, 701, 750,
+      792 and 837, all of them write-path — `updateRefusesANullLayoutId` (766-803, calling at 792) is the
+      one an eight-count leaves out. That second site is **not this spec's**: it is nine on `main` too and
+      has been wrong since the survey commit. Lower weight than the two findings above, because nobody
+      regenerates code from a caller count — but Group A is half of the roster `## Design` now sends
+      readers to, and this pass's stated reason for sending them there is that `## Current state` is where
+      the figures are kept.
+
+**Everything else re-derived from the file and standing.** Criterion 4, mechanically: the longest run of
+identical consecutive lines shared by the two routed methods is **six** — 889-894 against 1740-1745, the
+`System.runAs` closing brace, `Test.stopTest();`, blank, `Assert.areEqual(`, `1,`, `activeCount(),`,
+diverging at the message — which matches the correction recorded above rather than the five in the original
+disproof. A file-wide scan for any 10-line window occurring more than once returns only the pre-existing
+`getLayouts()` sandwich, in the regions at 187-190, 341, 408-412 and 469-473, across four methods, all
+confirmed present on `main`. Outcome 1: every query naming a custom field declares `WITH SYSTEM_MODE` —
+the eight sites listed above; every other appearance of `Is_Active__c`, `Layout_JSON__c`,
+`Schema_Version__c` or `Sort_Order__c` in the file is a field assignment on a seeded row or a read off a
+returned SObject, not a query. Group memberships re-checked against the file rather than against the table:
+Group B's three sit outside any `runAs` (379 follows an assertion at the method body's own indent; 925 and
+936 both follow `Test.stopTest()` at 919), and Group C's four are 262 (bare `COUNT()`, outside `runAs`),
+301 (`Id` filter, inside `System.runAs(owner)`), 971 and 998 (both outside any `runAs`) — so "exactly one of
+the four sits inside a `System.runAs` block" holds. Group D's three non-`Navigator_Layout__c` queries are
+`Profile` (45), `PermissionSet` (52) and `User` (96), in `makeUsers()` and `userWith(String)` as described.
+Both file references in `spec.md` resolve: `NavigatorLayoutControllerTest.cls:18` is the
+`private with sharing` declaration, and `NavigatorLayoutController.cls:388-402` is `ownLayouts()` exactly,
+its `WITH USER_MODE` at 399. Criterion 7 is untouched by this pass — no `force-app/` file changed since
+`2a1da02`, whose org body the previous pass verified byte-identical — so the `sysmode-verify-02` evidence
+still describes the committed code; not re-run.
+
+**"The existing convention two lines up", checked and deliberately not raised.** The previous pass left this
+one proximity figure standing and measured it as three lines (1086 to 1089) while calling it "two", which is
+the sort of near-miss this review was told to look for. On the file it is sound on the natural reading:
+`activeName()` closes at 1087 and `activeId()` opens at 1089, two lines apart, and `activeName()` is the
+method immediately above. Whichever end you measure from, the claim's substance — the adjacent convention is
+the null-safe one — is true. Raising an off-by-one on a hedge phrase would be manufacturing a finding.
+
+**No trap written.** The trigger is binary — a confirmed finding whose cause is a test that passed while the
+code was wrong — and none of the three findings above has a test anywhere on its path. All three are
+`spec.md` prose: an illustration showing deleted code, a stale site count and two stale caller counts. No
+Apex test can reach any of them, and no test could have caught any of them. The `## Traps` entries were
+re-read against the file and all four remain enforceable as written; the first is the one this slice's
+hazard turns on and the mutation runs recorded above are its evidence.
+
+**Commit typing since `2a1da02`, an observation and not a finding.** Both commits made since — `d6ffa41` and
+`09100cf` — are typed `docs(spec):` over prose-only changes, which is what
+`.claude/rules/rstk-conventional-commits.md` prescribes. That confirms rather than disturbs the open box
+above: `2a1da02` is still the single mistyped commit on this branch and nothing since has compounded it.
+The box is left exactly as it stands, and no git history operation was performed or is proposed here.
