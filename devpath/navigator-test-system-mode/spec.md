@@ -262,9 +262,13 @@ private static String activeName() {
 ```
 
 The full comment is placed once, above `storedLayouts()` — the first affected query in file order. The
-other four helpers sit within 900 lines of it with nothing but test methods between, so they need no
-pointer. `activeId()` is the fifth; it is added by the routing section below and is named in the
-comment's enumeration for the reason given there. Group B's seven do need a pointer, and get one:
+other four helpers need no pointer of their own because that comment's enumeration names each of them,
+and an enumeration reaches a helper wherever in the file it sits. **Not proximity** — an earlier draft
+justified this by distance instead ("within 900 lines"), and that figure was false of all four helpers
+it covered; `## Current state` records why this spec stopped quoting line figures at all. `activeId()`
+is the fifth; it is added by the routing section below and is named in that enumeration for the reason
+given there. Every Group B site that remains inline after the routing does need a pointer, and gets
+one — `## Current state`'s Group B table is the roster:
 
 ```apex
 // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
@@ -295,8 +299,9 @@ filters on.** `SELECT COUNT() FROM Navigator_Layout__c` really is safe — it na
 `SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE` is not, and throws the identical
 `No such column`. That single misreading is what left seven queries out of the first inventory; it also
 explains the shape of what was missed, since the four that _were_ found live in named helper methods
-and the seven that were not are written inline mid-assertion, where they read as test prose rather than
-as queries.
+and the seven it missed were written inline mid-assertion, where they read as test prose rather than
+as queries. That seven is the first inventory's miss, not Group B's membership today — four of the
+seven have since been routed into helpers, and `## Current state` holds the current roster.
 
 **Group C is left alone, and now for a reason that holds.** The four queries listed as Group C stay
 bare because **they need no declaration at all**: each names only `Id`, `Name` or no field whatsoever,
@@ -322,8 +327,8 @@ false one.
 site that remains inline after the routing gets a one-line pointer back to it. Those sites are
 scattered across the file, and the trap this spec records — someone reverting to `WITH USER_MODE` to
 match house convention — is triggered by a person reading one site, not the file; a pointer is the
-only thing that reaches them. The helpers need no pointer, sitting under the comment already. The two
-Group C security tests get their own comment, per above.
+only thing that reaches them. The helpers need no pointer, being named one by one in that comment's own
+enumeration. The two Group C security tests get their own comment, per above.
 
 **A stated limit.** Group D's queries against `Navigator_Layout__c` need no declaration **only because
 of which fields they currently name** (`## Current state`). Adding a custom field to any of their
@@ -373,11 +378,12 @@ existing convention two lines up is the null-safe one.
 blocks, and they are what a failure prints. Nothing moves into the helper except the query.
 
 **The pointer comments on the routed queries go away with them** — the routed shapes now
-live in the helper block, directly under the full comment above `storedLayouts()`, so a pointer back
-to a comment four lines up would be noise. The remaining inline sites keep theirs. That makes the
-enumeration in the comment above `storedLayouts()` the only route by which the revert warning reaches
-`activeId()` — so the enumeration names it, and its count reads five rather than four. Adding a helper
-to this block without extending that enumeration leaves the new helper unwarned.
+live in the helper block, and the full comment above `storedLayouts()` covers that block by naming its
+members one by one, so a second pointer at the call site would be noise. The remaining inline sites
+keep theirs. That makes the enumeration in the comment above `storedLayouts()` the only route by which
+the revert warning reaches `activeId()` — so the enumeration names it, and its count reads five rather
+than four. Adding a helper to this block without extending that enumeration leaves the new helper
+unwarned.
 
 **Where the routing stops, decided at the design gate on 2026-08-27.** This routing covers the
 duplication *this spec's own fix created* and nothing else. Build paused on the question, because the

@@ -387,7 +387,40 @@ Outcome, no `## Out of scope` paragraph, no `## Traps` entry, no `## Current sta
 No acceptance criterion moved. **What the fix did weaken is `## Design`'s own internal consistency**, in
 the two sentences it rewrote — the two findings below.
 
-- [ ] **`spec.md` `## Design` still reads "Group B's seven do need a pointer, and get one", and after
+- [x] fixed — rewrote the sentence to drop the count and state the property instead. It now reads
+      "Every Group B site that remains inline after the routing does need a pointer, and gets one —
+      `## Current state`'s Group B table is the roster:". **Not "three"**, which was the obvious
+      one-word fix: `## Current state` is the section that holds this spec's figures, and `## Outcomes`
+      bullet 1 already refuses to carry a count on the stated grounds that "the number changes whenever
+      a query is routed through a helper, and re-deriving it has already been wrong twice". Three would
+      have been true today and exactly as fragile as seven was. Deferring to the Group B table is true
+      whatever the membership becomes, and it sends the reader to the roster rather than to a number
+      they then have to reconcile. Three was verified anyway before choosing, by counting pointer
+      comments in the file mechanically: 375, 921, 932, and no others.
+
+      A second `## Design` sentence was making the same claim and is corrected with it, because fixing
+      one and leaving a sibling standing is precisely how this finding came to exist. The
+      correction-to-its-own-reasoning paragraph still said in the present tense that "the seven that
+      were not **are written** inline mid-assertion" — a reader counting Group B from that sentence
+      lands on seven just as surely as from the one the critic named. It now reads "the seven it missed
+      **were written** inline mid-assertion … That seven is the first inventory's miss, not Group B's
+      membership today — four of the seven have since been routed into helpers, and `## Current state`
+      holds the current roster." The historical count of seven is left standing: seven queries really
+      were left out of the first inventory, and that is a fact about the past rather than a claim about
+      the file. The two sentences the critic names as already consistent — "except the two shapes that
+      are routed into helpers instead" and "Every Group B site that remains inline after the routing
+      gets a one-line pointer back to it" — needed no change, and the rewritten sentence was worded to
+      match the second of them word for word.
+
+      Checked by re-grepping the whole of `## Design` for every count and proximity claim afterwards,
+      not by re-reading the sentences I had just edited: the only surviving "seven" is the historical
+      one above, and no sentence in the section now states a Group B membership at all. All hunks land
+      inside `## Design`; no acceptance criterion, `## Out of scope` paragraph, `## Traps` entry,
+      `## Current state` figure or `## Open questions` entry was touched. No code changed, so nothing
+      was deployed.
+
+      Finding as raised:
+      **`spec.md` `## Design` still reads "Group B's seven do need a pointer, and get one", and after
       this slice's routing Group B is three.** The fix pass rewrote that literal sentence — `git diff
       186329d 2a1da02` shows "Group B's seven do, and get one:" becoming "Group B's seven do need a
       pointer, and get one:" — in the same edit that corrected "the other **three** helpers" to "the
@@ -407,7 +440,52 @@ the two sentences it rewrote — the two findings below.
       to the four routed shapes — which `## Design`'s own routing section says must not have them. One
       word in one sentence; no code involved.
 
-- [ ] **`spec.md` `## Design`'s "the other four helpers sit within 900 lines of it" is false of all
+- [x] fixed — **dropped the appeal to proximity rather than restating the distance.** The sentence now
+      reads "The other four helpers need no pointer of their own because that comment's enumeration
+      names each of them, and an enumeration reaches a helper wherever in the file it sits. **Not
+      proximity** — an earlier draft justified this by distance instead ("within 900 lines"), and that
+      figure was false of all four helpers it covered; `## Current state` records why this spec stopped
+      quoting line figures at all."
+
+      Why dropped rather than restated, on three grounds. `## Design`'s routing section already states
+      outright that the enumeration is "the only route by which the revert warning reaches
+      `activeId()`", so the proximity clause was not carrying the justification it appeared to — it was
+      a second, weaker reason for a conclusion the enumeration already establishes, and it happened to
+      be false. A restated figure would be the third stale number in this section's history:
+      `## Current state` abandoned line numbers entirely after they "went stale twice — the second time
+      inside the very commit that was correcting them", and a distance measured from a comment block
+      that has grown twice in two passes will rot on the next edit that grows it again. And "within 900
+      lines" was never a claim of proximity in any useful sense even when someone believed it — 900
+      lines is not "nearby" to a reader, so the clause bought nothing it could lose. The retraction
+      keeps "within 900 lines" visible as a quoted, labelled falsehood, so the correction is legible to
+      the next reader rather than silently disappeared.
+
+      Re-measured against the file as it stands at `d6ffa41` rather than trusting the recorded figures,
+      per the instruction, and they reproduce exactly. From the `storedLayouts()` declaration at 122:
+      `sectionNameOf` (1053) is 931 lines below, `activeCount` (1069) 947, `activeName` (1078) 956,
+      `activeId` (1089) 967. None is within 900 — the clause was false of all four, as raised.
+
+      **The same false proximity claim appeared twice more in `## Design`, and both are corrected**,
+      because fixing one and leaving a sibling standing is the defect this pass exists to close.
+      "Comment placement" read "The helpers need no pointer, **sitting under the comment already**" —
+      they sit 931 to 967 lines from it — and now reads "being named one by one in that comment's own
+      enumeration". The routing section read "the routed shapes now live in the helper block,
+      **directly under** the full comment above `storedLayouts()`, so a pointer back to a comment
+      **four lines up** would be noise" — `activeId()` is 967 lines below that comment, not four — and
+      now reads "live in the helper block, and the full comment above `storedLayouts()` covers that
+      block by naming its members one by one, so a second pointer at the call site would be noise".
+      All three now give the same reason, and it is the true one.
+
+      One proximity figure in `## Design` is deliberately left alone: "the existing convention two
+      lines up is the null-safe one", about `activeName()` relative to `activeId()`. `activeName()`
+      really is the method directly above `activeId()`, and its null-safe return (1086) sits three
+      lines above `activeId()`'s declaration (1089) — adjacent and true, in the way the three
+      corrected claims were not. Editing it would be scope creep with no defect behind it.
+
+      No code changed — all four hunks are `## Design` prose — so nothing was deployed.
+
+      Finding as raised:
+      **`spec.md` `## Design`'s "the other four helpers sit within 900 lines of it" is false of all
       four, and that number is the sentence's own justification for why they need no pointer.**
       Measured at `2a1da02` from the `storedLayouts()` declaration at 122: `sectionNameOf` 931 lines
       below, `activeCount` 947, `activeName` 956, `activeId` **967**. None is within 900. Lower weight
