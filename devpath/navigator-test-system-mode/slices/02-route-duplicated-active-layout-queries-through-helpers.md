@@ -4,7 +4,7 @@ depends_on:
 touches:
   - force-app/main/default/classes/NavigatorLayoutControllerTest.cls
 done: true
-fix_cycles: 3
+fix_cycles: 4
 ---
 
 # Route the duplicated active-layout queries through helpers
@@ -1119,3 +1119,173 @@ have caught either. The `## Traps` entries were re-read against the file and all
 touched, `done: true` stands, `## Out of scope` was not edited, and the `- [ ] excess` `.prettierignore`
 box and the open `- [ ]` box on commit `2a1da02`'s type are byte-for-byte as they were. No git history
 operation of any kind was performed or is proposed.
+
+---
+
+Slice pass, re-review of the deletion pass, 2026-08-27. Code under review is `569357d`; the pass under
+review is `git diff b8c1d21 569357d` — two `devpath/` files, prose only, `force-app/` untouched.
+`git diff a848111 HEAD -- force-app/` is still only the nine comment lines from `2a1da02`, so no code
+moved in this pass, no metadata changed and nothing was deployed. Working tree clean. **Line numbers
+below are as of `569357d`**, which is the same numbering the three passes above used.
+
+**Both hunks are pure deletion, and that was measured rather than read.** Normalising `spec.md` at
+`b8c1d21` and at `569357d` to one whitespace-separated token per line and diffing the two streams
+returns **52 deletions and zero insertions** — 4891 tokens before, 4839 after — in exactly two
+contiguous runs: the thirteen tokens `— the two cross-user security tests that hold Group C's bare
+queries —`, and the thirty-nine tokens from "The most widely called" to "added two more." Every `+`
+line in the line-level diff is therefore a rewrapped survivor and nothing else. No superlative, no
+universal, no count, no replacement discriminator, no new assertion of any kind entered the document,
+which is the property the scoping existed to produce. On this slice file the only lines removed are the
+two `- [ ]` markers; both findings-as-raised are preserved word for word under the new dispositions at
+six-space continuation indent, and no other prior text moved.
+
+**The eight-phrase grep reproduces independently.** Run against `spec.md` rather than taken from the
+record: "most widely called", "widely called", "goes through it", "those callers", "of the five",
+"cross-user", "Group C's bare" and "bare queries" all return zero. Two neighbouring uses of "five"
+survive and neither quoted the struck text — the code sketch's "Reverting these five to WITH USER_MODE"
+at 235 and `## Design`'s "its count reads five rather than four" at 397, both about the enumeration in
+the comment above `storedLayouts()`, which the strike did not touch. "caller" survives only in
+`## Open questions` and in the "**No caller counts here, deliberately**" paragraph. **Nothing dangles
+and nothing lost an antecedent by either strike**: the `## Outcomes` bullet's "Their own access-mode
+behavior …" takes its antecedent from the two method names, which are still there, and the
+`activeCount()` bullet now stops at a full stop with no pronoun reaching back into what was struck.
+
+**The "No caller counts here, deliberately" paragraph is still true, including its closing sentence.**
+Judged rather than inherited. Its heading is a statement about the three bare caller counts the list
+used to carry, and none survives: `storedLayouts()` carries a caller *property*, `activeCount()` now
+carries only its identification, and `activeId()`'s "called from exactly the two methods whose inline
+copies it replaced" names its callers rather than counting them, in the shape `## Current state`'s own
+convention asks for ("identified by their enclosing method"). Its second sentence is past tense about
+counts the list no longer holds and is true as history — two of the three were false, and the
+`storedLayouts()` eight was wrong from the survey commit onward. Its closing sentence, "The properties
+above are what a reader can check by grepping a helper's name", is the one the strike could have
+falsified and does not: every surviving statement in Group A was checked by grepping that helper's name
+and each resolved — `storedLayouts` 122 plus nine call sites, `sectionNameOf` 1053, `activeCount` 1069,
+`activeName` 1078, `activeId` 1089. The sentence claims the properties are greppable, not that every
+bullet carries one, so three bullets holding only an identification does not touch it.
+
+**`storedLayouts()`'s and `activeId()`'s properties are unchanged and both re-derived true.**
+`storedLayouts()` (122-135) selects `Id`, `Name`, `OwnerId` and all four custom fields and orders by
+`Sort_Order__c NULLS LAST, Name`, and its nine call sites (512, 546, 593, 627, 642, 701, 750, 792, 837)
+sit in `savingAlwaysStampsAndWritesTheCurrentVersion`,
+`theStoredPayloadCarriesNothingDerivableFromThePlatform`,
+`aColumnCountOutsideTheContractRangeIsBroughtBackIntoIt`,
+`aSectionWithNoColumnCountAtAllIsStoredAtTheContractDefault`,
+`anEmptyPayloadIsStoredAsALayoutWithNoSections`, `creatingASecondLayoutLeavesTheFirstOneStanding`,
+`aNewLayoutGoesAfterTheHighestSortOrderEvenAfterADelete`, `updateRefusesANullLayoutId` and
+`updateRewritesOnlyTheLayoutItWasGiven` — all nine write-path. `activeId()` (1089-1098) selects `Id`,
+filters on `Is_Active__c`, declares `WITH SYSTEM_MODE` and returns `active.isEmpty() ? null :
+active[0].Id`, matching `activeName()`'s identical branch three lines above; its only two call sites are
+899 and 1750, inside exactly the two methods the bullet names. The deletion beside them changed nothing
+about either.
+
+**The "two security tests" item is a false positive, and the reasoning is the disposal.** The term is
+never defined, and the strike did remove the only gloss that stood before `## Current state` in document
+order — so the question is real and worth the check. But the surrounding prose identifies the pair
+adequately at every point where the term does work. `## Design` uses "the two security tests" at 323 and
+names both in the same paragraph at 328-330 ("the empty DTO list in `peerCannotReadAnotherUsersLayouts`,
+the caught `AuraHandledException` in `aUserCannotUpdateAnotherUsersLayout`"); `## Traps`' third entry
+names both at 433; `## Design`'s two "Group C security tests" sentences at 293 and 342 sit either side of
+that naming. `## Current state`'s one use at 185 is recoverable by elimination and only by it: Group C
+lists exactly three enclosing methods and the sentence excludes one of them by name, leaving the other
+two. And `## Outcomes` still gives those two methods a bullet of their own describing cross-user
+isolation, so the pair a reader meets first is the right pair even without the label. Weighing against
+raising it: the fix would be to compose a discriminator, and the last two attempts at one — "the two
+`System.runAs` cross-user security tests", then "the two cross-user security tests that hold Group C's
+bare queries" — were each false, the second by one fewer than the first. Two names with no gloss is the
+stable state, not a gap. What is wrong in that bullet is a different clause, and it is the finding below.
+
+- [ ] **`## Outcomes`' surviving description of the two security tests is false of the file: the peer
+      user *holds* the permission set.** The bullet the strike edited now reads in full:
+      "`peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` continue to pass,
+      unchanged. Their own access-mode behavior, **a peer user without the permission set** being unable
+      to read or touch another user's rows, is exactly what must not change." Both tests take their peer
+      identity from `userWith(PEER_ALIAS)` (`NavigatorLayoutControllerTest.cls:243` and `:967`), and
+      `@TestSetup`'s `makeUsers()` assigns `Salesforce_Navigator_User` to **both** users it creates — the
+      loop at 65-74 builds one `PermissionSetAssignment` per `User` in the list holding
+      `newStandardUser(standardProfileId, OWNER_ALIAS)` and
+      `newStandardUser(standardProfileId, PEER_ALIAS)`. So `nvpeer` holds the permission set in every org
+      this suite runs in, `sysmode-verify-02` included — whose own record in this file says the
+      permission set "was never assigned to anyone but the two `@TestSetup` users".
+
+      **`spec.md` contradicts itself on this in two other sections, and both of those are right.**
+      `## Intent` says the admin "is never granted the permission set that gives FLS on
+      `Navigator_Layout__c`'s custom fields (only two `System.runAs` test users are, in `@TestSetup`)".
+      `## Current state` says `makeUsers()` "assigns it to exactly two users, `nvowner` and `nvpeer` —
+      the `System.runAs` identities". The peer is one of the two identities that has it; this Outcome
+      describes it as the identity that does not.
+
+      **The causal half is wrong too, and it is the exact claim `## Design` and `## Traps` exist to
+      retract.** What stops the peer is ownership scoping and sharing, not FLS:
+      `peerCannotReadAnotherUsersLayouts` asserts an empty DTO list back from
+      `NavigatorLayoutController.getLayouts()` inside `System.runAs(peer)` (248-259), then asserts with a
+      bare `COUNT()` that the owner's row is still present — "the peer simply cannot reach it";
+      `aUserCannotUpdateAnotherUsersLayout` asserts a caught `AuraHandledException` (974-995).
+      `## Design` says precisely this — "each test's proof is the `NavigatorLayoutController` call made
+      inside its `System.runAs(peer)` block — the empty DTO list in …, the caught
+      `AuraHandledException` in …, which no declaration on a test-class query can reach" — and
+      `## Traps`' third entry repeats it and forbids the opposite reading in as many words. Labelling the
+      property "their own **access-mode** behavior" is the reasoning that entry was written to stop.
+
+      **Not created by this pass**, and not by the sweep either — the clause predates both, and the
+      strike removed only the apposition standing in front of it. Raised now for three reasons. It is in
+      the sentence this pass's own disposition vouched for ("The rest of the bullet is unaltered and
+      needs the gloss for nothing"). The sweep at `8a4ff57` declared it had checked every factual claim
+      in `spec.md` against the file, and this claim sits in `## Outcomes`, which that sweep edited in the
+      same bullet. And it is the load-bearing half: `## Outcomes` is what a spec is checked against, and
+      a reader verifying this one looks for a peer without the permission set, finds a peer with it, and
+      the obvious reconciliation is to stop assigning it to `nvpeer` in `@TestSetup` — which would strip
+      FLS from an identity that writes all four custom fields under `System.runAs(peer)` elsewhere in the
+      suite (`insert peerRow` at 286-288 and `insert seed('Peer active', true, 1)` at 911-913, both
+      seeding `Is_Active__c`, `Sort_Order__c`, `Schema_Version__c` and `Layout_JSON__c`). The two test
+      names are right and what the Outcome *requires* of them — that they continue to pass, unchanged —
+      is right and needs no change. One clause, no code.
+
+**Everything else re-derived from the file and standing.** Criterion 4, computed rather than read: the
+longest run of identical consecutive lines shared by the two routed methods is **six**, at 889-894
+against 1740-1745, and a file-wide scan for any non-blank 10-line window occurring more than once
+returns only the pre-existing `getLayouts()` sandwich, at 187-190, 341, 408-412 and 469-473 — the same
+four methods and the same regions every pass since `a848111` has recorded, all present on `main`. So
+`## Out of scope`, the DRY Outcome and criterion 4 still agree, and the scoping decision still describes
+the file. `## Traps` was read entry by entry against the file and all four remain true and enforceable:
+the first still has the five-helper enumeration at 113-121 and three inline pointer sites (375, 921,
+932) to reach, and the comment's own "Reverting these five" is intact; the second names the deploy
+Outcome by content and carries the org-shape requirement; the third's "three of the four do not sit
+inside a `runAs` block" holds (262, 971 and 998 outside, 301 inside `System.runAs(owner)`) — note this
+entry is the neighbour the finding above contradicts, and the entry is the correct side of that
+contradiction; the fourth's field list matches Group D. Group A's other three bullets are true as they
+stand: `sectionNameOf(String)` selects `Layout_JSON__c` (1053-1067), `activeCount()` is a `COUNT()`
+filtered on `Is_Active__c` (1069-1076), `activeName()` selects `Name` filtered on `Is_Active__c` and
+returns `null` when empty (1078-1087). `## Out of scope` is untouched by both strikes and unaffected by
+either. Against the repo's standards rules: `.claude/rules/rstk-preserve-documentation.md` is not
+engaged — no comment was removed, since `force-app/` did not change;
+`.claude/rules/rstk-dry-enforcement.md` is satisfied per the scan above;
+`.claude/rules/rstk-legacy-boyscout.md` is not engaged, nothing was refactored; and
+`.claude/rules/rstk-conventional-commits.md` is satisfied by both commits under review — `b8c1d21` and
+`569357d` are `docs(spec):` over prose-only changes, so `2a1da02` remains the single mistyped commit on
+this branch and nothing since has compounded it. Criterion 7 is untouched — no `force-app/` file has
+changed since `2a1da02` — so the `sysmode-verify-02` evidence still describes the committed code; not
+re-run.
+
+**Considered and deliberately not raised.** The "**No caller counts here, deliberately**" heading
+against `activeId()`'s "called from exactly the two methods" — read as a bare count that is a
+two-count, but the paragraph's own next sentence scopes the heading to the three counts the list used to
+carry, and an enumeration that names both members is the identification this section says it prefers
+rather than a figure standing on its own. Raising it would be pedantry against a heading, in the same
+class as the off-by-one on "two lines up" the pass before last correctly declined. `docs(spec)` uses a
+scope outside `rstk-conventional-commits.md`'s Salesforce scope list, but that list is headed "Salesforce
+scopes" rather than an allowlist, the rule requires only that a scope be lowercase and parenthesised,
+and five commits on this branch already use it; the open box concerns a commit *type*, not this.
+
+**No trap written.** The trigger is binary — a confirmed finding whose cause is a test that passed while
+the code was wrong — and the one confirmed finding above has no test anywhere on its path. It is a
+`spec.md` `## Outcomes` clause describing an identity's permission-set state; no Apex test can reach it,
+and no test could have caught it, because the tests it describes pass for a reason the clause misstates
+and would pass identically whatever the clause said. The `## Traps` entries were re-read against the
+file and all four stand.
+
+**Nothing under `force-app/` changed in this pass and nothing was deployed.** The only edits are
+`fix_cycles: 3` becoming `fix_cycles: 4` and this block. No acceptance criterion on either slice was
+touched, `done: true` stands, `## Out of scope` was not edited, no `**not a deviation**` paragraph was
+touched, and the `- [ ] excess` `.prettierignore` box and the open `- [ ]` box on commit `2a1da02`'s
+type are byte-for-byte as they were. No git history operation of any kind was performed or is proposed.
