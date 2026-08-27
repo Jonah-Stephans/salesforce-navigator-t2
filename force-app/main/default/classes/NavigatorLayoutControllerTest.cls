@@ -226,11 +226,15 @@ private with sharing class NavigatorLayoutControllerTest {
    * Hierarchies" is not expressible in the Metadata API at all.
    *
    * The queries in this method are deliberately bare — no `WITH` clause,
-   * unlike the verification helpers above. This test proves a peer user
-   * cannot reach another user's rows, and that proof only means anything
-   * under user mode. Declaring an access mode on them — `WITH SYSTEM_MODE`,
-   * to match the helpers — leaves this test passing while it verifies
-   * nothing at all.
+   * unlike the verification helpers above — because they need none: they name
+   * only `Id` or no field at all, and FLS cannot restrict those on a custom
+   * object. Nor would declaring one void this test. The class is
+   * `private with sharing`, and under `WITH SYSTEM_MODE` record sharing is
+   * still controlled by the class's sharing keyword, so an access mode
+   * suppresses CRUD/FLS only. What this test actually proves is the
+   * `NavigatorLayoutController.getLayouts()` call made inside
+   * `System.runAs(peer)`, which no declaration on a query in this class can
+   * reach.
    */
   @IsTest
   static void peerCannotReadAnotherUsersLayouts() {
@@ -960,10 +964,15 @@ private with sharing class NavigatorLayoutControllerTest {
    * oracle for whether a given layout exists.
    *
    * The queries in this method are deliberately bare — no `WITH` clause,
-   * unlike the verification helpers above. This test proves one user cannot
-   * write another user's row, and that proof only means anything under user
-   * mode. Declaring an access mode on them — `WITH SYSTEM_MODE`, to match the
-   * helpers — leaves this test passing while it verifies nothing at all.
+   * unlike the verification helpers above — because they need none: they name
+   * only `Id` and `Name`, which FLS cannot restrict on a custom object. Nor
+   * would declaring one void this test. The class is `private with sharing`,
+   * and under `WITH SYSTEM_MODE` record sharing is still controlled by the
+   * class's sharing keyword, so an access mode suppresses CRUD/FLS only. What
+   * this test actually proves is the refused
+   * `NavigatorLayoutController.updateLayout()` call made inside
+   * `System.runAs(peer)`, which no declaration on a query in this class can
+   * reach.
    */
   @IsTest
   static void aUserCannotUpdateAnotherUsersLayout() {

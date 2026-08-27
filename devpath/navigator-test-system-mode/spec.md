@@ -111,23 +111,32 @@ None sits inside a `System.runAs` block, so none bears on Outcome 3.
 Only four of the seven appear in the current failure list, because a test method stops at its first
 failing assertion — 881, 915 and 1706 sit behind a query that already threw.
 
-### Group C — four queries that must stay bare, and why.
+### Group C — four queries that stay bare, and why.
 
-All four are inside a `System.runAs` block in one of the two security tests. Enforcing the running
-user's permissions is the entire point of those tests; declaring any access mode on these would leave
-both tests passing while proving nothing.
+Line numbers here are as the file stands after Group B was fixed, so they run ahead of Group B's table
+above. Exactly one of the four sits inside a `System.runAs` block; the other three run at the default
+admin identity.
 
-- 250, 289 — in `peerCannotReadAnotherUsersLayouts` (229). `COUNT()` with no field, and `COUNT()`
-  filtered on `Id`.
-- 938, 965 — in `aUserCannotUpdateAnotherUsersLayout` (932). `SELECT Id … LIMIT 1`, and `SELECT Name …
-WHERE Id = :ownersLayoutId`.
+- 257 — in `peerCannotReadAnotherUsersLayouts` (236), after `Test.stopTest()`, outside any `runAs`.
+  Bare `COUNT()`, no field named anywhere.
+- 296 — in `sharingCanNeverBecomeTheFilterForWhoseLayoutsComeBack` (276), inside `System.runAs(owner)`.
+  `COUNT()` filtered on `Id`. This is the only Group C query inside a `runAs` block, and it is in
+  neither of the two security tests.
+- 975, 1002 — in `aUserCannotUpdateAnotherUsersLayout` (969), both outside any `runAs`: `SELECT Id …
+LIMIT 1` before the `runAs` write, and `SELECT Name … WHERE Id = :ownersLayoutId` after
+  `Test.stopTest()`.
 
-### Group D — the remaining 21 sites. Out of scope, and safe by coincidence rather than by structure.
+None of the four needs a declaration: each names only `Id`, `Name` or nothing at all, and FLS cannot
+restrict those on a custom object. Adding one would also not void anything — see `## Design` and
+`## Traps` for why the earlier claim that it would was wrong.
 
-Three query `Profile`, `PermissionSet` and `User` (45, 52, 96) — a different object entirely. The other
-18 read `Navigator_Layout__c` but name only `Id`, `Name`, `OwnerId` or nothing at all (bare `COUNT()`),
-none of which FLS can restrict on a custom object. They are safe today because of which fields they
-happen to name. See `## Traps`.
+### Group D — the remaining 17 sites. Out of scope, and safe by coincidence rather than by structure.
+
+32 SOQL sites in the file, less the 11 of Groups A and B and the 4 of Group C, leaves 17. Three query
+`Profile`, `PermissionSet` and `User` (45, 52, 96) — a different object entirely. The other 14 read
+`Navigator_Layout__c` but name only `Id`, `Name`, `OwnerId` or nothing at all (bare `COUNT()`), none of
+which FLS can restrict on a custom object. They are safe today because of which fields they happen to
+name. See `## Traps`.
 
 ### Convention in the repo
 
@@ -214,12 +223,17 @@ Assert.areEqual(
 );
 ```
 
-And the two Group C security tests get a comment at the method level, guarding against a later sweep:
+And the two Group C security tests get a comment at the method level, recording why their queries are
+bare — see the paragraph below on what that reason actually is:
 
 ```apex
-// The queries in this method are deliberately bare — no WITH clause. This test proves a peer user
-// cannot reach another user's rows, and that proof only means anything under user mode. Adding
-// WITH SYSTEM_MODE here leaves the test passing while it verifies nothing.
+// The queries in this method are deliberately bare — no WITH clause, unlike the verification
+// helpers above — because they need none: they name only Id or no field at all, and FLS cannot
+// restrict those on a custom object. Nor would declaring one void this test. The class is
+// private with sharing, and under WITH SYSTEM_MODE record sharing is still controlled by the
+// class's sharing keyword, so an access mode suppresses CRUD/FLS only. What this test actually
+// proves is the NavigatorLayoutController call made inside System.runAs(peer), which no
+// declaration on a query in this class can reach.
 ```
 
 **The correction to this design's own earlier reasoning.** The first cut argued that everything outside
@@ -232,13 +246,25 @@ explains the shape of what was missed, since the four that _were_ found live in 
 and the seven that were not are written inline mid-assertion, where they read as test prose rather than
 as queries.
 
-**Group C is left alone, and now for a reason that holds.** The four queries inside the two
-`System.runAs` security tests stay bare. Two of them (250, 938) name only `Id` or nothing; two (289, 965) filter on `Id`, a standard field FLS cannot restrict. So none would have thrown. But the reason
-they must stay bare is stronger than that and does not depend on which fields they name: **those tests
-exist to prove a peer user cannot reach another user's rows, and that proof is only worth something
-under user mode.** Declaring any access mode on them leaves both tests green and testing nothing —
-a silent failure, unlike the loud one this spec fixes. Each of the two test methods gets a comment
-saying so.
+**Group C is left alone, and now for a reason that holds.** The four queries listed as Group C stay
+bare because **they need no declaration at all**: each names only `Id`, `Name` or no field whatsoever,
+and FLS cannot restrict those on a custom object. None of them would ever have thrown, so annotating
+them would buy nothing.
+
+Nor would annotating them cost anything, which is worth stating because an earlier version of this
+paragraph claimed it would. It said the two security tests prove a peer cannot reach another user's
+rows, that the proof is "only worth something under user mode", and that any access mode would leave
+both tests green and testing nothing. That is false on two counts. The class is `private with sharing`
+(`NavigatorLayoutControllerTest.cls:18`), and under `WITH SYSTEM_MODE` record sharing is still
+controlled by the class's sharing keyword — an access mode suppresses CRUD/FLS only, never sharing. And
+each test's proof is the `NavigatorLayoutController` call made inside its `System.runAs(peer)` block —
+the empty DTO list in `peerCannotReadAnotherUsersLayouts`, the caught `AuraHandledException` in
+`aUserCannotUpdateAnotherUsersLayout` — which no declaration on a test-class query can reach. Three of
+the four Group C queries do not even sit inside a `runAs` block (`## Current state`).
+
+Each of the two security test methods still gets a method-level comment, so that a later reader knows
+the bareness is considered rather than overlooked — but the comment says the true reason above, not the
+false one.
 
 **Comment placement.** The full explanatory comment sits once above `storedLayouts()`, as before. Each
 of the seven Group B sites gets a one-line pointer back to it. The seven are scattered from line 365 to
@@ -246,8 +272,8 @@ of the seven Group B sites gets a one-line pointer back to it. The seven are sca
 — is triggered by a person reading one site, not the file; a pointer is the only thing that reaches
 them. The two Group C test methods get their own comment, per above.
 
-**A stated limit.** After this fix the file contains 11 queries declaring `WITH SYSTEM_MODE`, 4
-deliberately bare inside `runAs` blocks, and 18 more against `Navigator_Layout__c` that need no
+**A stated limit.** After this fix the file contains 11 queries declaring `WITH SYSTEM_MODE`, the 4 of
+Group C left deliberately bare, and 14 more against `Navigator_Layout__c` that need no
 declaration **only because of which fields they currently name** (`## Current state`, Group D). Adding
 a custom field to any of their `WHERE` clauses later reintroduces this bug in a file where a dozen
 neighbours already carry the fix. Nothing in this design prevents that, and no code change here would;
@@ -281,13 +307,18 @@ permission set assigned to its default admin can fail this, and therefore only t
 meaningfully. Any claim that this spec's Outcome 2 is met must name the org it was checked against and
 confirm `Salesforce_Navigator_User` is absent from it.
 
-**Adding an access-mode declaration to a query inside a `System.runAs` block voids the test silently.**
-The two security tests (`peerCannotReadAnotherUsersLayouts`, `aUserCannotUpdateAnotherUsersLayout`)
-prove a peer cannot reach another user's rows. Under `WITH SYSTEM_MODE` they would still pass, and
-would prove nothing at all — no error, no failure, no signal. A sweep that "finishes the job" by
-annotating every remaining query in the file triggers exactly this.
+**`WITH SYSTEM_MODE` suppresses CRUD/FLS, never sharing — so do not reason about this file as though an
+access-mode declaration could silently void a `System.runAs` security test.** An earlier version of this
+spec said exactly that, and it is wrong: `NavigatorLayoutControllerTest` is `private with sharing`
+(line 18), and under `WITH SYSTEM_MODE` record sharing is still controlled by the class's sharing
+keyword. What `peerCannotReadAnotherUsersLayouts` and `aUserCannotUpdateAnotherUsersLayout` each prove
+is the `NavigatorLayoutController` call made inside its `System.runAs(peer)` block, which no
+declaration on a test-class query can reach. The four Group C queries stay bare because they need
+nothing — they name only `Id`, `Name` or no field at all — and three of the four do not sit inside a
+`runAs` block in the first place. If you ever need to check whether a change voids one of these tests,
+look at the controller call inside the `runAs`, not at the verification query after it.
 
-**Eighteen queries against `Navigator_Layout__c` are safe only because of which fields they name, not
+**Fourteen queries against `Navigator_Layout__c` are safe only because of which fields they name, not
 because of where they sit** (`## Current state`, Group D — `Id`, `Name`, `OwnerId`, bare `COUNT()`).
 FLS applies to a field named anywhere in a query, including one that only appears in a `WHERE` clause —
 so adding any custom field to any of their filters reintroduces this bug, in a file where eleven
