@@ -110,6 +110,14 @@ private with sharing class NavigatorLayoutControllerTest {
     );
   }
 
+  // Deliberately WITH SYSTEM_MODE, not WITH USER_MODE (the convention everywhere
+  // else in this codebase): this and the three verification helpers that follow
+  // — sectionNameOf, activeCount, activeName — read the row's true state after a
+  // write, and the running identity (this project's org default admin, in a
+  // freshly created org) is never granted FLS on Navigator_Layout__c's custom
+  // fields — only the two System.runAs test users are. Reverting these four to
+  // WITH USER_MODE reintroduces "No such column" against exactly that org shape,
+  // which is the shape this project's own CI deploy gate creates.
   private static List<Navigator_Layout__c> storedLayouts() {
     return [
       SELECT
@@ -121,6 +129,7 @@ private with sharing class NavigatorLayoutControllerTest {
         Schema_Version__c,
         Layout_JSON__c
       FROM Navigator_Layout__c
+      WITH SYSTEM_MODE
       ORDER BY Sort_Order__c NULLS LAST, Name
     ];
   }
@@ -1015,6 +1024,7 @@ private with sharing class NavigatorLayoutControllerTest {
             SELECT Layout_JSON__c
             FROM Navigator_Layout__c
             WHERE Name = :layoutName
+            WITH SYSTEM_MODE
             LIMIT 1
           ]
           .Layout_JSON__c
@@ -1024,7 +1034,12 @@ private with sharing class NavigatorLayoutControllerTest {
   }
 
   private static Integer activeCount() {
-    return [SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE];
+    return [
+      SELECT COUNT()
+      FROM Navigator_Layout__c
+      WHERE Is_Active__c = TRUE
+      WITH SYSTEM_MODE
+    ];
   }
 
   private static String activeName() {
@@ -1032,6 +1047,7 @@ private with sharing class NavigatorLayoutControllerTest {
       SELECT Name
       FROM Navigator_Layout__c
       WHERE Is_Active__c = TRUE
+      WITH SYSTEM_MODE
       LIMIT 1
     ];
     return active.isEmpty() ? null : active[0].Name;

@@ -66,10 +66,7 @@ Use the lightest-weight approach that meets the requirement — avoid Apex when 
 - Use SLDS utility classes for layout and spacing — don't write custom CSS for standard patterns.
 - Prefer `lightning-*` base components over custom implementations.
 - Use `lightning-card`, `lightning-layout`, `lightning-layout-item` for structure.
-- Use SLDS 2 global styling hooks (`--slds-g-*`) for colors, spacing, and typography — always in the
-  `var(--hook, fallback)` form. See `rstk-slds2-ux-standards.md`. Do NOT use SLDS *design tokens*:
-  that is the deprecated `--lwc-*` mechanism, and `lwc-token-to-slds-hook` is an error-severity lint
-  rule that will fail the build.
+- Follow SLDS design tokens for colors, spacing, and typography.
 
 ## Template Patterns
 
