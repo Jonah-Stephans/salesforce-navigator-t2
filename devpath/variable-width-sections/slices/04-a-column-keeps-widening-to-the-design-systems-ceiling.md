@@ -5,7 +5,7 @@ touches:
   - force-app/main/default/lwc/salesforceNavigator/salesforceNavigator.css
   - force-app/main/default/lwc/salesforceNavigator/__tests__/salesforceNavigator.test.js
 done: true
-fix_cycles: 0
+fix_cycles: 1
 ---
 
 # On a very wide display a column keeps widening a little further before it stops
@@ -67,3 +67,4 @@ component's stylesheet.
 - [x] false positive — the criteria stated in pixels at named viewports are not observable in jsdom and no test here claims otherwise; criterion 1 says so outright and the rest rest on the stylesheet-text pin plus the design's arithmetic, which re-derives exactly (6×416+112 = 2,608; 6×480+112 = 2,992; 6×160+80+32 = 1,072). Those numbers remain the live-org verifier's, not jest's
 - [x] fixed — rewrote both comments to state the mechanism the critic measured: `no-hardcoded-values-slds2` is property-scoped, not value-mapping-scoped, so the raw `26rem` was invisible to it because the rule never checks `grid-template-columns` — not because no hook mapped to the value. `salesforceNavigator.css:41-43` now reads "invisible to `no-hardcoded-values-slds2` not because no hook mapped to it but because the rule is property-scoped and never checks `grid-template-columns` — see the trap on this"; `salesforceNavigator.test.js:805-808` carries the same correction, pointing to the `## Traps` entry (which carries the full probe evidence) rather than restating it. No assertion, selector, declaration or test behaviour changed — `npm run test:unit` (455/455 passed), `npm run lint` (0 warnings) and `npm run lint:slds-gate` (all checks ok) all pass clean.
 - [ ] the same false mechanism sits in `spec.md`'s `### The floor and the ceiling` — "a hardcoded sizing value that the linter cannot catch, because no hook maps to it and so `no-hardcoded-values-slds2` never fires" — which is approved design prose rather than this slice's code, so it is handed to the human rather than to a fix pass
+- [ ] the fix pass's rewrap left one line unwrapped: `salesforceNavigator.css:46` runs 101 characters where every other line of that comment block runs 61-78. Cosmetic and non-blocking — prettier does not reflow comment interiors, so `prettier --check` and `eslint --max-warnings 0` both pass it and no rule in `.claude/rules/` sets a line length; nothing the comment says is wrong. Raised so it is disposed of deliberately rather than absorbed silently
