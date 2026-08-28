@@ -514,11 +514,19 @@ no Outcome text.**
   copy of that six and cannot import the constant. The stylesheet pin in `salesforceNavigator.test.js`
   drives its `repeat(N, …)` off the imported `MAX_COLUMNS` so the CSS copy cannot drift silently — the
   Apex copy still can. If the maximum ever moves, all three move.
-- **A raw length in a sizing property is invisible to the linter when no hook matches it.**
-  `no-hardcoded-values-slds2` fires on values that map to a hook; `26rem` mapped to none and so passed
-  `npm run lint --max-warnings 0` in silence for three fix cycles. The hook scale runs `-13` 10rem, `-14`
-  15rem, `-15` 20rem, `-16` 30rem and stops — **search the whole scale, not up to the first miss.** The
-  pass that cleared `26rem` stopped at `-14`.
+- **A raw length inside a grid track function is invisible to the linter, mapped or not.**
+  `no-hardcoded-values-slds2` is **property-scoped**, and an earlier form of this entry said it was
+  value-scoped and drew the wrong lesson from it. Measured against a probe stylesheet under
+  `**/lwc/**`: a raw `30rem` — which maps exactly to `--slds-g-sizing-16` — warns on `width` and draws
+  nothing at all on `grid-template-columns`, `grid-template-rows`, `gap` or `flex-basis`; and a raw
+  `26rem` on `width` warns _"There's no replacement styling hook for the 26rem static value. Remove the
+  static value"_. So the rule does fire on unmapped values, and `26rem` passed
+  `npm run lint --max-warnings 0` in silence for three fix cycles **because of the property it sat in**,
+  not because no hook matched it. Lint is not a guard over the canvas grid's track sizing at any value;
+  the stylesheet-text pin is the only one there is. A test here must be able to fail on a raw length
+  reappearing anywhere in that track function — floor, ceiling or track count. (Searching the whole
+  scale is still right — `-13` 10rem, `-14` 15rem, `-15` 20rem, `-16` 30rem, and it stops — just not
+  because the linter would otherwise catch you.)
 - **The existing `cols-N` grid rules and their test are untouched by design.** `.rstk-nav-section__grid`
   keeps `repeat(N, minmax(0, 1fr))`, so `navigatorSection.test.js:208-229` stays green. A change there is
   a signal something drifted.

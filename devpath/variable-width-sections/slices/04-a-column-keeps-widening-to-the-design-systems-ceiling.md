@@ -5,6 +5,7 @@ touches:
   - force-app/main/default/lwc/salesforceNavigator/salesforceNavigator.css
   - force-app/main/default/lwc/salesforceNavigator/__tests__/salesforceNavigator.test.js
 done: true
+fix_cycles: 0
 ---
 
 # On a very wide display a column keeps widening a little further before it stops
@@ -57,3 +58,12 @@ component's stylesheet.
 ## Deviations
 
 ## Critique findings
+
+- [x] false positive — `--slds-g-sizing-16` really is `30rem`/480px, 🔒 and identical in the slds and cosmos columns, at `node_modules/@salesforce-ux/sds-metadata/current/SLDSStylingHooks.csv:190`, and it really is the top of the scale: no `--slds-g-sizing-17` or higher exists in the file
+- [x] false positive — the retraction on `.rstk-nav-sections` is correct. Under `repeat(6, minmax(…))` six tracks always exist and a one-column section spans exactly one of them, so a lone one-column section was never going to stretch to 1,376px; that claim only ever held for the fixed-width model the design rejected. What the comment now says in its place is true
+- [x] false positive — the one changed assertion in slice 01's grid test is the ceiling assertion and nothing else. `${MAX_COLUMNS}` still drives `repeat(N, …)`, the floor sub-pattern, `justify-content: start` and the `overflow-x: auto` `toContain` are byte-for-byte, and both span-class uniqueness guards are untouched; 222 tests across `salesforceNavigator.test.js` and `navigatorSection.test.js` pass
+- [x] false positive — the new pin genuinely discriminates. Replayed against the pre-edit stylesheet it is red, and mutating the shipped declaration turns it red on hook `-15`/20rem, on the hook stripped of its fallback, on a bare `30rem`, on a `26rem` fallback under the right hook, on the `--rstk-nav-col-max` seam removed, on the floor drifting to `-14`, and on `repeat(5,`
+- [x] false positive — `npm run lint` does reach this file: `eslint .` loads `@salesforce-ux/eslint-plugin-slds`'s flat config re-scoped to `**/lwc/**/*.css` in `eslint.config.js`, and `salesforceNavigator.css` lints with 0 errors and 0 warnings
+- [x] false positive — the criteria stated in pixels at named viewports are not observable in jsdom and no test here claims otherwise; criterion 1 says so outright and the rest rest on the stylesheet-text pin plus the design's arithmetic, which re-derives exactly (6×416+112 = 2,608; 6×480+112 = 2,992; 6×160+80+32 = 1,072). Those numbers remain the live-org verifier's, not jest's
+- [ ] the rewritten comment states a false mechanism, in two places in this diff: `salesforceNavigator.css:41-43` and its mirror at `salesforceNavigator.test.js:805-807` both say the raw `26rem` "passed `no-hardcoded-values-slds2` in silence because no hook mapped to it". Measured against a probe stylesheet under `**/lwc/**`, the rule is property-scoped, not value-mapping-scoped: a raw `30rem` — which maps exactly to `--slds-g-sizing-16` — warns on `width` and draws nothing at all on `grid-template-columns`, `grid-template-rows`, `gap` or `flex-basis`, while a raw `26rem` on `width` warns "There's no replacement styling hook for the 26rem static value. Remove the static value". The rule does fire on unmapped values; lint could never have caught either ceiling where it sat, whatever the scale said
+- [ ] the same false mechanism sits in `spec.md`'s `### The floor and the ceiling` — "a hardcoded sizing value that the linter cannot catch, because no hook maps to it and so `no-hardcoded-values-slds2` never fires" — which is approved design prose rather than this slice's code, so it is handed to the human rather than to a fix pass
