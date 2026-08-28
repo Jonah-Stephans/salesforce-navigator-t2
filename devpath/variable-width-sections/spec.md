@@ -358,6 +358,13 @@ No ID is reused; O2 was retired at Initiate.
   members of the family being applied to the same element — the filter-and-compare beside the `cols-N`
   class assertion is the shape that can, and the hazard arrives wherever a second rule has to override
   a section's stored span rather than replace the class that carries it.
+- **A uniqueness guard on a parameterised class family has to run at every member, not at one.** A
+  filter-and-compare fixed at a single value of the parameter is green on a duplicate emitted only at
+  the _other_ values — and since an override that has to beat a stored value is conditional by nature,
+  the conditional case is the likely shape rather than the contrived one. The guard belongs inside the
+  `it.each` that already walks the family, not in a single-case test beside it. The mutation a test
+  here must be able to fail on is a second member of the family appended for every parameter value
+  except the one the guard happens to assert.
 
 ## Evidence
 
