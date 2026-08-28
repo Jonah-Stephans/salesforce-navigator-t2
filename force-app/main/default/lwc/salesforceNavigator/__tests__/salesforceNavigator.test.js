@@ -817,6 +817,15 @@ describe("c-salesforce-navigator", () => {
       );
       expect(body).toContain("grid-auto-flow: row");
       expect(body).toContain("justify-content: start");
+      // gap and padding are both load-bearing beyond layout: padding is what
+      // keeps a section card's box-shadow from clipping against the scroll
+      // container's own edge (see the trap on overflow-x coercing overflow-y
+      // to auto), and both feed this slice's 1,072px scroll-threshold
+      // arithmetic (6 floor tracks + 5 gaps + 2 padding sides). Neither was
+      // pinned before; deleting either stayed green under every other
+      // assertion here.
+      expect(body).toContain("gap: var(--slds-g-spacing-4, 1rem)");
+      expect(body).toContain("padding: var(--slds-g-spacing-4, 1rem)");
       expect(body).toContain("overflow-x: auto");
     });
 
