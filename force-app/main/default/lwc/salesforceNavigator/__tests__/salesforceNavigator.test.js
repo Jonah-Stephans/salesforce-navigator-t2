@@ -902,18 +902,34 @@ describe("c-salesforce-navigator", () => {
     // test in this file already depends on it resolving to its unmocked
     // fallback of "Large" — so a form factor override belongs in a file of
     // its own rather than disturbing that shared assumption here.
-    it("collapses the canvas to a single full-width track under .rstk-nav-sections_small, with no floor to overflow", () => {
+    it("collapses the canvas to a single full-width track under .rstk-nav-sections.rstk-nav-sections_small, with no floor to overflow and no scroll container", () => {
       const css = readFileSync(
         join(__dirname, "..", "salesforceNavigator.css"),
         "utf8"
       );
 
-      const rule = css.match(/\.rstk-nav-sections_small\s*\{[^}]*\}/);
+      // The compound selector is load-bearing, not stylistic: written as
+      // `.rstk-nav-sections_small` alone it is (0,1,0), the same
+      // specificity as `.rstk-nav-sections`'s own six-track rule, and wins
+      // only because it happens to sit later in this file — moving either
+      // block silently brings the six-track template back on `Small`. The
+      // compound form is (0,2,0) and wins irrespective of source order. A
+      // lone `.rstk-nav-sections_small { … }` rule — even one carrying the
+      // right declarations — fails this match.
+      const rule = css.match(
+        /\.rstk-nav-sections\.rstk-nav-sections_small\s*\{[^}]*\}/
+      );
       expect(rule).not.toBeNull();
       // `minmax(0, 1fr)` carries no floor, unlike the six-track template
-      // above — there is nothing left for `overflow-x: auto` (inherited,
-      // unchanged) to ever have to scroll on this form factor.
+      // above, so nothing here can overflow the container horizontally.
       expect(rule[0]).toContain("grid-template-columns: minmax(0, 1fr)");
+      // And the canvas is put back to not being a scroll container at all
+      // on this form factor, rather than merely one with nothing to
+      // scroll: `.rstk-nav-sections`'s inherited `overflow-x: auto` forces
+      // `overflow-y` to `auto` too, which makes the canvas a clipping
+      // context for every dropdown inside it — a property the pre-spec
+      // canvas O8 restores never had. `overflow: visible` undoes both axes.
+      expect(rule[0]).toContain("overflow: visible");
     });
 
     it("overrides every span-N rule back down to span 1 while .rstk-nav-sections_small is in force, for every column count the menu offers", () => {
@@ -974,6 +990,29 @@ describe("c-salesforce-navigator", () => {
       const canvas = element.shadowRoot.querySelector(".rstk-nav-sections");
       expect(canvas).not.toBeNull();
       expect(canvas.className).not.toContain("rstk-nav-sections_small");
+    });
+
+    it("does not put the small-form-factor class on the canvas when the viewport narrows under zoom, on the Large form factor", async () => {
+      // Acceptance criterion 5's own regression: zooming in on a desktop
+      // narrows the viewport in CSS pixels exactly as a phone's viewport is
+      // narrow, so a mechanism that reads `window.innerWidth` at all —
+      // whether instead of FORM_FACTOR or OR'd alongside it — would
+      // mistake one for the other here. `window.innerWidth` is writable in
+      // jsdom (default 1024); this sets it well under any plausible phone
+      // breakpoint while the form factor stays this file's default, "Large".
+      const originalInnerWidth = window.innerWidth;
+      window.innerWidth = 375;
+      try {
+        const element = createNavigator();
+        getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+        await flush();
+
+        const canvas = element.shadowRoot.querySelector(".rstk-nav-sections");
+        expect(canvas).not.toBeNull();
+        expect(canvas.className).not.toContain("rstk-nav-sections_small");
+      } finally {
+        window.innerWidth = originalInnerWidth;
+      }
     });
   });
 

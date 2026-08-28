@@ -145,8 +145,21 @@
    the trap on the same page).
 
    `minmax(0, 1fr)` has no floor, so nothing here can ever overflow the
-   container and there is nothing for `overflow-x: auto` (inherited,
-   unchanged, above) to ever have to scroll.
+   container horizontally.
+
+   **The canvas is also put back to not being a scroll container at all on
+   this form factor**, with `overflow: visible` below. `overflow-x: auto`
+   on `.rstk-nav-sections` above is what the six-track mechanism needs to
+   scroll at its floor, and it has a side effect this stand-down must not
+   inherit: it forces the computed `overflow-y` to `auto` too (see the trap
+   on this), which makes the canvas a clipping context for every
+   `position: absolute` dropdown inside it. The pre-spec canvas — the
+   `display: flex; flex-direction: column` layout O8 calls "the behaviour
+   that ships today" — was never a scroll or clipping container, so
+   restoring that here is part of the stand-down rather than a new
+   property this form factor did not have before. `minmax(0, 1fr)` already
+   means there is nothing to scroll horizontally; `overflow: visible`
+   is what makes that true structurally rather than only in practice.
 
    Every section still carries its ordinary `.rstk-nav-section_span-N`
    class from the same `spanClass` `resolveLayout` always computes -- that
@@ -157,9 +170,21 @@
    full-width row this stand-down exists to produce -- so every span rule is
    overridden back down to `span 1` here. The six rules below win on
    specificity over the six above (two classes each, against one), so this
-   holds regardless of which block a later edit places first in the file. */
-.rstk-nav-sections_small {
+   holds regardless of which block a later edit places first in the file.
+
+   **The single-track override above is written as
+   `.rstk-nav-sections.rstk-nav-sections_small` rather than
+   `.rstk-nav-sections_small` alone, for the same reason.** Written as a
+   lone class it is (0,1,0) — the same specificity as `.rstk-nav-sections`'s
+   own six-track rule above — and wins only because it happens to sit later
+   in this file; move either block and the six-track template silently
+   comes back on `Small`. The compound selector is (0,2,0), so it beats the
+   six-track rule irrespective of source order. Both classes always land on
+   the same element (see `sectionsCanvasClass`), so writing it this way
+   costs nothing. */
+.rstk-nav-sections.rstk-nav-sections_small {
   grid-template-columns: minmax(0, 1fr);
+  overflow: visible;
 }
 
 .rstk-nav-sections_small > .rstk-nav-section_span-1,

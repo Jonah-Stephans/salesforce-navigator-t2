@@ -146,5 +146,38 @@ describe("c-salesforce-navigator on the Small form factor", () => {
     const directChildren = Array.from(canvas.children);
     expect(directChildren).toHaveLength(1);
     expect(directChildren[0].className).toContain("rstk-nav-section_span-3");
+    // And only that one — a host carrying two of the mutually-exclusive
+    // rstk-nav-section_span-1…-6 classes renders at whichever the stylesheet
+    // happens to order last, and a toContain check alone stays green on it.
+    // `.rstk-nav-sections_small`'s override rules are exactly the shape
+    // `## Traps`' ninth entry names: a second rule overriding a section's
+    // stored span rather than replacing the class that carries it. Same
+    // shape as salesforceNavigator.test.js:762-765 and :882-885.
+    const appliedSpans = directChildren[0].className
+      .split(/\s+/)
+      .filter((name) => /^rstk-nav-section_span-\d+$/.test(name));
+    expect(appliedSpans).toEqual(["rstk-nav-section_span-3"]);
+  });
+
+  it("keeps rstk-nav-sections_small on the canvas at a wide viewport, because FORM_FACTOR alone decides", async () => {
+    // The mirror of salesforceNavigator.test.js's narrow-viewport case: this
+    // form factor is Small regardless of how wide the window is, so a
+    // mechanism that reads `window.innerWidth` at all should never be able
+    // to make a wide viewport turn the stand-down off. `window.innerWidth`
+    // is writable in jsdom (default 1024); this sets it well past any
+    // desktop viewport a zoom-related breakpoint would plausibly key off.
+    const originalInnerWidth = window.innerWidth;
+    window.innerWidth = 1920;
+    try {
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const canvas = element.shadowRoot.querySelector(".rstk-nav-sections");
+      expect(canvas).not.toBeNull();
+      expect(canvas.className).toContain("rstk-nav-sections_small");
+    } finally {
+      window.innerWidth = originalInnerWidth;
+    }
   });
 });
