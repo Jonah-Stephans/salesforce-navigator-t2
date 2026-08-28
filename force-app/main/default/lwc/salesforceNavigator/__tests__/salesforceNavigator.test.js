@@ -799,14 +799,18 @@ describe("c-salesforce-navigator", () => {
       // three of them moving in lockstep. A hard-coded `6` in this regex
       // would stay green if the maximum ever moved and the CSS did not.
       //
-      // The floor's fallback is the SLDS styling hook `--slds-g-sizing-13`
-      // (itself carrying its own fallback of the same `10rem`), tokenised at
-      // the engineer's decision; the ceiling stays a raw `26rem` because no
-      // sizing hook matches it. Both sit behind the `--rstk-nav-col-min` /
+      // Both the floor and the ceiling are SLDS styling hooks, each carrying
+      // its own fallback of the length it used to be hard-coded to —
+      // `--slds-g-sizing-13` (10rem) and `--slds-g-sizing-16` (30rem). The
+      // ceiling used to be a raw `26rem`, invisible to
+      // `no-hardcoded-values-slds2` because no hook mapped to it; this regex
+      // requires the tokenised form exactly, so a raw length sneaking back
+      // into the ceiling — or the wrong hook, or a hook missing its fallback
+      // — fails it. Both sit behind the `--rstk-nav-col-min` /
       // `--rstk-nav-col-max` override seam, unchanged.
       expect(body).toMatch(
         new RegExp(
-          `grid-template-columns:\\s*repeat\\(\\s*${MAX_COLUMNS}\\s*,\\s*minmax\\(\\s*var\\(--rstk-nav-col-min,\\s*var\\(--slds-g-sizing-13,\\s*10rem\\)\\s*\\)\\s*,\\s*var\\(--rstk-nav-col-max,\\s*26rem\\)\\s*\\)\\s*\\)`
+          `grid-template-columns:\\s*repeat\\(\\s*${MAX_COLUMNS}\\s*,\\s*minmax\\(\\s*var\\(--rstk-nav-col-min,\\s*var\\(--slds-g-sizing-13,\\s*10rem\\)\\s*\\)\\s*,\\s*var\\(--rstk-nav-col-max,\\s*var\\(--slds-g-sizing-16,\\s*30rem\\)\\s*\\)\\s*\\)\\s*\\)`
         )
       );
       expect(body).toContain("grid-auto-flow: row");

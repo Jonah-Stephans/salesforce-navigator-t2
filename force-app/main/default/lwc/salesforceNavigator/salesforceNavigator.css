@@ -37,28 +37,38 @@
    supplies them: no JavaScript, no ResizeObserver, no media query. The floor
    is `--slds-g-sizing-13`, which is exactly `10rem` in both slds and cosmos
    — set so a column at its narrowest still shows about twelve characters.
-   The ceiling stays a raw `26rem`, the width the org's longest tab name
-   needs to fit whole and what stops a lone one-column section stretching
-   into a 1,376px-wide link on a wide monitor; no sizing hook matches it
-   (`--slds-g-sizing-14` is `15rem`), so it is not tokenised. Six tracks at
-   the 10rem floor, five 1rem gaps and 1rem of this padding on each side
-   comes to 1,072px; below that the grid overflows and `overflow-x: auto`
-   scrolls it — including when the user zooms in, since zooming shrinks the
-   viewport in CSS pixels until the same floor binds. Tracks stop shrinking
-   rather than clipping, squeezing further, or reflowing, and no section
-   ever changes rows because of it.
+   The ceiling is `--slds-g-sizing-16`, `30rem`/480px in both slds and
+   cosmos and the top of the whole `--slds-g-sizing-*` scale — moved here
+   from a raw `26rem`, which passed `no-hardcoded-values-slds2` in silence
+   because no hook mapped to it; the scale runs `-13` 10rem, `-14` 15rem,
+   `-15` 20rem, `-16` 30rem, and an earlier pass stopped its search at `-14`
+   and concluded nothing matched. The ceiling's only job is capping track
+   growth on a very wide display: six tracks always exist, so a lone
+   one-column section is always exactly one of them and is never wider than
+   any other one-column section, ceiling or no. (An earlier draft of this
+   comment claimed the ceiling was what stopped a lone one-column section
+   stretching into a 1,376px-wide link — retracted here rather than carried,
+   since that was only ever true of the fixed-width model this design
+   rejected.) Six tracks at the 10rem floor, five 1rem gaps and 1rem of this
+   padding on each side comes to 1,072px; below that the grid overflows and
+   `overflow-x: auto` scrolls it — including when the user zooms in, since
+   zooming shrinks the viewport in CSS pixels until the same floor binds.
+   Tracks stop shrinking rather than clipping, squeezing further, or
+   reflowing, and no section ever changes rows because of it.
 
-   `var(--rstk-nav-col-min, var(--slds-g-sizing-13, 10rem))` keeps the
-   override seam — `--rstk-nav-col-min` — exactly where it was; only the
-   *fallback* inside it changed, from the raw length to the styling hook
-   (itself carrying its own fallback, per the SLDS 2 rule that a bare
-   `var(--slds-g-*)` is a lint failure). Overriding `--rstk-nav-col-min`
-   still bypasses the hook entirely, exactly as it always could.
+   `var(--rstk-nav-col-min, var(--slds-g-sizing-13, 10rem))` and
+   `var(--rstk-nav-col-max, var(--slds-g-sizing-16, 30rem))` keep the
+   override seams — `--rstk-nav-col-min` and `--rstk-nav-col-max` — exactly
+   where they were; only the *fallback* inside each changed, from a raw
+   length to a styling hook that itself carries its own fallback, per the
+   SLDS 2 rule that a bare `var(--slds-g-*)` is a lint failure. Overriding
+   either project property still bypasses its hook entirely, exactly as it
+   always could.
 
    `justify-content: start` is load-bearing: without it, tracks that have hit
-   the 26rem ceiling leave free space the grid would otherwise distribute
-   between them, and the whole canvas drifts away from the left edge on a
-   wide monitor.
+   the ceiling leave free space the grid would otherwise distribute between
+   them, and the whole canvas drifts away from the left edge on a wide
+   monitor.
 
    `overflow-x: auto` forces the computed `overflow-y` to `auto` as well —
    `auto`/`visible` is not a valid pairing — so a section's `box-shadow`
@@ -73,7 +83,7 @@
     6,
     minmax(
       var(--rstk-nav-col-min, var(--slds-g-sizing-13, 10rem)),
-      var(--rstk-nav-col-max, 26rem)
+      var(--rstk-nav-col-max, var(--slds-g-sizing-16, 30rem))
     )
   );
   grid-auto-flow: row;
