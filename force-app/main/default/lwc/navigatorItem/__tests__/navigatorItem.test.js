@@ -669,6 +669,109 @@ describe("c-navigator-item", () => {
     });
   });
 
+  /**
+   * A section's width now follows its field-column count (the sibling slice),
+   * so a column can be narrower than a tab name. Nothing bounded a label
+   * before that — there was no ellipsis on an item anywhere, because the card
+   * was always full width. This is the truncation this narrower column now
+   * needs.
+   *
+   * `slds-truncate` is used rather than hand-written CSS, per
+   * `rstk-lwc-standards.md`'s rule to prefer SLDS utility classes over custom
+   * CSS for a standard pattern. Read from the real shipped stylesheet
+   * (`salesforce-lightning-design-system.css`) rather than assumed, the class
+   * resolves to four declarations — `max-width: 100%`, `overflow: hidden`,
+   * `text-overflow: ellipsis`, `white-space: nowrap` — one more than an
+   * earlier draft of the design spelled out by hand. Against the flex row
+   * this lands in: the label span is a flex item of `.rstk-nav-item` (itself
+   * `display: flex`), and its own `overflow: hidden` gives it an automatic
+   * flex min-width of 0 per the Flexbox spec (an item's automatic minimum
+   * size is 0 once its own `overflow` is not `visible`) — so it shrinks and
+   * truncates without a hand-added `min-width: 0` of its own.
+   *
+   * What jsdom cannot observe, and is not asserted here: applies no
+   * stylesheet, so no ellipsis ever renders and `getBoundingClientRect()`
+   * returns zeros — whether an item's label actually clips, wraps, or stays
+   * on one line is a real-browser fact. Whether a screen reader announces the
+   * label once or twice with both `title` and `aria-label` present is a
+   * live-AT fact spec.md's own `## Traps` names as unverified. Both are
+   * recorded as such rather than asserted past what this suite can see.
+   */
+  describe("truncating a label too long for its column", () => {
+    const LONG_LABEL = "Receivable Transaction Scheduled Payment";
+
+    function labelOf(element) {
+      return element.shadowRoot.querySelector(".rstk-nav-item__label");
+    }
+
+    it("puts slds-truncate on the label rather than a hand-rolled ellipsis", async () => {
+      const element = await settled(createNavigatorItem({ label: LONG_LABEL }));
+
+      expect(labelOf(element).classList.contains("slds-truncate")).toBe(true);
+    });
+
+    it("clips the anchor's own overflow, so a long label cannot spill past the pill's border or over the menu beside it", () => {
+      // Rendered clipping is not observable in jsdom — the existing
+      // `_grabbed` appearance test above reads the shipped CSS as text for
+      // the same reason, and this follows that pattern.
+      // Anchored at the start of a line: `.rstk-nav-item__row .rstk-nav-item`
+      // (the compound selector a few rules above this one) also contains the
+      // literal text ".rstk-nav-item {" and would otherwise be the first,
+      // wrong match — this is the one rule whose selector *is* exactly
+      // `.rstk-nav-item`, nothing else.
+      const css = readFileSync(
+        join(__dirname, "..", "navigatorItem.css"),
+        "utf8"
+      );
+      const rule = css.match(/^\.rstk-nav-item\s*\{[^}]*\}/m);
+
+      expect(rule).not.toBeNull();
+      expect(rule[0]).toContain("overflow: hidden");
+    });
+
+    it("leaves the full label in the DOM text, unshortened, so find-in-page still matches what the ellipsis hides", async () => {
+      // text-overflow: ellipsis clips only the rendering; it never edits the
+      // text node. A component that instead computed its own substring plus
+      // "…" would defeat find-in-page, which this pins against by asserting
+      // the rendered text is the whole string, not a shortened one.
+      const element = await settled(createNavigatorItem({ label: LONG_LABEL }));
+
+      expect(labelOf(element).textContent).toBe(LONG_LABEL);
+    });
+
+    it("gives the anchor a title carrying the full label, so hovering a truncated item reveals it", async () => {
+      const element = await settled(createNavigatorItem({ label: LONG_LABEL }));
+
+      expect(anchorOf(element).getAttribute("title")).toBe(LONG_LABEL);
+    });
+
+    it("leaves aria-label as the anchor's only accessible-name source alongside the new title", async () => {
+      // aria-label outranks title in accessible-name computation (WAI-ARIA
+      // accname), so the anchor's *name* is unaffected by title being added.
+      // Whether some assistive tech separately reads title as a hint on top
+      // of that name is the live-AT question spec.md leaves open, not a
+      // structural claim this test can settle.
+      const element = await settled(createNavigatorItem({ label: LONG_LABEL }));
+      const anchor = anchorOf(element);
+
+      expect(anchor.getAttribute("aria-label")).toBe(LONG_LABEL);
+      expect(anchor.getAttribute("title")).toBe(LONG_LABEL);
+    });
+
+    it("applies the same truncation markup to a label that already fits, unchanged in its own text", async () => {
+      // Nothing here branches on length: the same class and title apply
+      // whether or not the column is wide enough, and it is the real
+      // stylesheet's own text-overflow that decides whether an ellipsis ever
+      // shows. So "unchanged when it fits" is a property of the CSS, not of
+      // this component choosing not to truncate — this pins that no
+      // second, JS-computed truncation is layered on top of it.
+      const element = await settled(createNavigatorItem({ label: "Our Site" }));
+
+      expect(labelOf(element).classList.contains("slds-truncate")).toBe(true);
+      expect(labelOf(element).textContent).toBe("Our Site");
+    });
+  });
+
   describe("the Move to… menu", () => {
     // Arrow keys deliberately do not cross a section boundary — that is the
     // pattern, not an omission — so this menu is the cross-section mechanism,

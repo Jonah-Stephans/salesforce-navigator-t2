@@ -228,6 +228,16 @@ describe("c-navigator-section", () => {
     expect(css).toContain("display: grid");
   });
 
+  // No span-N test lives here. The span class is bound on the
+  // `<c-navigator-section>` host in salesforceNavigator.html, one level
+  // outside this component's own shadow root, and the `.rstk-nav-section_span-N`
+  // rules that give it a `grid-column` live beside the canvas grid in
+  // salesforceNavigator.css — not in this component or this stylesheet. A
+  // class-name assertion on the `<article>` here, or a stylesheet pin against
+  // navigatorSection.css, would stay green whether or not the class reaches
+  // the grid at all; see `salesforceNavigator.test.js`'s "sections canvas"
+  // tests for the ones that can actually fail on that.
+
   it("offers exactly one column choice per supported count, and no others", () => {
     const element = createSection();
 

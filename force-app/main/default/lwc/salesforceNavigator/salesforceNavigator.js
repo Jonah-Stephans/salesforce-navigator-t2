@@ -1,4 +1,11 @@
 import { LightningElement, wire } from "lwc";
+// The device class the canvas grid's `Small` stand-down keys off — see
+// `## Design`'s "Form factor, not viewport width" in
+// devpath/variable-width-sections/spec.md. A width-keyed media query cannot
+// tell a phone from a zoomed-in desktop, since both narrow the viewport in
+// CSS pixels; FORM_FACTOR is a platform-reported device class that zooming
+// does not change, which is exactly the distinction this stand-down needs.
+import FORM_FACTOR from "@salesforce/client/formFactor";
 // getNavItems is imported directly from its platform module, rather than
 // through c/navigatorTabSource, because Salesforce's own eslint config
 // (no-unexpected-wire-adapter-usages) restricts it to appearing only as the
@@ -140,6 +147,13 @@ const AUTOSAVE_DELAY_MS = 1000;
  * on ANNOUNCEMENT_NONCE in navigatorSection.js.
  */
 const ANNOUNCEMENT_NONCE = "\u200B";
+
+/**
+ * The one form factor the six-track canvas stands down for (see the note on
+ * the `FORM_FACTOR` import above). `Medium` and `Large` both get the
+ * six-track grid; only `Small` collapses to the single full-width track.
+ */
+const SMALL_FORM_FACTOR = "Small";
 
 /**
  * The Navigator tab's top-level component. It owns the active layout's state
@@ -838,6 +852,23 @@ export default class SalesforceNavigator extends LightningElement {
   /** Whether an item drag is in flight, which is the sections' cue to show a drop target. */
   get isItemDragActive() {
     return this.dragKind === "item";
+  }
+
+  /**
+   * The class list bound to the canvas grid in salesforceNavigator.html.
+   * `FORM_FACTOR` is read once, from the platform, not from anything this
+   * component measures about its own container, so it cannot be changed by
+   * resizing or zooming a desktop window (that is the whole reason it was
+   * chosen over a media query — see the design). `rstk-nav-sections` always
+   * applies; `rstk-nav-sections_small` only joins it on the `Small` form
+   * factor, and it is that second class, in salesforceNavigator.css, that
+   * collapses the six-track grid to a single full-width track and overrides
+   * every section's `.rstk-nav-section_span-N` back down to one.
+   */
+  get sectionsCanvasClass() {
+    return FORM_FACTOR === SMALL_FORM_FACTOR
+      ? "rstk-nav-sections rstk-nav-sections_small"
+      : "rstk-nav-sections";
   }
 
   /**

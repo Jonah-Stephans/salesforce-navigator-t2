@@ -94,6 +94,16 @@ export function resolveLayout(layout, tabs) {
       name: section.name,
       columns,
       columnClass: `rstk-nav-section__grid cols-${columns}`,
+      // The card's own footprint in the canvas's six-track CSS Grid — bound
+      // in salesforceNavigator.html on the `<c-navigator-section>` host, and
+      // sized by `.rstk-nav-section_span-N` beside the six-track template on
+      // `.rstk-nav-sections`, both in salesforceNavigator.css. Not in
+      // navigatorSection.css: this component's shadow root sits one level
+      // inside that host, so a rule carrying `grid-column` written there
+      // would reach nothing. Computed from the same clamped `columns`
+      // `columnClass` is, so the two classes can never disagree about how
+      // many field columns a section holds.
+      spanClass: `rstk-nav-section_span-${columns}`,
       items,
       hasItems: items.length > 0
     };

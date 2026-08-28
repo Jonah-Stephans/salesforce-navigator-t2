@@ -9,13 +9,20 @@ import { getNavigateCalledWith } from "lightning/navigation";
 // entry does are driven against the component that ships.
 import { getOpenModals, resetModals, configOf } from "lightning/modal";
 import { MAX_PAGE_SIZE, NAV_ITEMS_CONFIG } from "c/navigatorTabSource";
-import { SCHEMA_VERSION, reorder } from "c/navigatorLayoutModel";
+import {
+  SCHEMA_VERSION,
+  reorder,
+  MIN_COLUMNS,
+  MAX_COLUMNS
+} from "c/navigatorLayoutModel";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
 import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
 import updateLayout from "@salesforce/apex/NavigatorLayoutController.updateLayout";
 import activateLayout from "@salesforce/apex/NavigatorLayoutController.activateLayout";
 import renameLayout from "@salesforce/apex/NavigatorLayoutController.renameLayout";
 import deleteLayout from "@salesforce/apex/NavigatorLayoutController.deleteLayout";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 // The Apex seam. Without these, `@lwc/jest-transformer` substitutes a plain
 // function returning `Promise.resolve()` that records nothing — the same
@@ -732,13 +739,281 @@ describe("c-salesforce-navigator", () => {
         selectSectionMenuItem(element, 0, `columns-${columns}`);
         await flush();
 
-        const grid = querySections(element)[0].shadowRoot.querySelector("ul");
+        const section = querySections(element)[0];
+        const grid = section.shadowRoot.querySelector("ul");
         expect(grid.className).toContain(`cols-${columns}`);
+        // The card's own footprint in the canvas grid follows the same
+        // column count — this is what makes the section's width follow how
+        // many field columns it holds, rather than every card stretching to
+        // the same full width regardless. Asserted on `section` itself, the
+        // `<c-navigator-section>` host and `.rstk-nav-sections`'s actual
+        // direct child — not on the `<article>` inside its shadow root,
+        // which the canvas grid never lays out and which carried no span
+        // class this component could ever style with `grid-column`.
+        expect(section.className).toContain(`rstk-nav-section_span-${columns}`);
+        // And only that one — a host carrying two of the mutually-exclusive
+        // rstk-nav-section_span-1…-6 classes renders at whichever the
+        // stylesheet happens to order last, and a toContain check alone
+        // stays green on it. Run at every column count, not a single pinned
+        // one, so a duplicate emitted for only some counts cannot hide
+        // behind the one case a narrower guard would have checked. Same
+        // shape as navigatorSection.test.js's cols-N uniqueness guard
+        // (lines 199-204).
+        const appliedSpans = section.className
+          .split(/\s+/)
+          .filter((name) => /^rstk-nav-section_span-\d+$/.test(name));
+        expect(appliedSpans).toEqual([`rstk-nav-section_span-${columns}`]);
 
         await settleAutosave();
         expect(lastSavedLayout(createLayout).sections[0].columns).toBe(columns);
       }
     );
+  });
+
+  describe("the sections canvas — width follows columns, side by side", () => {
+    // Rendered width is not assertable in jest: jsdom applies no stylesheet
+    // and getBoundingClientRect() returns zeros, and row packing is the
+    // browser's own CSS Grid auto-placement rather than arithmetic this
+    // repo owns — the design is explicit that packing is verified in a real
+    // org, not in jest. What jest *can* pin is the stylesheet that ships:
+    // the six-track template with its floor and its ceiling, grid-auto-flow
+    // doing the packing, overflow-x scrolling once the floor binds, and
+    // justify-content keeping the canvas at the left edge once a track hits
+    // its ceiling. This is the repo's existing answer for CSS facts jsdom
+    // cannot observe — see navigatorSection.test.js's own cols-N stylesheet
+    // pin.
+    it("lays the canvas out as a six-track grid bounded by a floor and a ceiling", () => {
+      const css = readFileSync(
+        join(__dirname, "..", "salesforceNavigator.css"),
+        "utf8"
+      );
+
+      const rule = css.match(/\.rstk-nav-sections\s*\{[^}]*\}/);
+      expect(rule).not.toBeNull();
+      const body = rule[0];
+
+      expect(body).toContain("display: grid");
+      // Driven off MAX_COLUMNS rather than a literal 6: the six tracks here
+      // are the CSS's own copy of the same maximum navigatorLayoutModel.js
+      // and NavigatorLayoutController.cls each keep — see the trap on the
+      // three of them moving in lockstep. A hard-coded `6` in this regex
+      // would stay green if the maximum ever moved and the CSS did not.
+      //
+      // Both the floor and the ceiling are SLDS styling hooks, each carrying
+      // its own fallback of the length it used to be hard-coded to —
+      // `--slds-g-sizing-13` (10rem) and `--slds-g-sizing-16` (30rem). The
+      // ceiling used to be a raw `26rem`, invisible to
+      // `no-hardcoded-values-slds2` not because no hook mapped to it but
+      // because the rule is property-scoped and never checks
+      // `grid-template-columns` — see the trap on this; this regex
+      // requires the tokenised form exactly, so a raw length sneaking back
+      // into the ceiling — or the wrong hook, or a hook missing its fallback
+      // — fails it. Both sit behind the `--rstk-nav-col-min` /
+      // `--rstk-nav-col-max` override seam, unchanged.
+      expect(body).toMatch(
+        new RegExp(
+          `grid-template-columns:\\s*repeat\\(\\s*${MAX_COLUMNS}\\s*,\\s*minmax\\(\\s*var\\(--rstk-nav-col-min,\\s*var\\(--slds-g-sizing-13,\\s*10rem\\)\\s*\\)\\s*,\\s*var\\(--rstk-nav-col-max,\\s*var\\(--slds-g-sizing-16,\\s*30rem\\)\\s*\\)\\s*\\)\\s*\\)`
+        )
+      );
+      expect(body).toContain("grid-auto-flow: row");
+      expect(body).toContain("justify-content: start");
+      // gap and padding are both load-bearing beyond layout: padding is what
+      // keeps a section card's box-shadow from clipping against the scroll
+      // container's own edge (see the trap on overflow-x coercing overflow-y
+      // to auto), and both feed this slice's 1,072px scroll-threshold
+      // arithmetic (6 floor tracks + 5 gaps + 2 padding sides). Neither was
+      // pinned before; deleting either stayed green under every other
+      // assertion here.
+      expect(body).toContain("gap: var(--slds-g-spacing-4, 1rem)");
+      expect(body).toContain("padding: var(--slds-g-spacing-4, 1rem)");
+      expect(body).toContain("overflow-x: auto");
+    });
+
+    it("defines a real grid-column span, on this stylesheet, for every column count the menu offers", () => {
+      // The mirror of navigatorSection.test.js's cols-N stylesheet pin, but
+      // for the span rules — which live here, beside the grid they size,
+      // rather than in navigatorSection.css. Driven off MIN_COLUMNS/MAX_COLUMNS
+      // for the same reason navigatorSection.test.js's own span coverage was:
+      // a hard-coded 1..6 would stay green if the range ever moved and this
+      // file's rules did not move with it.
+      const css = readFileSync(
+        join(__dirname, "..", "salesforceNavigator.css"),
+        "utf8"
+      );
+
+      for (let columns = MIN_COLUMNS; columns <= MAX_COLUMNS; columns += 1) {
+        expect(css).toMatch(
+          new RegExp(
+            `\\.rstk-nav-section_span-${columns}\\s*\\{[^}]*grid-column:\\s*span\\s*${columns}`
+          )
+        );
+      }
+    });
+
+    it("puts the section's span class on .rstk-nav-sections's own direct children, not merely somewhere inside them", async () => {
+      // This is the trap Finding 1 named: a class-name check on the inner
+      // `<article>`, or a stylesheet-text pin, both stay green whether or not
+      // the span class ever reaches an actual child of the grid. Before the
+      // fix, `.rstk-nav-sections`'s direct children — the `<c-navigator-section>`
+      // hosts — carried no class at all, so this failed; the class was being
+      // written one shadow root too deep to matter.
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const canvas = element.shadowRoot.querySelector(".rstk-nav-sections");
+      expect(canvas).not.toBeNull();
+
+      const directChildren = Array.from(canvas.children);
+      expect(directChildren).toHaveLength(1);
+      expect(directChildren[0].tagName.toLowerCase()).toBe(
+        "c-navigator-section"
+      );
+      // The seeded layout's one section holds every reachable tab at
+      // DEFAULT_COLUMNS (3) — see navigatorLayoutModel.js.
+      expect(directChildren[0].className).toContain("rstk-nav-section_span-3");
+      // And only that one — a host carrying two of the mutually-exclusive
+      // rstk-nav-section_span-1…-6 classes renders at whichever the
+      // stylesheet happens to order last, six tracks wide whatever its
+      // column count, and a toContain check alone stays green on it. The
+      // same shape as navigatorSection.test.js's cols-N uniqueness guard
+      // (lines 199-204), applied here where the span class actually reaches
+      // a grid child.
+      const appliedSpans = directChildren[0].className
+        .split(/\s+/)
+        .filter((name) => /^rstk-nav-section_span-\d+$/.test(name));
+      expect(appliedSpans).toEqual(["rstk-nav-section_span-3"]);
+    });
+  });
+
+  describe("the sections canvas on a phone (Small form factor stands the mechanism down)", () => {
+    // O8's whole content: on `Small`, the canvas is stood down to a single
+    // full-width track and every section spans it, restoring today's shipped
+    // behaviour rather than the six-track mechanism above. `## Design`'s own
+    // "Test entry points" note applies here exactly as it does to that
+    // mechanism: rendered width is not assertable in jest, so what these
+    // tests pin is the stylesheet that ships and the one DOM-observable fact
+    // this mechanism produces — which class reaches the canvas element —
+    // not the pixels that class then produces in a real browser. Whether the
+    // canvas actually carries that class on the `Small` form factor itself
+    // is covered in salesforceNavigator.smallFormFactor.test.js, a separate
+    // file for one mechanical reason: `@salesforce/client/formFactor` is
+    // resolved once, when this module is first required, and every other
+    // test in this file already depends on it resolving to its unmocked
+    // fallback of "Large" — so a form factor override belongs in a file of
+    // its own rather than disturbing that shared assumption here.
+    it("collapses the canvas to a single full-width track under .rstk-nav-sections.rstk-nav-sections_small, with no floor to overflow and no scroll container", () => {
+      const css = readFileSync(
+        join(__dirname, "..", "salesforceNavigator.css"),
+        "utf8"
+      );
+
+      // The compound selector is load-bearing, not stylistic: written as
+      // `.rstk-nav-sections_small` alone it is (0,1,0), the same
+      // specificity as `.rstk-nav-sections`'s own six-track rule, and wins
+      // only because it happens to sit later in this file — moving either
+      // block silently brings the six-track template back on `Small`. The
+      // compound form is (0,2,0) and wins irrespective of source order. A
+      // lone `.rstk-nav-sections_small { … }` rule — even one carrying the
+      // right declarations — fails this match.
+      const rule = css.match(
+        /\.rstk-nav-sections\.rstk-nav-sections_small\s*\{[^}]*\}/
+      );
+      expect(rule).not.toBeNull();
+      // `minmax(0, 1fr)` carries no floor, unlike the six-track template
+      // above, so nothing here can overflow the container horizontally.
+      expect(rule[0]).toContain("grid-template-columns: minmax(0, 1fr)");
+      // And the canvas is put back to not being a scroll container at all
+      // on this form factor, rather than merely one with nothing to
+      // scroll: `.rstk-nav-sections`'s inherited `overflow-x: auto` forces
+      // `overflow-y` to `auto` too, which makes the canvas a clipping
+      // context for every dropdown inside it — a property the pre-spec
+      // canvas O8 restores never had. `overflow: visible` undoes both axes.
+      expect(rule[0]).toContain("overflow: visible");
+    });
+
+    it("overrides every span-N rule back down to span 1 while .rstk-nav-sections_small is in force, for every column count the menu offers", () => {
+      // Driven off MIN_COLUMNS/MAX_COLUMNS rather than a literal 1..6, for
+      // the same reason the six-track pin above is: a hard-coded range would
+      // stay green if the maximum ever moved and this override did not move
+      // with it. Left un-overridden, a span greater than 1 against the
+      // single explicit column of .rstk-nav-sections_small would ask the
+      // grid to generate implicit tracks to hold it — sized by
+      // grid-auto-columns, not this 1fr track — rather than collapsing to
+      // one full-width row.
+      const css = readFileSync(
+        join(__dirname, "..", "salesforceNavigator.css"),
+        "utf8"
+      );
+
+      const rule = css.match(
+        /\.rstk-nav-sections_small\s*>\s*\.rstk-nav-section_span-1[\s\S]*?\{[^}]*\}/
+      );
+      expect(rule).not.toBeNull();
+      const block = rule[0];
+
+      for (let columns = MIN_COLUMNS; columns <= MAX_COLUMNS; columns += 1) {
+        expect(block).toContain(
+          `.rstk-nav-sections_small > .rstk-nav-section_span-${columns}`
+        );
+      }
+      expect(block).toMatch(/grid-column:\s*span\s*1\b/);
+    });
+
+    it("introduces no @media query anywhere in this stylesheet", () => {
+      // The trap this closes: a width-keyed breakpoint cannot tell a phone
+      // from a zoomed-in desktop, and the zoomed-in desktop is exactly the
+      // case the design wants the horizontal scroll bar from (slice 01),
+      // not this single-track stand-down. FORM_FACTOR is the only mechanism
+      // permitted to choose between them.
+      const css = readFileSync(
+        join(__dirname, "..", "salesforceNavigator.css"),
+        "utf8"
+      );
+      // Comments are stripped first, so a mention of the string "@media" in
+      // prose — such as this file's own comment explaining why one was not
+      // used — cannot make this assertion pass without checking anything.
+      const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
+      expect(withoutComments).not.toMatch(/@media/);
+    });
+
+    it("does not put the small-form-factor class on the canvas under this file's own default form factor", async () => {
+      // Every other test in this file renders with no
+      // `@salesforce/client/formFactor` mock in place, which falls back to
+      // this module's own default of "Large" — so this is what every one of
+      // those tests' canvas already looks like, asserted directly here
+      // rather than only implied by the rest of the file passing.
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const canvas = element.shadowRoot.querySelector(".rstk-nav-sections");
+      expect(canvas).not.toBeNull();
+      expect(canvas.className).not.toContain("rstk-nav-sections_small");
+    });
+
+    it("does not put the small-form-factor class on the canvas when the viewport narrows under zoom, on the Large form factor", async () => {
+      // Acceptance criterion 5's own regression: zooming in on a desktop
+      // narrows the viewport in CSS pixels exactly as a phone's viewport is
+      // narrow, so a mechanism that reads `window.innerWidth` at all —
+      // whether instead of FORM_FACTOR or OR'd alongside it — would
+      // mistake one for the other here. `window.innerWidth` is writable in
+      // jsdom (default 1024); this sets it well under any plausible phone
+      // breakpoint while the form factor stays this file's default, "Large".
+      const originalInnerWidth = window.innerWidth;
+      window.innerWidth = 375;
+      try {
+        const element = createNavigator();
+        getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+        await flush();
+
+        const canvas = element.shadowRoot.querySelector(".rstk-nav-sections");
+        expect(canvas).not.toBeNull();
+        expect(canvas.className).not.toContain("rstk-nav-sections_small");
+      } finally {
+        window.innerWidth = originalInnerWidth;
+      }
+    });
   });
 
   describe("surviving a reload", () => {

@@ -40,6 +40,18 @@
   outline-offset: var(--slds-g-spacing-1, 0.25rem);
 }
 
+/* The section card's footprint in the canvas's six-track CSS Grid lives in
+   `salesforceNavigator.css`, as `.rstk-nav-section_span-1` … `-6`, and not
+   here. `.rstk-nav-sections` is a `<div>` in `salesforceNavigator`'s own
+   template, and the elements it lays out are the `<c-navigator-section>`
+   hosts — this component's shadow root sits one level *inside* one of those
+   hosts, so a `grid-column` rule written against anything in here, including
+   this file's own `.rstk-nav-section` (the `<article>`), reaches nothing: it
+   is not a child of the grid, its host is. `class={section.spanClass}` is
+   therefore bound in `salesforceNavigator.html` directly on
+   `<c-navigator-section>`, and the six span rules live beside the grid they
+   size in `salesforceNavigator.css`. */
+
 .rstk-nav-section__header {
   display: flex;
   align-items: center;

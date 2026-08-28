@@ -152,10 +152,20 @@
         </div>
       </template>
 
-      <div class="rstk-nav-sections">
+      <div class={sectionsCanvasClass}>
         <template for:each={sections} for:item="section">
+          <!-- `class={section.spanClass}` is bound here, on the grid's own
+               direct child, rather than on anything inside `c-navigator-section`'s
+               shadow root: `.rstk-nav-sections` in salesforceNavigator.css is
+               the six-track grid, and its actual children are these
+               `<c-navigator-section>` hosts, not any element inside them. A
+               `grid-column` rule reaches nothing written against the card
+               inside — see `.rstk-nav-section_span-N` in
+               salesforceNavigator.css and the note in navigatorSection.js's
+               `cardClass`. -->
           <c-navigator-section
             key={section.key}
+            class={section.spanClass}
             section={section}
             grabbed={section.isGrabbed}
             item-drag-active={isItemDragActive}

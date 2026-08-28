@@ -31,6 +31,7 @@
         aria-describedby={describedById}
         tabindex={fallbackTabIndex}
         role={fallbackRole}
+        title={label}
         onclick={handleClick}
         onkeydown={handleKeydown}
         ondragstart={handleDragStart}
@@ -38,7 +39,12 @@
         ondrop={handleDrop}
         ondragend={handleDragEnd}
       >
-        <span class="rstk-nav-item__label">{label}</span>
+        <!-- slds-truncate is the SLDS 2 utility for this: max-width:100%,
+             overflow:hidden, text-overflow:ellipsis, white-space:nowrap. It
+             clips only the label's own rendering — the DOM text node stays
+             the full string, which is what keeps find-in-page and copy able
+             to see the whole name even while it displays cut short. -->
+        <span class="rstk-nav-item__label slds-truncate">{label}</span>
       </a>
     </template>
 
