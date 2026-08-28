@@ -4,14 +4,14 @@
     "jonah-stephans": {
       "source": {
         "source": "github",
-        "repo": "Jonah-Stephans/dev-path"
+        "repo": "Jonah-Stephans/devpath"
       }
     }
   },
   "enabledPlugins": {
     "rstk@rstk-team-tooling": true,
     "rstk-librarian@rstk-team-tooling": true,
-    "dev-path@jonah-stephans": true
+    "devpath@jonah-stephans": true
   },
   "hooks": {
     "PostToolUse": [
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "F=$(jq -r '.tool_input.file_path // \"\"'); case \"$F\" in *dev-path/*/spec.md) P=\"Intent|Outcomes|Out of scope|Open questions|Evidence|Current state|Design|Outcome checks|dev-path feedback\";; *dev-path/*/slices/*.md) P=\"What to build|Acceptance criteria|Deviations|Critique findings\";; *) exit 0;; esac; grep -n '^## ' \"$F\" | grep -Ev \"^[0-9]+:## ($P)$\" && echo \"dev-path: $F carries a heading outside the schema\"; exit 0",
+            "command": "F=$(jq -r '.tool_input.file_path // \"\"'); case \"$F\" in *devpath/*/spec.md|*dev-path/*/spec.md) P=\"Intent|Outcomes|Out of scope|Open questions|Evidence|Current state|Design|Outcome checks|Traps|devpath feedback\";; *devpath/*/slices/*.md|*dev-path/*/slices/*.md) P=\"What to build|Acceptance criteria|Deviations|Critique findings\";; *) exit 0;; esac; grep -n '^## ' \"$F\" | grep -Ev \"^[0-9]+:## ($P)$\" && echo \"devpath: $F carries a heading outside the schema\"; exit 0",
             "timeout": 10
           }
         ]
