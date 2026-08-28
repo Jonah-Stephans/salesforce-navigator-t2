@@ -7,7 +7,7 @@ touches:
   - force-app/main/default/lwc/salesforceNavigator/__tests__/salesforceNavigator.test.js
   - force-app/main/default/lwc/navigatorSection/navigatorSection.css
 done: true
-fix_cycles: 2
+fix_cycles: 3
 ---
 
 # A section's width follows its field-column count, and sections sit side by side
