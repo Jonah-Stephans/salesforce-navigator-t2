@@ -267,6 +267,41 @@ describe("resolveLayout — the render-time access intersection", () => {
     expect(narrow[0].columnClass).toContain(`cols-${MIN_COLUMNS}`);
   });
 
+  // spanClass is the card's own footprint in the canvas's six-track CSS
+  // Grid (`.rstk-nav-section_span-N` in salesforceNavigator.css, bound onto
+  // the `<c-navigator-section>` host in salesforceNavigator.html) — the seam
+  // that drives a section's width off its column count instead of the
+  // full-width stretch every section used to get alike. It comes off the
+  // same clamped `columns` columnClass does, one definition shared between
+  // the two classes, for the same reason the tests below mirror the
+  // columnClass ones above rather than inventing a second set of rules.
+  it.each([1, 2, 3, 4, 5, 6])(
+    "computes the span-%i class so the section's card spans that many of the canvas's six tracks",
+    (columns) => {
+      const sections = resolveLayout(
+        { sections: [{ name: "S", columns, items: [] }] },
+        ALL_TABS
+      );
+
+      expect(sections[0].columns).toBe(columns);
+      expect(sections[0].spanClass).toContain(`span-${columns}`);
+    }
+  );
+
+  it("clamps a column count outside one to six for the span class too, rather than emitting a class no stylesheet has", () => {
+    const wide = resolveLayout(
+      { sections: [{ name: "S", columns: 12, items: [] }] },
+      ALL_TABS
+    );
+    const narrow = resolveLayout(
+      { sections: [{ name: "S", columns: 0, items: [] }] },
+      ALL_TABS
+    );
+
+    expect(wide[0].spanClass).toContain(`span-${MAX_COLUMNS}`);
+    expect(narrow[0].spanClass).toContain(`span-${MIN_COLUMNS}`);
+  });
+
   it("carries each section's own index, so an edit names the section it came from", () => {
     const twoSections = {
       sections: [

@@ -6,13 +6,194 @@
   background-color: var(--slds-g-color-error-container-1, #ba0517);
 }
 
-/* Section cards stack with a gap rather than a margin on the card itself, so
-   a section never has to know what sits above or below it. */
+/* The canvas: a CSS Grid of exactly six tracks. A section spans as many of
+   them as it holds field columns (`.rstk-nav-section_span-N`, below), which
+   is the whole mechanism behind a section's width following its column
+   count instead of stretching full width regardless of how many columns it
+   holds. Cards carry no margin of their own and never have to know what
+   sits beside them — `gap` is the only spacing rule, exactly as it was when
+   this was a column of flex items.
+
+   The span rules live here, on the grid's own stylesheet, and the class is
+   bound in this component's own template — `class={section.spanClass}` on
+   `<c-navigator-section>` — rather than in navigatorSection.css or .html.
+   `.rstk-nav-sections`'s actual children are the `<c-navigator-section>`
+   hosts, not any element inside their shadow roots, so a rule carrying
+   `grid-column` reaches nothing written against the card inside one of
+   them. `spanClass` itself is still computed once, in
+   navigatorLayoutModel.js's `resolveLayout`, so the clamp and the class
+   have one definition between them.
+
+   `grid-auto-flow: row` with a spanning item *is* the packing algorithm:
+   sections are placed in order and one that will not fit the tracks left in
+   a row moves to the next, so there is no row-packing arithmetic in this
+   file, in a script, or anywhere else. Every row draws from the same six
+   tracks, which is what makes a 3-column section the same width in every row
+   it might land in — sizing tracks per row instead would make the same
+   section a different width depending which neighbours happened to share
+   its row.
+
+   The `minmax()` bounds are the floor and the ceiling, and nothing else
+   supplies them: no JavaScript, no ResizeObserver, no media query. The floor
+   is `--slds-g-sizing-13`, which is exactly `10rem` in both slds and cosmos
+   — set so a column at its narrowest still shows about twelve characters.
+   The ceiling is `--slds-g-sizing-16`, `30rem`/480px in both slds and
+   cosmos and the top of the whole `--slds-g-sizing-*` scale — moved here
+   from a raw `26rem`, invisible to `no-hardcoded-values-slds2` not because
+   no hook mapped to it but because the rule is property-scoped and never
+   checks `grid-template-columns` — see the trap on this; the scale runs
+   `-13` 10rem, `-14` 15rem, `-15` 20rem, `-16` 30rem, and an earlier pass
+   stopped its search at `-14` and concluded nothing matched. The
+   ceiling's only job is capping track growth on a very wide display: six
+   tracks always exist, so a lone
+   one-column section is always exactly one of them and is never wider than
+   any other one-column section, ceiling or no. (An earlier draft of this
+   comment claimed the ceiling was what stopped a lone one-column section
+   stretching into a 1,376px-wide link — retracted here rather than carried,
+   since that was only ever true of the fixed-width model this design
+   rejected.) Six tracks at the 10rem floor, five 1rem gaps and 1rem of this
+   padding on each side comes to 1,072px; below that the grid overflows and
+   `overflow-x: auto` scrolls it — including when the user zooms in, since
+   zooming shrinks the viewport in CSS pixels until the same floor binds.
+   Tracks stop shrinking rather than clipping, squeezing further, or
+   reflowing, and no section ever changes rows because of it.
+
+   `var(--rstk-nav-col-min, var(--slds-g-sizing-13, 10rem))` and
+   `var(--rstk-nav-col-max, var(--slds-g-sizing-16, 30rem))` keep the
+   override seams — `--rstk-nav-col-min` and `--rstk-nav-col-max` — exactly
+   where they were; only the *fallback* inside each changed, from a raw
+   length to a styling hook that itself carries its own fallback, per the
+   SLDS 2 rule that a bare `var(--slds-g-*)` is a lint failure. Overriding
+   either project property still bypasses its hook entirely, exactly as it
+   always could.
+
+   `justify-content: start` is load-bearing: without it, tracks that have hit
+   the ceiling leave free space the grid would otherwise distribute between
+   them, and the whole canvas drifts away from the left edge on a wide
+   monitor.
+
+   `overflow-x: auto` forces the computed `overflow-y` to `auto` as well —
+   `auto`/`visible` is not a valid pairing — so a section's `box-shadow`
+   would clip against the scroll container's own edge if the container had
+   no padding of its own; it does, below.
+
+   The `Small` form factor stands this down to a single full-width track —
+   `.rstk-nav-sections_small`, below, joins this class rather than replacing
+   it, and overrides only what it needs to. */
 .rstk-nav-sections {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(
+    6,
+    minmax(
+      var(--rstk-nav-col-min, var(--slds-g-sizing-13, 10rem)),
+      var(--rstk-nav-col-max, var(--slds-g-sizing-16, 30rem))
+    )
+  );
+  grid-auto-flow: row;
+  justify-content: start;
   gap: var(--slds-g-spacing-4, 1rem);
   padding: var(--slds-g-spacing-4, 1rem);
+  overflow-x: auto;
+}
+
+/* Six rules, not a computed span, for the same reason `cols-N` in
+   navigatorSection.css is six classes rather than one: an inline
+   `style="grid-column: span N"` would be an inline `style`, and the SLDS
+   linter validates `width` but not `grid-column`. `spanClass` on the
+   resolved section (`navigatorLayoutModel.js`) is what picks one of these
+   six, from the same clamped column count `cols-N` comes from, and
+   `class={section.spanClass}` in this component's own template is what puts
+   it on the one element these rules can actually reach — the
+   `<c-navigator-section>` host, `.rstk-nav-sections`'s direct child. */
+.rstk-nav-section_span-1 {
+  grid-column: span 1;
+}
+
+.rstk-nav-section_span-2 {
+  grid-column: span 2;
+}
+
+.rstk-nav-section_span-3 {
+  grid-column: span 3;
+}
+
+.rstk-nav-section_span-4 {
+  grid-column: span 4;
+}
+
+.rstk-nav-section_span-5 {
+  grid-column: span 5;
+}
+
+.rstk-nav-section_span-6 {
+  grid-column: span 6;
+}
+
+/* The `Small` form factor's stand-down: today's shipped behaviour, before
+   any of this spec's mechanism existed, restored on that one form factor.
+   `rstk-nav-sections_small` is bound alongside `rstk-nav-sections` on the
+   very same canvas element (see `sectionsCanvasClass` in
+   salesforceNavigator.js), rather than being a separate element or a
+   replacement class, so this block only has to override what the six-track
+   rule above set rather than restate the whole grid.
+
+   No `@media` query decides this, here or anywhere in this component's
+   CSS. FORM_FACTOR is a device class the platform reports once; unlike a
+   width-keyed breakpoint it cannot be changed by resizing or zooming a
+   desktop window, which is the one property this stand-down cannot afford
+   to get backwards (see the design's "Form factor, not viewport width" and
+   the trap on the same page).
+
+   `minmax(0, 1fr)` has no floor, so nothing here can ever overflow the
+   container horizontally.
+
+   **The canvas is also put back to not being a scroll container at all on
+   this form factor**, with `overflow: visible` below. `overflow-x: auto`
+   on `.rstk-nav-sections` above is what the six-track mechanism needs to
+   scroll at its floor, and it has a side effect this stand-down must not
+   inherit: it forces the computed `overflow-y` to `auto` too (see the trap
+   on this), which makes the canvas a clipping context for every
+   `position: absolute` dropdown inside it. The pre-spec canvas — the
+   `display: flex; flex-direction: column` layout O8 calls "the behaviour
+   that ships today" — was never a scroll or clipping container, so
+   restoring that here is part of the stand-down rather than a new
+   property this form factor did not have before. `minmax(0, 1fr)` already
+   means there is nothing to scroll horizontally; `overflow: visible`
+   is what makes that true structurally rather than only in practice.
+
+   Every section still carries its ordinary `.rstk-nav-section_span-N`
+   class from the same `spanClass` `resolveLayout` always computes -- that
+   computation does not change here, on this form factor or any other. Left
+   alone, a span greater than 1 against a single explicit column would ask
+   the grid to generate implicit tracks to hold it (sized by
+   `grid-auto-columns`, not this `1fr` track), which would break the single
+   full-width row this stand-down exists to produce -- so every span rule is
+   overridden back down to `span 1` here. The six rules below win on
+   specificity over the six above (two classes each, against one), so this
+   holds regardless of which block a later edit places first in the file.
+
+   **The single-track override above is written as
+   `.rstk-nav-sections.rstk-nav-sections_small` rather than
+   `.rstk-nav-sections_small` alone, for the same reason.** Written as a
+   lone class it is (0,1,0) — the same specificity as `.rstk-nav-sections`'s
+   own six-track rule above — and wins only because it happens to sit later
+   in this file; move either block and the six-track template silently
+   comes back on `Small`. The compound selector is (0,2,0), so it beats the
+   six-track rule irrespective of source order. Both classes always land on
+   the same element (see `sectionsCanvasClass`), so writing it this way
+   costs nothing. */
+.rstk-nav-sections.rstk-nav-sections_small {
+  grid-template-columns: minmax(0, 1fr);
+  overflow: visible;
+}
+
+.rstk-nav-sections_small > .rstk-nav-section_span-1,
+.rstk-nav-sections_small > .rstk-nav-section_span-2,
+.rstk-nav-sections_small > .rstk-nav-section_span-3,
+.rstk-nav-sections_small > .rstk-nav-section_span-4,
+.rstk-nav-sections_small > .rstk-nav-section_span-5,
+.rstk-nav-sections_small > .rstk-nav-section_span-6 {
+  grid-column: span 1;
 }
 
 /* The layout menu's three dialogs. A row, so the commit and the cancel sit
