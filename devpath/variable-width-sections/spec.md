@@ -2,7 +2,6 @@
 type: feature
 upstream: []
 intent_accepted: true
-design_approved: true
 ---
 
 # Section width follows its field-column count, and sections sit side by side
@@ -57,41 +56,42 @@ Items stay on one line. A label too long for its column is truncated with an ell
 
 ## Current state
 
-- O1 — **There is no fixed maximum width to replace.** `grep -rn "max-width\|maxWidth"` across
-  `force-app` returns nothing. The uniformity is structural: `.rstk-nav-section` carries no width rule
-  at all (`navigatorSection.css:3-11`) and sits as a block-level flex item inside `.rstk-nav-sections`,
-  which is `display: flex; flex-direction: column` with no `align-items` override
-  (`salesforceNavigator.css:11-16`) — so every card defaults to `stretch` and takes 100% of the
-  container whether it holds one column or six. `columns` drives only the _inner_ grid
-  `.rstk-nav-section__grid` (`navigatorSection.css:129-157`), dividing the card's already-full-width
-  interior into `repeat(N, minmax(0, 1fr))`; it never touches the card's own footprint.
-- O10 — The keying concept already exists and is already clamped. Each section carries an integer
+Recorded before any of this spec's code existed, and corrected here where Build proved a claim wrong.
+
+- O1 — **There was no fixed maximum width to replace.** `grep -rn "max-width\|maxWidth"` across
+  `force-app` returned nothing. The uniformity was structural: `.rstk-nav-sections` was
+  `display: flex; flex-direction: column` with no `align-items` override, and **its flex items were the
+  `<c-navigator-section>` hosts** — not `.rstk-nav-section`, the `<article>` inside each host's own
+  shadow root. Every host defaulted to `stretch` and took 100% of the container whether it held one
+  column or six. **The original wording of this note named the `<article>` as the flex item, and the
+  first build inherited the error**, putting the span class inside the shadow root where `grid-column`
+  reaches nothing. The correction is recorded rather than quietly overwritten, because the same mistake
+  is available to any later change — see `## Traps`. `columns` drove only the _inner_ grid
+  `.rstk-nav-section__grid`, dividing the card's already-full-width interior into
+  `repeat(N, minmax(0, 1fr))`; it never touched the card's own footprint.
+- O10 — The keying concept already existed and was already clamped. Each section carries an integer
   `columns`, clamped by `clampColumns()` (`navigatorLayoutModel.js:720-725`) against `MIN_COLUMNS = 1`,
   `MAX_COLUMNS = 6`, `DEFAULT_COLUMNS = 3` (lines 32-34), and independently re-clamped server-side in
-  `NavigatorLayoutController.columnsOf()` (`:36-38`, `:689-692`) — **two hand-synchronised copies of
-  the constant**, the Apex comment stating it matches `clampColumns` key for key. Storage is a JSON
-  integer per section inside `Layout_JSON__c`. `columnChoices` (`navigatorSection.js:251-263`) generates
-  the section menu from those constants. **Nothing anywhere expresses a width**, and no column has a px
-  or rem size — every track is `minmax(0, 1fr)`, an equal share of whatever the card happens to be.
-- O3 — Nothing chose stacking; there is no alternative. `.rstk-nav-sections` is `flex-direction: column`
-  and `salesforceNavigator.html:156` renders one `<c-navigator-section>` per iteration of a flat
-  `for:each={sections}`. **There is no row concept in the data model** — a layout is `{ sections: [...] }`
-  with no row or position-in-row field anywhere. `slds-grid` appears nowhere in the repo.
-- O4 — No scroll container, no overflow handling, and nothing responsive exists. The only `overflow` is
-  `overflow: hidden` with `text-overflow: ellipsis` on the section **title** (`navigatorSection.css:63,65`).
-  No media query, no `ResizeObserver`, no container query, no `slds-size_*` class, and nothing that
-  shrinks or reflows at narrow widths. The element a scroll container goes on has an ancestor this repo
-  does not style: `lightning-card` wraps everything (`salesforceNavigator.html:2`).
-- O7 — No per-row limit of any kind exists. `MAX_COLUMNS` caps columns _inside_ one section; there is no
-  sibling constant capping a row, because sections do not share rows today.
+  `NavigatorLayoutController.columnsOf()` (`:36-38`, `:689-692`) — **two hand-synchronised copies of the
+  constant**. Storage is a JSON integer per section inside `Layout_JSON__c`. **Nothing anywhere
+  expressed a width**, and no column had a px or rem size — every track was `minmax(0, 1fr)`, an equal
+  share of whatever the card happened to be.
+- O3 — Nothing chose stacking; there was no alternative. **There is no row concept in the data model** —
+  a layout is `{ sections: [...] }` with no row or position-in-row field anywhere. `slds-grid` appears
+  nowhere in the repo.
+- O4 — No scroll container, no overflow handling, and nothing responsive. The only `overflow` was
+  `overflow: hidden` with `text-overflow: ellipsis` on the section **title**
+  (`navigatorSection.css:63,65`). No media query, no `ResizeObserver`, no container query, no
+  `slds-size_*` class. The element a scroll container goes on has an ancestor this repo does not style:
+  `lightning-card` wraps everything (`salesforceNavigator.html:2`).
+- O7 — No per-row limit of any kind existed. `MAX_COLUMNS` caps columns _inside_ one section.
 - O8 — Today's behaviour _is_ O8's target state, which is what makes the `Small` branch a stand-down
-  rather than a build: one full-width card per row with `repeat(N, minmax(0, 1fr))` tracks.
-- O11 — **There is no ellipsis on an item anywhere.** `.rstk-nav-item__label` carries only `font-size`,
-  `font-weight` and `color` (`navigatorItem.css:63-67`), and `.rstk-nav-item` itself declares no
-  `overflow` and no `text-overflow` (`:29-43`). It has never needed one, because the card is full width
-  and the tracks are fractional, so a label has always had room. `min-width: 0` is present on
-  `.rstk-nav-item__row .rstk-nav-item` (`:9-12`) — the half of the truncation idiom that stops a flex
-  item refusing to shrink — but the ellipsis half was never added. No item carries a `title` either.
+  rather than a build.
+- O11 — **There was no ellipsis on an item anywhere.** `.rstk-nav-item__label` carried only `font-size`,
+  `font-weight` and `color` (`navigatorItem.css:63-67`), and `.rstk-nav-item` declared no `overflow` and
+  no `text-overflow` (`:29-43`). It had never needed one, because the card was full width and the tracks
+  fractional. `min-width: 0` is present on `.rstk-nav-item__row .rstk-nav-item` (`:9-12`) — the half of
+  the truncation idiom that stops a flex item refusing to shrink. No item carries a `title`.
 
 **The item's own chrome is the dominant cost per column, and it was missed until Slice read the code.**
 An item is a `.rstk-nav-item__row` (`display: flex`, `gap: 0.25rem`) holding the anchor and an
@@ -108,6 +108,21 @@ between sections `1rem` (`salesforceNavigator.css:14`); canvas padding `1rem` al
 (`navigatorSection.css:131`). Sections carry no border under SLDS 2 — chrome is padding plus a
 `box-shadow`, which adds nothing to layout width.
 
+**The whole `--slds-g-sizing-*` scale, read from
+`node_modules/@salesforce-ux/sds-metadata/current/SLDSStylingHooks.csv`.** Every value carries the 🔒
+that means it is confirmed and cannot change, and `slds` and `cosmos` agree on all of them:
+
+| Hook                 | rem   | px    |
+| -------------------- | ----- | ----- |
+| `--slds-g-sizing-13` | 10rem | 160px |
+| `--slds-g-sizing-14` | 15rem | 240px |
+| `--slds-g-sizing-15` | 20rem | 320px |
+| `--slds-g-sizing-16` | 30rem | 480px |
+
+`-16` is the top of the scale, and the CSV scopes the family to `width, height`. **Nothing on the scale
+sits between 20rem and 30rem** — the fact `### The floor and the ceiling` turns on, and the fact an
+earlier pass missed by stopping its search at `-14`.
+
 **Two facts from the merged predecessor that constrain the mechanism**
 (`dev-path/personal-navigator-layouts`, merged as PR #1):
 
@@ -119,32 +134,43 @@ between sections `1rem` (`salesforceNavigator.css:14`); canvas padding `1rem` al
   as text and pin it — `navigatorSection.test.js:208-229` regexes `.cols-1`…`.cols-6` and asserts
   `repeat(N, minmax(0, 1fr))` verbatim.
 
-**Where the horizontal budget comes from is not in this repo.** No Flexipage or app metadata references
-`salesforceNavigator`, so the width available is org- and placement-dependent — tab page, App page
-region, or Home page column. `lightning-card`'s own padding is platform CSS absent from this repo. Both
-are measurable only in a live org, and O4's scroll bar is what keeps them from blocking the design.
+**Where the horizontal budget comes from is not in this repo, and is now partly measured.** No Flexipage
+or app metadata references `salesforceNavigator`, so the width available is org- and placement-dependent
+— tab page, App page region, or Home page column. Build measured a track at **255.66px at viewport
+1680** against this design's predicted 263px; the ~7px gap is `lightning-card`'s own platform padding,
+which remains unmeasured directly. O4's scroll bar is what keeps both from blocking the design.
 
 **The in-flight neighbour does not collide.** `navigator-test-system-mode` carries an approved design and
 is unmerged. Its diff is `NavigatorLayoutControllerTest.cls`, two `.claude/rules/` files,
-`.prettierignore` and a research doc — no LWC and no CSS. Its intent is an Apex access-mode fix,
-unrelated to sizing, and nothing here builds on it.
+`.prettierignore` and a research doc — no LWC and no CSS.
 
 ## Design
 
-Decided in conversation with the engineer on 2026-08-28, across four rounds of sixteen questions. Two
-sizing models were designed, measured and rejected before this one; the rejections are recorded below
-because each was rejected for a reason that still binds.
+Decided in conversation with the engineer on 2026-08-28, across four rounds of sixteen questions, and
+revised on the same day in a second conversation of five questions opened by what Build found. Two sizing
+models were designed, measured and rejected before this one; the rejections are recorded below because
+each was rejected for a reason that still binds.
+
+**What the second conversation changed, and nothing else did:** the ceiling moved from a raw `26rem` to
+`--slds-g-sizing-16`; item truncation moved from hand-written CSS to `slds-truncate`; the dropdown
+hazard inside the scroll container was weighed and the scroll container kept; and two deviations from
+the repo's LWC rules that were being taken silently are now written down. **No Outcome changed and no
+Outcome ID was retired.**
 
 ### The mechanism, entire
 
 The canvas becomes a grid of exactly six tracks. A section spans as many tracks as it has field columns.
 
 ```css
+/* salesforceNavigator.css — the grid's own stylesheet */
 .rstk-nav-sections {
   display: grid;
   grid-template-columns: repeat(
     6,
-    minmax(var(--rstk-nav-col-min, 10rem), var(--rstk-nav-col-max, 26rem))
+    minmax(
+      var(--rstk-nav-col-min, var(--slds-g-sizing-13, 10rem)),
+      var(--rstk-nav-col-max, var(--slds-g-sizing-16, 30rem))
+    )
   );
   grid-auto-flow: row;
   justify-content: start;
@@ -156,6 +182,13 @@ The canvas becomes a grid of exactly six tracks. A section spans as many tracks 
   grid-column: span 1;
 } /* … through span-6 */
 ```
+
+**The span class goes on the `<c-navigator-section>` host, bound in `salesforceNavigator.html`, and the
+span rules live in `salesforceNavigator.css`.** `.rstk-nav-sections`'s actual children are those hosts;
+a `grid-column` rule written against the `<article>` inside a host's own shadow root reaches nothing.
+The first build put it there and the mechanism was inert — see `## Current state`'s O1 note and
+`## Traps`. `spanClass` is still computed once, in `navigatorLayoutModel.js`'s `resolveLayout`, so the
+clamp and the class have one definition between them.
 
 That is the whole of it, and it settles five things at once:
 
@@ -186,19 +219,92 @@ That is the whole of it, and it settles five things at once:
 | Ultra 2560   | 409px · **40 of 40**                       | 376px · **40 of 40**           |
 
 Characters are of `Receivable Transaction Scheduled Payment`, the longest tab name in the org, measured
-against the real 14px font with the real 66px of item chrome subtracted.
+against the real 14px font with the real 66px of item chrome subtracted. **The ceiling binds at none of
+these rows** — see below. One row is checked against a real org: Build measured 255.66px at 1680 against
+the 263px predicted here, the difference being `lightning-card`'s own padding.
 
 ### The floor and the ceiling
 
 ```
---rstk-nav-col-min: 10rem   /* 160px */
---rstk-nav-col-max: 26rem   /* 416px */
+--slds-g-sizing-13   10rem / 160px   the floor
+--slds-g-sizing-16   30rem / 480px   the ceiling
 ```
 
-**The floor is what produces the scroll bar**, and it is set so a column at its narrowest still shows
-about twelve characters. **The ceiling has two jobs**: it is measured as the width at which the longest
-name in the org fits whole, and it stops a lone one-column section becoming a 1,376px-wide nav link on a
-1440px monitor — which is what an unbounded track does when only one section shares the row.
+**Both are styling hooks, and that is a rule rather than a preference.** `rstk-slds2-ux-standards.md`
+reaches every `**/lwc/**/*.css` file this spec touches and says never to hardcode sizing;
+`--slds-g-sizing-*` is the named scale for dimension-bearing properties. Each is nested inside its own
+`--rstk-nav-col-*` override seam and each hook carries the fallback the linter demands, so overriding the
+project property still bypasses the hook entirely, exactly as it always could.
+
+**The floor is what produces the scroll bar**, and at 160px a column at its narrowest still shows about
+twelve characters.
+
+**The ceiling caps track growth on a very wide display, and that is now its only job.** An earlier
+draft claimed it also stopped a lone one-column section becoming a 1,376px-wide nav link. **That cannot
+happen under this mechanism** — six tracks always exist, so a lone one-column section occupies exactly
+one of them and is the same width as any other one-column section. The claim was a leftover from the
+rejected fixed-width model and is retracted here rather than carried.
+
+**Why `-16` and not the raw `26rem` an earlier pass settled on.** 26rem/416px was measured as the width
+at which the longest name in the org fits whole — 350px of label after the 66px of chrome, against the
+343px the name needs. It is therefore _exactly at_ the fitting threshold, with 7px of margin and no room
+for a longer tab name or a different font. It is also a hardcoded sizing value that the linter cannot
+catch, because no hook maps to it and so `no-hardcoded-values-slds2` never fires — the rule doc's own
+"the linter is the backstop, not the design step" case. The pass that settled on it stopped its hook
+search at `--slds-g-sizing-14` and concluded nothing matched; the scale in fact continues to `-15`
+(20rem) and `-16` (30rem). `-15` leaves 254px of label, about **30 of 40** characters, and fails the
+ceiling's one job. `-16` leaves 414px and fits the name whole with 71px to spare.
+
+**What moving the ceiling changes, and it is nearly nothing.** The ceiling binds only once six tracks
+plus five 1rem gaps plus 2rem of canvas padding exceed the space available: **2,608px at 416px per
+track, 2,992px at 480px.** Below roughly 2,600px of available width the two are indistinguishable, which
+is every row of the table above. Above it, tracks reach 480px instead of stopping at 416px. The floor,
+and so the 1,072px scroll threshold, is untouched.
+
+### The dropdown inside the scroll container
+
+`overflow-x: auto` forces the computed `overflow-y` to `auto` — `auto`/`visible` is not a valid pairing —
+so the canvas is a scroll container, and a scroll container is a clipping context for every
+`position: absolute` SLDS dropdown inside it: the section menu (`navigatorSection.html`) and each item's
+menu (`navigatorItem.html`). **The scroll container stays. The hazard is accepted, and here is the whole
+of the reasoning, because it was not weighed the first time.**
+
+**There is no _how_ left to find.** `menu-alignment` is the only attribute `lightning-button-menu`
+exposes that governs dropdown position, and `auto` — already set on both menus — is the platform's own
+documented answer for exactly this case: _"If you're using `lightning-button-menu` in a container that
+specifies the `overflow:hidden` CSS property, setting `menu-alignment="auto"` makes sure that the
+dropdown menu isn't hidden from view when the menu is toggled."_ No attribute exists for z-index, an
+overlay container, or portal rendering. On the CSS side, `overflow-y: clip` escapes the coercion to
+`auto` but still clips descendants; `visible` is the one value that would let a dropdown out, and it is
+the one value that cannot be paired with a scrolling `overflow-x`. **No overflow value scrolls one axis
+without clipping descendants on the other.**
+
+**Measured, the hazard is real and latent.** In `sfnav-t2`: a 350px dropdown against a 540px scroller
+fits, and a bottom-row item menu auto-flipped upward without clipping. The residual case is a layout
+short enough that neither direction has room — a single row of narrow sections, which is also the case
+carrying the most "Move to…" entries per item menu.
+
+**`overflow-y: auto` is load-bearing over `hidden` here.** An overflowing dropdown grows the container's
+scroll height, so it stays reachable by scrolling rather than being cut away. `hidden` would be strictly
+worse.
+
+**The two routes not taken, and why each is worse than the hazard.**
+
+1. **Drop the scroll container** — delete `overflow-x: auto` and let the grid overflow `lightning-card`,
+   so no new clipping context exists and the problem dissolves. It breaks no rule. It fails on a
+   property: O4 asks that the layout scroll _and_ the sections not be clipped, and owning the scroll
+   container is the only way that holds on a tab page, a Home-page column and an App-page region alike.
+   This route makes the behaviour depend on an ancestor this repo neither owns nor can see — the one
+   unknown `### Known unverified` already names as unresolvable from here.
+2. **Replace both menus with our own popover** rendered outside the scroller. Certain, and against two
+   rules that reach these files: `rstk-lwc-standards.md`'s _"Prefer `lightning-*` base components over
+   custom implementations"_, and `rstk-complexity-guard.md`'s Infrastructure Overreach test, which reads
+   a hand-built overlay-portaled menu replacing a platform component as a fix landing at the wrong
+   layer. It would also mean rebuilding `lightning-button-menu`'s keyboard and screen-reader behaviour
+   by hand, in two components, for a hazard nothing has yet hit.
+
+**What ships instead: the hazard is recorded in `## Traps` and named as a live-org check.** It is not
+dispositioned as fixed and it is not pretended away.
 
 ### Packing is the browser's, not ours
 
@@ -209,7 +315,7 @@ JavaScript and then rendering it would duplicate the browser.
 **Four consequences, all deliberate:**
 
 - **A row can end under-full.** Sections `[4, 3, 3]` place as `[4]` then `[3, 3]`: two tracks go unused
-  because the next section needs three.
+  because the next section needs three. Confirmed in a real org, exactly.
 - **A new row never starts while the next section would still fit.** This is what removes voluntary
   stacking — two one-column sections will always pair up, with no way to ask for them stacked. A stored
   `newRow` flag was designed and **declined by the engineer**, who accepted the loss rather than pay a
@@ -221,6 +327,11 @@ JavaScript and then rendering it would duplicate the browser.
 and a section's span comes from its stored column count, so row membership is viewport-independent by
 construction. Tracks shrink to the floor and then the container scrolls. This is why `flex-wrap` was
 never an option: it re-groups at the container width, which is the reflow O4 forbids.
+
+**The section reorder keys stay ±1 through the flat stored order**, which is what packs into the rows.
+The assistive text says "move this section earlier or later" rather than naming a direction, because a
+direction would imply a two-dimensional move this key does not make. The item axis carries the identical
+mismatch and its own wording already avoids the same claim.
 
 ### Form factor, not viewport width
 
@@ -243,9 +354,21 @@ it is unusable identically today. This spec commits to not making mobile worse.
 
 ### Item truncation
 
-`.rstk-nav-item` gains `overflow: hidden`, `.rstk-nav-item__label` gains
-`white-space: nowrap; overflow: hidden; text-overflow: ellipsis`, and the anchor gains a `title`. The
-`min-width: 0` the idiom also needs is **already present** on `.rstk-nav-item__row .rstk-nav-item`.
+`.rstk-nav-item__label` carries **`class="slds-truncate"`**, `.rstk-nav-item` gains `overflow: hidden`,
+and the anchor gains a `title`. The `min-width: 0` the idiom also needs is **already present** on
+`.rstk-nav-item__row .rstk-nav-item`.
+
+**The utility class rather than hand-written CSS, because that is the rule.** `rstk-lwc-standards.md`
+says _"Use SLDS utility classes for layout and spacing — don't write custom CSS for standard patterns"_,
+and truncation-with-ellipsis is the canonical standard pattern. `slds-truncate` is a recognised SLDS 2
+class in this repo's own `node_modules/@salesforce-ux/sds-metadata/next/sldsClasses.json`, and SLDS
+utilities demonstrably reach inside these shadow roots — `slds-assistive-text` and `slds-p-around_medium`
+are both already in use in these templates. `overflow: hidden` on `.rstk-nav-item` stays hand-written;
+that one is not a utility-class pattern.
+
+**One check the build owes rather than assumes:** `slds-truncate` brings more than the three declarations
+an earlier draft of this section spelled out by hand. Read what the class actually resolves to in the org
+and check it against the flex row before treating it as a drop-in alias.
 
 **This is new work, not a tidy-up.** Nothing in the component truncates an item today, because nothing
 has ever bounded a column. Without it a long label overflows its pill.
@@ -253,6 +376,28 @@ has ever bounded a column. Without it a long label overflows its pill.
 **Wrapped labels were designed, built into the sketch, measured, and rejected by the engineer** — see
 `## Evidence`. The measurements that argued for them are in git; the reason they lost is that a wrapped
 pill reads as awkward spacing and collides with the pill's own border.
+
+### Where this deviates from the repo's LWC rules, deliberately
+
+Both of these were being taken silently. Critique reads these rules, so they are written down.
+
+- **`rstk-lwc-standards.md` says "Use `lightning-card`, `lightning-layout`, `lightning-layout-item` for
+  structure" and "don't write custom CSS for standard patterns". The six-track canvas is hand-rolled CSS
+  Grid instead.** `lightning-layout` is flexbox with `slds-size_*` fractional sizing and `flex-wrap`,
+  and `flex-wrap` re-groups at the container width — the exact reflow O4 forbids. It also cannot express
+  `minmax(floor, ceiling)` tracks that are uniform across rows, which is O10's whole property. No SLDS
+  structural component expresses this layout; the deviation is what the Outcomes require.
+- **The same rule's SLDS-utility line would point at the responsive `slds-*-size_*` family for the
+  `Small` stand-down. Form factor is used instead.** Those classes are width-keyed breakpoints, and a
+  width-keyed breakpoint cannot tell a phone from a zoomed-in desktop — the distinction O4 and O8 turn
+  on.
+
+The rules this spec does **not** deviate from, checked rather than assumed: every value is a
+`var(--slds-g-*, fallback)` on the `--slds-g-*` global scale; the project's own custom properties carry a
+`--rstk-` prefix, not `--slds`/`--sds`; no `--slds-c-*`, `--slds-s-*`, `--lwc-*` or `--sds-*` is
+authored; no `prefers-color-scheme` query and no colour-mode branch in JS; focus is indicated with
+`--slds-g-shadow-outline-focus-1` rather than a hand-rolled outline. `rstk-testing.md` does not reach
+this spec at all — its globs are `**/*.cls` and `**/*.trigger`.
 
 ### The consequence I could not remove
 
@@ -262,22 +407,31 @@ item pills in a one-column section about **189px** and those in a six-column sec
 _sections_ align across rows, as O10 requires; the _pills inside them_ do not quite.
 
 CSS `subgrid` would align them exactly, but only if the section drops its horizontal padding, which is a
-visible change to shipped styling. **Look at it in a real org before trading the padding for it.**
+visible change to shipped styling. **Left as it is**, at the engineer's decision: nothing in the live-org
+measurement pass reported the misalignment as reading wrong, and giving up a section's horizontal padding
+is a larger visual change than the ~33px it buys. It stays in `### Known unverified` so it is cheap to
+revisit.
 
 ### Test entry points
 
 **`c-navigator-section`'s span class.** The component exposes a `span-N` class derived from its clamped
 column count, driven through the real column menu exactly as the existing `cols-N` test drives it. That
-is the one callable, refactor-surviving seam this design has.
+is the one callable, refactor-surviving seam this design has. The class is asserted on
+`.rstk-nav-sections`'s **direct child**, which is where it has to land to do anything, and the assertion
+is a filter-and-compare over the whole `span-1`…`span-6` family at every column count — not a `toContain`
+— so a second member of the family landing on one host goes red.
 
 Four facts live only in CSS and go through the repo's existing stylesheet-text pattern — the six-track
-template, the floor and ceiling, `overflow-x: auto`, and the `Small` single-track override — because
-jsdom applies no stylesheet and `getBoundingClientRect()` returns zeros.
+template driven off `MAX_COLUMNS` rather than a hard-coded six, the floor and ceiling hooks,
+`overflow-x: auto`, and the `Small` single-track override — because jsdom applies no stylesheet and
+`getBoundingClientRect()` returns zeros.
 
 **And the honest limit, stated because the alternative is a test that cannot fail: row packing itself is
 verified in a real org, not in jest.** The browser does the placing, so a jest assertion could only
 re-state the algorithm rather than observe it. A `packRows` written purely to be tested was offered and
 declined: it would not drive the rendering, and could silently diverge from what the grid actually does.
+`rstk-testing.md` is Apex-scoped and imposes nothing here, so this limit is the design's own and is
+carried in the open.
 
 ### The altitude stop, raised and dissolved
 
@@ -294,8 +448,7 @@ seven characters optimistic, then caught the item chrome being 66px rather than 
 proportional model checkable before any code existed.
 
 **Deliberately not a Lightning facsimile.** Density and native feel are answerable only in the real
-runtime; a facsimile collects feedback on its own inaccuracies. Density confirmation is a live-org check
-at Build.
+runtime; a facsimile collects feedback on its own inaccuracies. Density confirmation is a live-org check.
 
 ### Rejected sizing models, and why each still binds
 
@@ -309,16 +462,19 @@ at Build.
 
 ### Known unverified
 
-- **`lightning-card`'s own padding is unmeasured** — platform CSS, absent from this repo. Every viewport
-  figure above excludes it, so real available width is slightly less than stated and the 1,072px scroll
-  threshold is slightly higher in practice.
+- **Whether a dropdown ever clips in practice.** Measured latent, not absent — see
+  `### The dropdown inside the scroll container`. The case to look for is a single row of narrow sections
+  with a long "Move to…" list.
+- **`lightning-card`'s own padding is still unmeasured directly**, though now bounded: a track measured
+  255.66px at 1680 against 263px predicted, so the card costs roughly 7px per track and the 1,072px
+  scroll threshold is marginally higher in practice.
 - **Where the component is placed at runtime is org-dependent.** O4's scroll bar is what makes this
-  non-blocking.
-- **Whether the pill mismatch reads as wrong**, and so whether `subgrid` is worth its cost, needs eyes on
-  a real org.
+  non-blocking, and it is the reason the scroll container is owned here rather than left to an ancestor.
+- **Whether the pill mismatch reads as wrong**, and so whether `subgrid` is ever worth its cost.
 - **Whether a `title` on the anchor duplicates its `aria-label` audibly.** The anchor already carries
   `aria-label={label}`; adding `title` may cause some screen readers to announce the name twice. See
   `## Traps`.
+- **What `slds-truncate` actually resolves to** in the org, against the flex row it lands in.
 
 ### Retired Outcome IDs
 
@@ -327,31 +483,50 @@ O6 declared a fixed set of six widths and O10 derives width from available space
 O9 required wrapped labels and O11 requires the opposite. **O1, O3, O4, O7 and O8 keep their IDs**: O1's
 premise was corrected in mechanism without changing what it asserts, O3's condition was made precise,
 O4's rule is unchanged with its referent updated from O6 to O10's floor, and O7 and O8 are as approved.
-No ID is reused; O2 was retired at Initiate.
+No ID is reused; O2 was retired at Initiate. **The second design conversation retired no ID and changed
+no Outcome text.**
 
 ## Traps
 
-- **`overflow-x: auto` forces `overflow-y` to `auto`.** `overflow-x: auto; overflow-y: visible` is not a
-  valid combination — the computed value becomes `auto`. The section cards' `box-shadow` will clip
-  vertically inside the scroll container unless the container carries padding, which it does.
-- **`justify-content: start` is load-bearing.** Without it, tracks that have hit the 26rem ceiling leave
-  free space the grid distributes rather than leaving at the end, and the layout drifts away from the
-  left edge on a wide monitor.
+- **`overflow-x: auto` forces `overflow-y` to `auto`, and that makes the canvas a clipping context for
+  every dropdown inside it.** `overflow-x: auto; overflow-y: visible` is not a valid combination — the
+  computed value becomes `auto`. Two consequences, and an earlier draft of this trap weighed only the
+  first. (1) The section cards' `box-shadow` clips vertically inside the scroll container unless the
+  container carries padding, which it does. (2) **Every `lightning-button-menu` in the layout is inside
+  that container** — the section menu and each item's menu — and an SLDS dropdown is `position: absolute`
+  inside a `position: relative` trigger, so one that cannot fit either direction is cut at the canvas
+  edge rather than overlaying it. This is accepted, not fixed; the reasoning, the platform attributes
+  checked, and the two routes not taken are in `### The dropdown inside the scroll container`. The layout
+  menu in the card's `slot="actions"` is outside the canvas and is unaffected.
+- **`overflow-y: clip` is not an escape from the above.** It avoids the coercion to `auto`, but it still
+  clips descendants; it only forgoes the scrollbar and script-driven scrolling. `visible` is the one
+  value that would let a dropdown out and the one value that cannot pair with a scrolling `overflow-x`.
+  Do not reopen this without a new fact.
+- **`justify-content: start` is load-bearing.** Without it, tracks that have hit the ceiling leave free
+  space the grid distributes rather than leaving at the end, and the layout drifts away from the left
+  edge on a wide monitor.
 - **`title` plus `aria-label` on the same anchor may double-announce.** The anchor already carries
   `aria-label={label}`. Verify against a screen reader before assuming `title` is free; the fallback is
   `title` on the label `<span>` rather than the anchor.
 - **`MAX_COLUMNS` exists twice**, `navigatorLayoutModel.js:32-34` and
-  `NavigatorLayoutController.cls:36-38`, kept in lockstep by hand. The six tracks in CSS are now a
-  **third** copy of that six and cannot import the constant. If the maximum ever moves, all three move.
+  `NavigatorLayoutController.cls:36-38`, kept in lockstep by hand. The six tracks in CSS are a **third**
+  copy of that six and cannot import the constant. The stylesheet pin in `salesforceNavigator.test.js`
+  drives its `repeat(N, …)` off the imported `MAX_COLUMNS` so the CSS copy cannot drift silently — the
+  Apex copy still can. If the maximum ever moves, all three move.
+- **A raw length in a sizing property is invisible to the linter when no hook matches it.**
+  `no-hardcoded-values-slds2` fires on values that map to a hook; `26rem` mapped to none and so passed
+  `npm run lint --max-warnings 0` in silence for three fix cycles. The hook scale runs `-13` 10rem, `-14`
+  15rem, `-15` 20rem, `-16` 30rem and stops — **search the whole scale, not up to the first miss.** The
+  pass that cleared `26rem` stopped at `-14`.
 - **The existing `cols-N` grid rules and their test are untouched by design.** `.rstk-nav-section__grid`
   keeps `repeat(N, minmax(0, 1fr))`, so `navigatorSection.test.js:208-229` stays green. A change there is
   a signal something drifted.
 - **A sizing class that lands inside a child component's shadow root is inert.** The canvas grid is a
   `<div>` in `salesforceNavigator`'s template and the elements it places are the `<c-navigator-section>`
   hosts, so a rule carrying `grid-column` reaches nothing if it is written against an element in
-  `navigatorSection`'s own shadow tree. A test here must be able to fail on the span class being absent
-  from `.rstk-nav-sections`'s direct children — that is assertable in jsdom, where a class-name check on
-  the inner `<article>` and a stylesheet-text pin both stay green regardless.
+  `navigatorSection`'s own shadow tree. This is not hypothetical — the first build did exactly that, and
+  a class-name check on the inner `<article>` plus a stylesheet-text pin both stayed green on it. A test
+  here must be able to fail on the span class being absent from `.rstk-nav-sections`'s direct children.
 - **A mutually-exclusive class family needs a uniqueness assertion, not only a `toContain`.** One host
   carrying two of `rstk-nav-section_span-1` … `-6` renders at whichever the stylesheet orders last, and
   every `toContain` check on that family stays green on it. A test here must be able to fail on two
@@ -362,9 +537,11 @@ No ID is reused; O2 was retired at Initiate.
   filter-and-compare fixed at a single value of the parameter is green on a duplicate emitted only at
   the _other_ values — and since an override that has to beat a stored value is conditional by nature,
   the conditional case is the likely shape rather than the contrived one. The guard belongs inside the
-  `it.each` that already walks the family, not in a single-case test beside it. The mutation a test
-  here must be able to fail on is a second member of the family appended for every parameter value
-  except the one the guard happens to assert.
+  `it.each` that already walks the family, not in a single-case test beside it. One honest bound on what
+  such a guard can catch: an _exact duplicate_ of the same class token is inert to both the framework's
+  class rendering and to CSS matching, so no DOM-level guard observes it — because it is not a rendering
+  hazard. Two _different_ members on one host is the shape that matters, and that is caught at every
+  count where it can occur.
 
 ## Evidence
 
