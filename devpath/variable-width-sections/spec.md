@@ -2,6 +2,7 @@
 type: feature
 upstream: []
 intent_accepted: true
+design_approved: true
 ---
 
 # Section width follows its field-column count, and sections sit side by side
