@@ -352,6 +352,12 @@ No ID is reused; O2 was retired at Initiate.
   `navigatorSection`'s own shadow tree. A test here must be able to fail on the span class being absent
   from `.rstk-nav-sections`'s direct children — that is assertable in jsdom, where a class-name check on
   the inner `<article>` and a stylesheet-text pin both stay green regardless.
+- **A mutually-exclusive class family needs a uniqueness assertion, not only a `toContain`.** One host
+  carrying two of `rstk-nav-section_span-1` … `-6` renders at whichever the stylesheet orders last, and
+  every `toContain` check on that family stays green on it. A test here must be able to fail on two
+  members of the family being applied to the same element — the filter-and-compare beside the `cols-N`
+  class assertion is the shape that can, and the hazard arrives wherever a second rule has to override
+  a section's stored span rather than replace the class that carries it.
 
 ## Evidence
 
