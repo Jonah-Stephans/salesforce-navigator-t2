@@ -40,6 +40,46 @@
   outline-offset: var(--slds-g-spacing-1, 0.25rem);
 }
 
+/* The section card's footprint in the canvas's six-track CSS Grid, defined by
+   `.rstk-nav-sections` in salesforceNavigator.css. A section spans as many of
+   the canvas's six tracks as it holds field columns — this is the whole of
+   what makes a one-column section narrow, a six-column section the full row,
+   and lets several narrow sections sit side by side. `grid-auto-flow: row`
+   on the canvas is what packs them: a section that does not fit the tracks
+   left in a row moves to the next one, so there is no packing logic here or
+   in any script.
+
+   Six rules, not a computed span, for the same reason `cols-N` further down
+   this file is six classes rather than one: an inline `style="grid-column:
+   span N"` would be an inline `style`, and the SLDS linter validates `width`
+   but not `grid-column` — see the note on `.rstk-nav-section__grid` below.
+   `spanClass` on the resolved section (`navigatorLayoutModel.js`) is what
+   picks one of these six, from the same clamped column count `cols-N` comes
+   from. */
+.rstk-nav-section_span-1 {
+  grid-column: span 1;
+}
+
+.rstk-nav-section_span-2 {
+  grid-column: span 2;
+}
+
+.rstk-nav-section_span-3 {
+  grid-column: span 3;
+}
+
+.rstk-nav-section_span-4 {
+  grid-column: span 4;
+}
+
+.rstk-nav-section_span-5 {
+  grid-column: span 5;
+}
+
+.rstk-nav-section_span-6 {
+  grid-column: span 6;
+}
+
 .rstk-nav-section__header {
   display: flex;
   align-items: center;

@@ -94,6 +94,12 @@ export function resolveLayout(layout, tabs) {
       name: section.name,
       columns,
       columnClass: `rstk-nav-section__grid cols-${columns}`,
+      // The card's own footprint in the canvas's six-track CSS Grid — see
+      // `.rstk-nav-section_span-N` in navigatorSection.css and the six-track
+      // template on `.rstk-nav-sections` in salesforceNavigator.css. Computed
+      // from the same clamped `columns` `columnClass` is, so the two classes
+      // can never disagree about how many field columns a section holds.
+      spanClass: `rstk-nav-section_span-${columns}`,
       items,
       hasItems: items.length > 0
     };

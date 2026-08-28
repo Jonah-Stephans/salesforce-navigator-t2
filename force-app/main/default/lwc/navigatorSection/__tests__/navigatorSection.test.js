@@ -228,6 +228,46 @@ describe("c-navigator-section", () => {
     expect(css).toContain("display: grid");
   });
 
+  it.each([1, 2, 3, 4, 5, 6])(
+    "puts the span-%i class on the card itself, so it spans that many tracks of the canvas grid",
+    (columns) => {
+      const element = createSection(resolvedSection({ columns }));
+
+      const card = element.shadowRoot.querySelector("article");
+      expect(card.className).toContain(`rstk-nav-section_span-${columns}`);
+      // And only that one — a card carrying two span classes would render at
+      // whichever the stylesheet happened to order last, the same hazard the
+      // cols-N assertion above guards against.
+      const applied = card.className
+        .split(/\s+/)
+        .filter((name) => /^rstk-nav-section_span-\d+$/.test(name));
+      expect(applied).toEqual([`rstk-nav-section_span-${columns}`]);
+    }
+  );
+
+  it("defines a real grid-column span for every column count the menu offers", () => {
+    // The same limit the cols-N stylesheet test above names: jsdom applies no
+    // stylesheet, so the class-name assertion above cannot prove the class
+    // means anything. This reads the stylesheet that ships and pins that each
+    // of the six spans that many tracks of the canvas grid defined in
+    // salesforceNavigator.css. Whether two sections' spans actually land in
+    // the same row is the browser's own grid auto-placement and is not
+    // asserted here — see the design's own note on why that is verified in a
+    // real org rather than in jest.
+    const css = readFileSync(
+      join(__dirname, "..", "navigatorSection.css"),
+      "utf8"
+    );
+
+    for (let columns = MIN_COLUMNS; columns <= MAX_COLUMNS; columns += 1) {
+      expect(css).toMatch(
+        new RegExp(
+          `\\.rstk-nav-section_span-${columns}\\s*\\{[^}]*grid-column:\\s*span\\s*${columns}`
+        )
+      );
+    }
+  });
+
   it("offers exactly one column choice per supported count, and no others", () => {
     const element = createSection();
 

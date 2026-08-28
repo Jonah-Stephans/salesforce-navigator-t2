@@ -168,7 +168,7 @@ export default class NavigatorSection extends LightningElement {
   }
 
   get cardClass() {
-    const classes = ["rstk-nav-section"];
+    const classes = ["rstk-nav-section", this.spanClass];
     if (this.grabbed) {
       classes.push("rstk-nav-section_grabbed");
     }
@@ -176,6 +176,22 @@ export default class NavigatorSection extends LightningElement {
       classes.push("rstk-nav-section_droptarget");
     }
     return classes.join(" ");
+  }
+
+  /**
+   * `span-N`, computed by the model rather than assembled here so that the
+   * clamp and the class have one definition between them — the same reason
+   * `gridClass` below reads `columnClass` off the section instead of
+   * recomputing it. This is the card's own footprint in the canvas's
+   * six-track CSS Grid (`.rstk-nav-sections` in salesforceNavigator.css): a
+   * section spans as many of the six tracks as it holds field columns, which
+   * is what makes a one-column section narrow, a six-column section the full
+   * row, and several narrow sections able to sit side by side.
+   */
+  get spanClass() {
+    return this.section
+      ? this.section.spanClass
+      : `rstk-nav-section_span-${MIN_COLUMNS}`;
   }
 
   /**

@@ -16,6 +16,8 @@ import updateLayout from "@salesforce/apex/NavigatorLayoutController.updateLayou
 import activateLayout from "@salesforce/apex/NavigatorLayoutController.activateLayout";
 import renameLayout from "@salesforce/apex/NavigatorLayoutController.renameLayout";
 import deleteLayout from "@salesforce/apex/NavigatorLayoutController.deleteLayout";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 // The Apex seam. Without these, `@lwc/jest-transformer` substitutes a plain
 // function returning `Promise.resolve()` that records nothing — the same
@@ -732,13 +734,52 @@ describe("c-salesforce-navigator", () => {
         selectSectionMenuItem(element, 0, `columns-${columns}`);
         await flush();
 
-        const grid = querySections(element)[0].shadowRoot.querySelector("ul");
+        const section = querySections(element)[0];
+        const grid = section.shadowRoot.querySelector("ul");
         expect(grid.className).toContain(`cols-${columns}`);
+        // The card's own footprint in the canvas grid follows the same
+        // column count — this is what makes the section's width follow how
+        // many field columns it holds, rather than every card stretching to
+        // the same full width regardless.
+        const card = section.shadowRoot.querySelector("article");
+        expect(card.className).toContain(`rstk-nav-section_span-${columns}`);
 
         await settleAutosave();
         expect(lastSavedLayout(createLayout).sections[0].columns).toBe(columns);
       }
     );
+  });
+
+  describe("the sections canvas — width follows columns, side by side", () => {
+    // Rendered width is not assertable in jest: jsdom applies no stylesheet
+    // and getBoundingClientRect() returns zeros, and row packing is the
+    // browser's own CSS Grid auto-placement rather than arithmetic this
+    // repo owns — the design is explicit that packing is verified in a real
+    // org, not in jest. What jest *can* pin is the stylesheet that ships:
+    // the six-track template with its floor and its ceiling, grid-auto-flow
+    // doing the packing, overflow-x scrolling once the floor binds, and
+    // justify-content keeping the canvas at the left edge once a track hits
+    // its ceiling. This is the repo's existing answer for CSS facts jsdom
+    // cannot observe — see navigatorSection.test.js's own cols-N stylesheet
+    // pin.
+    it("lays the canvas out as a six-track grid bounded by a floor and a ceiling", () => {
+      const css = readFileSync(
+        join(__dirname, "..", "salesforceNavigator.css"),
+        "utf8"
+      );
+
+      const rule = css.match(/\.rstk-nav-sections\s*\{[^}]*\}/);
+      expect(rule).not.toBeNull();
+      const body = rule[0];
+
+      expect(body).toContain("display: grid");
+      expect(body).toMatch(
+        /grid-template-columns:\s*repeat\(\s*6\s*,\s*minmax\(\s*var\(--rstk-nav-col-min,\s*10rem\)\s*,\s*var\(--rstk-nav-col-max,\s*26rem\)\s*\)\s*\)/
+      );
+      expect(body).toContain("grid-auto-flow: row");
+      expect(body).toContain("justify-content: start");
+      expect(body).toContain("overflow-x: auto");
+    });
   });
 
   describe("surviving a reload", () => {

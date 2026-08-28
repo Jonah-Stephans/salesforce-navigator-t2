@@ -6,13 +6,58 @@
   background-color: var(--slds-g-color-error-container-1, #ba0517);
 }
 
-/* Section cards stack with a gap rather than a margin on the card itself, so
-   a section never has to know what sits above or below it. */
+/* The canvas: a CSS Grid of exactly six tracks. A section spans as many of
+   them as it holds field columns (`.rstk-nav-section_span-N` in
+   navigatorSection.css), which is the whole mechanism behind a section's
+   width following its column count instead of stretching full width
+   regardless of how many columns it holds. Cards carry no margin of their
+   own and never have to know what sits beside them — `gap` is the only
+   spacing rule, exactly as it was when this was a column of flex items.
+
+   `grid-auto-flow: row` with a spanning item *is* the packing algorithm:
+   sections are placed in order and one that will not fit the tracks left in
+   a row moves to the next, so there is no row-packing arithmetic in this
+   file, in a script, or anywhere else. Every row draws from the same six
+   tracks, which is what makes a 3-column section the same width in every row
+   it might land in — sizing tracks per row instead would make the same
+   section a different width depending which neighbours happened to share
+   its row.
+
+   The `minmax()` bounds are the floor and the ceiling, and nothing else
+   supplies them: no JavaScript, no ResizeObserver, no media query. 10rem is
+   set so a column at its narrowest still shows about twelve characters;
+   26rem is the width the org's longest tab name needs to fit whole, and it
+   is what stops a lone one-column section stretching into a 1,376px-wide
+   link on a wide monitor. Six tracks at the 10rem floor, five 1rem gaps and
+   1rem of this padding on each side comes to 1,072px; below that the grid
+   overflows and `overflow-x: auto` scrolls it — including when the user
+   zooms in, since zooming shrinks the viewport in CSS pixels until the same
+   floor binds. Tracks stop shrinking rather than clipping, squeezing
+   further, or reflowing, and no section ever changes rows because of it.
+
+   `justify-content: start` is load-bearing: without it, tracks that have hit
+   the 26rem ceiling leave free space the grid would otherwise distribute
+   between them, and the whole canvas drifts away from the left edge on a
+   wide monitor.
+
+   `overflow-x: auto` forces the computed `overflow-y` to `auto` as well —
+   `auto`/`visible` is not a valid pairing — so a section's `box-shadow`
+   would clip against the scroll container's own edge if the container had
+   no padding of its own; it does, below.
+
+   The `Small` form factor stands this down to a single full-width track —
+   see the next slice; nothing here branches on it yet. */
 .rstk-nav-sections {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(
+    6,
+    minmax(var(--rstk-nav-col-min, 10rem), var(--rstk-nav-col-max, 26rem))
+  );
+  grid-auto-flow: row;
+  justify-content: start;
   gap: var(--slds-g-spacing-4, 1rem);
   padding: var(--slds-g-spacing-4, 1rem);
+  overflow-x: auto;
 }
 
 /* The layout menu's three dialogs. A row, so the commit and the cancel sit
