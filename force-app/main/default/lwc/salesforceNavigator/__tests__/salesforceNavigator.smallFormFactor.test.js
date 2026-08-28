@@ -1,6 +1,7 @@
 import { createElement } from "lwc";
 import SalesforceNavigator from "c/salesforceNavigator";
 import { getNavItems } from "lightning/uiAppsApi";
+import { MIN_COLUMNS, MAX_COLUMNS } from "c/navigatorLayoutModel";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
 import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
 import updateLayout from "@salesforce/apex/NavigatorLayoutController.updateLayout";
@@ -89,6 +90,23 @@ function createNavigator() {
 async function flush() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+/**
+ * Drives one section's overflow menu the way a user would — the same helper
+ * salesforceNavigator.test.js uses to walk every column count on the Large
+ * path (see its it.each at :734-770). Needed here for the same reason: the
+ * uniqueness guard below has to see column counts other than the seeded
+ * DEFAULT_COLUMNS of 3 to be able to fail on a second span class landing
+ * anywhere in the family.
+ */
+function selectSectionMenuItem(element, sectionIndex, value) {
+  const section = Array.from(
+    element.shadowRoot.querySelectorAll("c-navigator-section")
+  )[sectionIndex];
+  section.shadowRoot
+    .querySelector("lightning-button-menu")
+    .dispatchEvent(new CustomEvent("select", { detail: { value } }));
 }
 
 describe("c-salesforce-navigator on the Small form factor", () => {
@@ -180,4 +198,43 @@ describe("c-salesforce-navigator on the Small form factor", () => {
       window.innerWidth = originalInnerWidth;
     }
   });
+
+  it.each(
+    Array.from(
+      { length: MAX_COLUMNS - MIN_COLUMNS + 1 },
+      (_, i) => MIN_COLUMNS + i
+    )
+  )(
+    "carries exactly one span class on the stood-down canvas once the user chooses %i columns, not two",
+    async (columns) => {
+      // The uniqueness guard the previous fix pass added above ran at
+      // exactly one member of the rstk-nav-section_span-1…-6 family — the
+      // seeded DEFAULT_COLUMNS of 3 — because nothing in this file drove the
+      // column menu. `## Traps`' tenth entry names that shape as
+      // insufficient: a filter-and-compare fixed at a single value of the
+      // parameter is green on a duplicate emitted only at the *other*
+      // values, and the conditional case (an override that has to beat a
+      // stored span) is the likely shape rather than the contrived one.
+      // Driving every count here, the same shape
+      // salesforceNavigator.test.js:734-770 already runs on the Large path,
+      // closes that gap on the Small path.
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      selectSectionMenuItem(element, 0, `columns-${columns}`);
+      await flush();
+
+      const canvas = element.shadowRoot.querySelector(".rstk-nav-sections");
+      const directChildren = Array.from(canvas.children);
+      expect(directChildren).toHaveLength(1);
+
+      // Same filter-and-compare shape as the test above, run at every
+      // column count rather than only the seeded one.
+      const appliedSpans = directChildren[0].className
+        .split(/\s+/)
+        .filter((name) => /^rstk-nav-section_span-\d+$/.test(name));
+      expect(appliedSpans).toEqual([`rstk-nav-section_span-${columns}`]);
+    }
+  );
 });
