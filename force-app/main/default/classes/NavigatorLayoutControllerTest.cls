@@ -110,6 +110,15 @@ private with sharing class NavigatorLayoutControllerTest {
     );
   }
 
+  // Deliberately WITH SYSTEM_MODE, not WITH USER_MODE (the convention everywhere
+  // else in this codebase): this and the four verification helpers that follow
+  // — sectionNameOf, activeCount, activeName, activeId — read the row's true
+  // state after a write, and the running identity (this project's org default
+  // admin, in a freshly created org) is never granted FLS on
+  // Navigator_Layout__c's custom fields — only the two System.runAs test users
+  // are. Reverting these five to WITH USER_MODE reintroduces "No such column"
+  // against exactly that org shape, which is the shape this project's own CI
+  // deploy gate creates.
   private static List<Navigator_Layout__c> storedLayouts() {
     return [
       SELECT
@@ -121,6 +130,7 @@ private with sharing class NavigatorLayoutControllerTest {
         Schema_Version__c,
         Layout_JSON__c
       FROM Navigator_Layout__c
+      WITH SYSTEM_MODE
       ORDER BY Sort_Order__c NULLS LAST, Name
     ];
   }
@@ -215,6 +225,17 @@ private with sharing class NavigatorLayoutControllerTest {
    * The peer half of the isolation Outcome. The role-hierarchy half is not
    * assertable here — see `## Deviations` on the slice: "Grant Access Using
    * Hierarchies" is not expressible in the Metadata API at all.
+   *
+   * The queries in this method are deliberately bare — no `WITH` clause,
+   * unlike the verification helpers above — because they need none: they name
+   * only `Id` or no field at all, and FLS cannot restrict those on a custom
+   * object. Nor would declaring one void this test. The class is
+   * `private with sharing`, and under `WITH SYSTEM_MODE` record sharing is
+   * still controlled by the class's sharing keyword, so an access mode
+   * suppresses CRUD/FLS only. What this test actually proves is the
+   * `NavigatorLayoutController.getLayouts()` call made inside
+   * `System.runAs(peer)`, which no declaration on a query in this class can
+   * reach.
    */
   @IsTest
   static void peerCannotReadAnotherUsersLayouts() {
@@ -351,9 +372,15 @@ private with sharing class NavigatorLayoutControllerTest {
       'The column count must survive the v1 to v2 upgrade'
     );
 
+    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       1,
-      [SELECT Schema_Version__c FROM Navigator_Layout__c LIMIT 1]
+      [
+        SELECT Schema_Version__c
+        FROM Navigator_Layout__c
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ]
       .Schema_Version__c,
       'Upgrading on read must not write — the stored row stays at v1 until the user next saves'
     );
@@ -864,12 +891,12 @@ private with sharing class NavigatorLayoutControllerTest {
 
     Assert.areEqual(
       1,
-      [SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE],
+      activeCount(),
       'Exactly one of a user\'s layouts may be active'
     );
     Assert.areEqual(
       targetId,
-      [SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1].Id,
+      activeId(),
       'The layout that was activated must be the one left active'
     );
   }
@@ -891,21 +918,25 @@ private with sharing class NavigatorLayoutControllerTest {
     }
     Test.stopTest();
 
+    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       1,
       [
         SELECT COUNT()
         FROM Navigator_Layout__c
         WHERE Is_Active__c = TRUE AND OwnerId = :owner.Id
+        WITH SYSTEM_MODE
       ],
       'One user activating a layout must not clear another user\'s active flag'
     );
+    // WITH SYSTEM_MODE is deliberate here — see the note above storedLayouts().
     Assert.areEqual(
       'Peer second',
       [
         SELECT Name
         FROM Navigator_Layout__c
         WHERE Is_Active__c = TRUE AND OwnerId = :peer.Id
+        WITH SYSTEM_MODE
         LIMIT 1
       ]
       .Name,
@@ -918,6 +949,17 @@ private with sharing class NavigatorLayoutControllerTest {
    * id must not be enough to change their layout — and the refusal must not
    * distinguish "not yours" from "does not exist", or the id becomes an
    * oracle for whether a given layout exists.
+   *
+   * The queries in this method are deliberately bare — no `WITH` clause,
+   * unlike the verification helpers above — because they need none: they name
+   * only `Id` and `Name`, which FLS cannot restrict on a custom object. Nor
+   * would declaring one void this test. The class is `private with sharing`,
+   * and under `WITH SYSTEM_MODE` record sharing is still controlled by the
+   * class's sharing keyword, so an access mode suppresses CRUD/FLS only. What
+   * this test actually proves is the refused
+   * `NavigatorLayoutController.updateLayout()` call made inside
+   * `System.runAs(peer)`, which no declaration on a query in this class can
+   * reach.
    */
   @IsTest
   static void aUserCannotUpdateAnotherUsersLayout() {
@@ -1015,6 +1057,7 @@ private with sharing class NavigatorLayoutControllerTest {
             SELECT Layout_JSON__c
             FROM Navigator_Layout__c
             WHERE Name = :layoutName
+            WITH SYSTEM_MODE
             LIMIT 1
           ]
           .Layout_JSON__c
@@ -1024,7 +1067,12 @@ private with sharing class NavigatorLayoutControllerTest {
   }
 
   private static Integer activeCount() {
-    return [SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE];
+    return [
+      SELECT COUNT()
+      FROM Navigator_Layout__c
+      WHERE Is_Active__c = TRUE
+      WITH SYSTEM_MODE
+    ];
   }
 
   private static String activeName() {
@@ -1032,9 +1080,21 @@ private with sharing class NavigatorLayoutControllerTest {
       SELECT Name
       FROM Navigator_Layout__c
       WHERE Is_Active__c = TRUE
+      WITH SYSTEM_MODE
       LIMIT 1
     ];
     return active.isEmpty() ? null : active[0].Name;
+  }
+
+  private static Id activeId() {
+    List<Navigator_Layout__c> active = [
+      SELECT Id
+      FROM Navigator_Layout__c
+      WHERE Is_Active__c = TRUE
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return active.isEmpty() ? null : active[0].Id;
   }
 
   /**
@@ -1682,12 +1742,12 @@ private with sharing class NavigatorLayoutControllerTest {
 
     Assert.areEqual(
       1,
-      [SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE],
+      activeCount(),
       'Exactly one layout may be active however many the user owns'
     );
     Assert.areEqual(
       targetId,
-      [SELECT Id FROM Navigator_Layout__c WHERE Is_Active__c = TRUE LIMIT 1].Id,
+      activeId(),
       'The activated layout must be the survivor out of 200'
     );
     Assert.isTrue(
