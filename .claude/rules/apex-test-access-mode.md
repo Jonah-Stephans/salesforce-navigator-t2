@@ -8,13 +8,14 @@ paths:
 
 `rstk-security.md` requires `WITH USER_MODE` on all new SOQL, and it is right about production code.
 A test class is where that rule has an exception, because a verification query's job is to read a row's
-true state rather than to enforce the running identity's permissions. Getting this wrong does not fail
-locally — it fails only against an org whose admin holds no permission set, which is the shape a CI
-deploy gate creates.
+true state rather than to enforce the running identity's permissions. Reverting such a query to
+`WITH USER_MODE` to match the surrounding convention silently reintroduces the bug. Getting this wrong
+does not fail locally — it fails only against an org whose admin holds no permission set, which is the
+shape a CI deploy gate creates.
 
-- A test's verification query declares `WITH SYSTEM_MODE`, not the `WITH USER_MODE` the repo requires everywhere else https://github.com/Jonah-Stephans/salesforce-navigator-t2/pull/3
-  It reads a row's true state regardless of which identity runs the test. Reverting one to
-  `WITH USER_MODE` to match the surrounding convention silently reintroduces the bug.
+The production-versus-test split itself, and the platform default change that made it matter, are in
+`salesforce-apex-access-mode.md`. This file carries only what is specific to a test class.
+
 - Field-level security applies to a custom field named anywhere in a query, including in a `WHERE` clause it does not select https://github.com/Jonah-Stephans/salesforce-navigator-t2/pull/3
   `[SELECT COUNT() FROM Navigator_Layout__c WHERE Is_Active__c = TRUE]` throws
   `System.QueryException: No such column` under user mode. "`COUNT()` selects no fields" is true and
@@ -34,7 +35,7 @@ deploy gate creates.
   The standing dev org's admin already holds the permission set, so the whole suite passes there with
   the bug fully present. Name the org and confirm the permission set is absent from it, or the green
   run proves nothing.
-- At `sourceApiVersion` 67.0 and above, Apex SOQL and DML default to user mode rather than system mode https://github.com/Jonah-Stephans/salesforce-navigator-t2/pull/3
-  Salesforce changed this in Summer '26. An undeclared query written before the bump keeps compiling
-  and silently changes meaning, so raising `sourceApiVersion` is a behavioural change to every
-  undeclared query in the package.
+- Raising `sourceApiVersion` to 67.0 or above is a behavioural change to every undeclared query already in the package https://github.com/Jonah-Stephans/salesforce-navigator-t2/pull/3
+  Nothing needs editing for the meaning to change: a query written before the bump keeps compiling and
+  starts enforcing the running user's FLS. The default flip itself is in
+  `salesforce-apex-access-mode.md`.
