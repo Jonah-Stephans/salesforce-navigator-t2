@@ -7,6 +7,7 @@ touches:
   - force-app/main/default/lwc/salesforceNavigator/__tests__/salesforceNavigator.test.js
   - force-app/main/default/lwc/navigatorSection/navigatorSection.css
 done: true
+fix_cycles: 0
 ---
 
 # A section's width follows its field-column count, and sections sit side by side
@@ -69,3 +70,11 @@ left.
   visual pass in a real org is still worth doing and is named in the return.
 
 ## Critique findings
+
+- [ ] the `span-N` class never reaches a grid item, so the width mechanism is inert: `.rstk-nav-sections` (`salesforceNavigator.css:50`) is the grid and its direct children are the `<c-navigator-section>` hosts (`salesforceNavigator.html:157`), but `cardClass` puts `span-N` on an `<article>` inside `navigatorSection`'s shadow root (`navigatorSection.html:6`, `navigatorSection.js:170`), where `grid-column` applies to nothing — probed in jsdom, the grid container's own child has `className === ""` and the `<article>` has `parentElement === null`, so every section occupies exactly one of the six tracks whatever its column count, leaving criteria 1, 2, 8 and 9 ticked but unsatisfied and O1, O3 and O7 unmet
+- [ ] `## Design`'s mechanism sketch names neither the element that carries `grid-column` nor the stylesheet it belongs in, and `## Current state`'s O1 note calls `.rstk-nav-section` "a block-level flex item inside `.rstk-nav-sections`" when the flex item was always the `<c-navigator-section>` host — the code inherited that error, and the span rules plus the class have to move to `salesforceNavigator.css`/`.html` on the host or become `:host` rules in `navigatorSection.css`
+- [ ] `overflow-x: auto` makes the canvas a scroll container (`overflow-y` computes to `auto` with it) enclosing every `lightning-button-menu` in the layout — the section menu at `navigatorSection.html:72` and each item's menu at `navigatorItem.html:56` — whose SLDS dropdown is `position: absolute` inside a `position: relative` trigger, so an open menu is cut at the canvas edge or forces the canvas to scroll rather than overlaying; the spec's `overflow-x` trap weighed only the cards' `box-shadow` and 1rem of padding does not cover a dropdown several rem tall
+- [ ] nothing couples the canvas's six tracks to `MAX_COLUMNS`: `salesforceNavigator.test.js`'s pin hard-codes `repeat(\s*6\s*,` and that file does not import the constant, so moving the maximum leaves `repeat(6, ...)` green — `navigatorSection.test.js` does drive its `span-N` loop off `MIN_COLUMNS`/`MAX_COLUMNS`, so the track count is the one uncovered copy of the three `## Traps` says must move in lockstep
+- [ ] `10rem` and `26rem` are raw lengths in a dimension property, which `.claude/rules/rstk-slds2-ux-standards.md` says never to hardcode; `--slds-g-sizing-13` is exactly `10rem` in both slds and cosmos, though its own metadata scopes it to `border-width`/`width` rather than `grid-template-columns`, and no hook matches `26rem` at all (14 is `15rem`) — `npm run lint` flags neither, so this is a judgement call handed back rather than decided here
+- [ ] keyboard section reorder still moves ±1 through a now two-dimensional layout: `CARD_ARROW_DELTAS` (`navigatorSection.js:33`) maps ArrowUp/ArrowDown to -1/+1 and the parent applies it through `reorder`, so ArrowDown on a card sharing a row slides it sideways rather than down a row; `## Design` keeps row membership out of JS by choice, so there is no arithmetic fix and the decision is about wording or which keys are offered
+- [x] false positive — `--rstk-nav-col-min` and `--rstk-nav-col-max` are declared nowhere in the repo, but `var()` resolves to its fallback when the property is undeclared, so the 10rem floor and the 26rem ceiling do apply; the undeclared names are an override seam, not dead code

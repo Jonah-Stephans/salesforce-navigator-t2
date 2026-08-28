@@ -346,6 +346,12 @@ No ID is reused; O2 was retired at Initiate.
 - **The existing `cols-N` grid rules and their test are untouched by design.** `.rstk-nav-section__grid`
   keeps `repeat(N, minmax(0, 1fr))`, so `navigatorSection.test.js:208-229` stays green. A change there is
   a signal something drifted.
+- **A sizing class that lands inside a child component's shadow root is inert.** The canvas grid is a
+  `<div>` in `salesforceNavigator`'s template and the elements it places are the `<c-navigator-section>`
+  hosts, so a rule carrying `grid-column` reaches nothing if it is written against an element in
+  `navigatorSection`'s own shadow tree. A test here must be able to fail on the span class being absent
+  from `.rstk-nav-sections`'s direct children — that is assertable in jsdom, where a class-name check on
+  the inner `<article>` and a stylesheet-text pin both stay green regardless.
 
 ## Evidence
 
