@@ -845,6 +845,17 @@ describe("c-salesforce-navigator", () => {
       // The seeded layout's one section holds every reachable tab at
       // DEFAULT_COLUMNS (3) — see navigatorLayoutModel.js.
       expect(directChildren[0].className).toContain("rstk-nav-section_span-3");
+      // And only that one — a host carrying two of the mutually-exclusive
+      // rstk-nav-section_span-1…-6 classes renders at whichever the
+      // stylesheet happens to order last, six tracks wide whatever its
+      // column count, and a toContain check alone stays green on it. The
+      // same shape as navigatorSection.test.js's cols-N uniqueness guard
+      // (lines 199-204), applied here where the span class actually reaches
+      // a grid child.
+      const appliedSpans = directChildren[0].className
+        .split(/\s+/)
+        .filter((name) => /^rstk-nav-section_span-\d+$/.test(name));
+      expect(appliedSpans).toEqual(["rstk-nav-section_span-3"]);
     });
   });
 

@@ -38,9 +38,12 @@ const ANNOUNCEMENT_NONCE = "\u200B";
  * on a card sharing a row with another section moves it later in that list,
  * which visually can land it beside itself rather than in a row below — a
  * real limitation, named for the user in the drag instructions' own wording
- * ("earlier or later") rather than implied away by calling this a grid move,
- * which — unlike an item's own ARROW_DELTAS in navigatorItem, genuinely
- * moving within one section's own grid of field columns — it is not.
+ * ("earlier or later") rather than implied away by calling this a grid move.
+ * An item's own ARROW_DELTAS in navigatorItem carries the identical
+ * mismatch — a flat stored order moved by ±1 that renders into that
+ * section's own two-dimensional cols-N grid — which is why navigatorItem's
+ * own drag instructions likewise say only "move this item" rather than
+ * naming a direction.
  */
 const CARD_ARROW_DELTAS = {
   ArrowUp: -1,

@@ -25,9 +25,9 @@ left.
 
 ## Acceptance criteria
 
-- [ ] A section holding one field column renders visibly narrower than a section holding six, rather
+- [x] met A section holding one field column renders visibly narrower than a section holding six, rather
       than both filling the layout's width.
-- [ ] Two sections whose field columns total six or fewer appear beside each other in one row.
+- [x] met Two sections whose field columns total six or fewer appear beside each other in one row.
 - [x] met Two sections holding the same number of field columns render at the same width, whichever row
       each one sits in.
 - [x] met The same layout shows more of a long tab name on a 1680px-wide window than on a 1280px one,
@@ -38,9 +38,9 @@ left.
       horizontal scroll bar appears and scrolls the layout, and no section is clipped or made narrower
       still.
 - [x] met Zooming in produces that scroll bar and moves no section into a different row.
-- [ ] No row holds sections whose field columns total more than six, and a section holding six field
+- [x] met No row holds sections whose field columns total more than six, and a section holding six field
       columns sits alone in its row.
-- [ ] Sections whose column counts do not fill a row leave the remaining space empty rather than
+- [x] met Sections whose column counts do not fill a row leave the remaining space empty rather than
       stretching to fill it — `[4, 3, 3]` renders as one row of `[4]` and one row of `[3, 3]`.
 - [x] met `npm run lint` passes at `--max-warnings 0` over the changed CSS and HTML, and
       `npm run lint:slds-gate` still reports its six `ok:` lines.
@@ -115,6 +115,38 @@ left.
   instruction, confirming these four is queued for the same live-org pass Finding 3 awaits, rather than
   claimed here on the mechanism fix alone.
 
+**Fix pass, on the dropped uniqueness assertion, the false doc-comment contrast, and Criteria 1, 2, 8
+and 9:**
+
+- Criteria 1, 2, 8 and 9 are now `[x] met`, established by direct measurement in the `sfnav-t2` scratch
+  org — DOM-only probes at viewport 1680 that wrote nothing to the org — rather than by a jest
+  assertion, for the same reason the previous pass declined to claim them: row packing is the browser's
+  own CSS Grid auto-placement, not something jsdom renders. Criterion 1: a 1-column section measured
+  256px against a 6-column section's 1614px, same layout, same moment. Criterion 2: spans forced to
+  `[3, 3, 3]` packed as row 1 `[3, 3]` (lefts 33 and 848) and row 2 `[3]` — two sections side by side, as
+  required. Criterion 8: spans `[6, 1, 1]` packed as row 1 `[6]` alone and row 2 `[1, 1]`, and
+  `[1, 1, 1]` packed as one row of three — no row exceeded six total columns in any case tested.
+  Criterion 9: spans `[4, 3, 3]` packed as row 1 `[4]` and row 2 `[3, 3]` — the design's own worked
+  example, exactly. One honest limit: the measured track at 1680 was 255.66px against `## Design`'s
+  predicted 263px, the difference being `lightning-card`'s own padding, which `## Design`'s
+  `### Known unverified` already lists as unmeasured platform CSS — so the real scroll threshold is
+  marginally higher than 1,072px in practice.
+- The dropped uniqueness assertion is fixed. `salesforceNavigator.test.js`'s "puts the section's span
+  class on `.rstk-nav-sections`'s own direct children" test now also asserts, after its `toContain`, that
+  filtering that same direct child's class list to `/^rstk-nav-section_span-\d+$/` yields exactly one
+  member — the same shape `navigatorSection.test.js`'s `cols-N` test already uses at lines 199-204,
+  applied to the family this design added rather than a second convention invented for it. Confirmed red
+  against the re-review's own mutation (a second, hard-coded span class emitted from `resolveLayout`) and
+  green again with the mutation reverted.
+- The false contrast in `CARD_ARROW_DELTAS`'s doc comment is fixed, doc-only. `navigatorSection.js`'s
+  comment no longer claims an item's own `ARROW_DELTAS` in `navigatorItem` "genuinely" moves within a
+  two-dimensional grid; it now says the item axis carries the identical flat-order-versus-two-dimensional-
+  render mismatch the section axis does, which is why `navigatorItem.html`'s own drag instructions
+  likewise stick to "move this item" rather than naming a direction. The ±1 arithmetic on both
+  `CARD_ARROW_DELTAS` and `ARROW_DELTAS` is untouched, and no assistive or user-facing wording changed.
+- Finding 3, the `overflow-x` dropdown-clipping finding, remains untouched at the engineer's explicit
+  instruction — not this pass's to fix or disposition.
+
 ## Critique findings
 
 - [x] fixed — the `span-N` class never reaches a grid item, so the width mechanism is inert: `.rstk-nav-sections` (`salesforceNavigator.css:50`) is the grid and its direct children are the `<c-navigator-section>` hosts (`salesforceNavigator.html:157`), but `cardClass` puts `span-N` on an `<article>` inside `navigatorSection`'s shadow root (`navigatorSection.html:6`, `navigatorSection.js:170`), where `grid-column` applies to nothing — probed in jsdom, the grid container's own child has `className === ""` and the `<article>` has `parentElement === null`, so every section occupies exactly one of the six tracks whatever its column count, leaving criteria 1, 2, 8 and 9 ticked but unsatisfied and O1, O3 and O7 unmet
@@ -124,5 +156,5 @@ left.
 - [x] fixed — `10rem` and `26rem` are raw lengths in a dimension property, which `.claude/rules/rstk-slds2-ux-standards.md` says never to hardcode; `--slds-g-sizing-13` is exactly `10rem` in both slds and cosmos, though its own metadata scopes it to `border-width`/`width` rather than `grid-template-columns`, and no hook matches `26rem` at all (14 is `15rem`) — `npm run lint` flags neither, so this is a judgement call handed back rather than decided here
 - [x] fixed — keyboard section reorder still moves ±1 through a now two-dimensional layout: `CARD_ARROW_DELTAS` (`navigatorSection.js:33`) maps ArrowUp/ArrowDown to -1/+1 and the parent applies it through `reorder`, so ArrowDown on a card sharing a row slides it sideways rather than down a row; `## Design` keeps row membership out of JS by choice, so there is no arithmetic fix and the decision is about wording or which keys are offered
 - [x] false positive — `--rstk-nav-col-min` and `--rstk-nav-col-max` are declared nowhere in the repo, but `var()` resolves to its fallback when the property is undeclared, so the 10rem floor and the 26rem ceiling do apply; the undeclared names are an override seam, not dead code
-- [ ] the deleted `navigatorSection.test.js` span-N test asserted two things and only one was replaced: besides the class being present it filtered the card's class list to `/^rstk-nav-section_span-\d+$/` and required exactly one member, and nothing now covers that half — `salesforceNavigator.test.js:753` and `:847` are both `toContain`, so emitting `` spanClass: `rstk-nav-section_span-${columns} rstk-nav-section_span-6` `` from `resolveLayout` (`navigatorLayoutModel.js:106`) leaves all 449 tests green where the deleted assertion would have gone red (mutated and restored to confirm), and a host carrying two span classes renders at whichever the stylesheet orders last — six tracks wide whatever its column count, breaking O1 and O10 silently; the sibling `cols-N` uniqueness guard at `navigatorSection.test.js:199-204` survives, so the span family is now the only one of the two computed class families with no such guard
-- [ ] `CARD_ARROW_DELTAS`' new doc comment (`navigatorSection.js:41-43`) justifies the reworded assistive text by contrasting the section axis with "an item's own ARROW_DELTAS in navigatorItem, genuinely moving within one section's own grid of field columns", but `navigatorItem.js:10-15` is the identical `{ ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }`, dispatched as `itemkeymove` and applied by `handleItemKeyMove` as `to = from + delta` over the flat `items` array whose members render into the `cols-N` grid — the item axis has exactly the same flat-order-versus-two-dimensional-render mismatch, `navigatorItem.html:100` already says only "move this item" for that reason, and so the contrast the comment draws is false; doc-only, and the ±1 arithmetic itself is settled and is not re-raised
+- [x] fixed — the deleted `navigatorSection.test.js` span-N test asserted two things and only one was replaced: besides the class being present it filtered the card's class list to `/^rstk-nav-section_span-\d+$/` and required exactly one member, and nothing now covers that half — `salesforceNavigator.test.js:753` and `:847` are both `toContain`, so emitting `` spanClass: `rstk-nav-section_span-${columns} rstk-nav-section_span-6` `` from `resolveLayout` (`navigatorLayoutModel.js:106`) leaves all 449 tests green where the deleted assertion would have gone red (mutated and restored to confirm), and a host carrying two span classes renders at whichever the stylesheet orders last — six tracks wide whatever its column count, breaking O1 and O10 silently; the sibling `cols-N` uniqueness guard at `navigatorSection.test.js:199-204` survives, so the span family is now the only one of the two computed class families with no such guard
+- [x] fixed — `CARD_ARROW_DELTAS`' new doc comment (`navigatorSection.js:41-43`) justifies the reworded assistive text by contrasting the section axis with "an item's own ARROW_DELTAS in navigatorItem, genuinely moving within one section's own grid of field columns", but `navigatorItem.js:10-15` is the identical `{ ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }`, dispatched as `itemkeymove` and applied by `handleItemKeyMove` as `to = from + delta` over the flat `items` array whose members render into the `cols-N` grid — the item axis has exactly the same flat-order-versus-two-dimensional-render mismatch, `navigatorItem.html:100` already says only "move this item" for that reason, and so the contrast the comment draws is false; doc-only, and the ±1 arithmetic itself is settled and is not re-raised
