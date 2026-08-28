@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Section widths — geometry sketch</title>
+    <style>
+      :root {
+        --col: 160px; /* the invented per-column unit, set by JS */
+        --gap-inner: 8px; /* --slds-g-spacing-2 */
+        --gap-outer: 16px; /* --slds-g-spacing-4 */
+        --pad-section: 16px; /* --slds-g-spacing-4 */
+        --pad-canvas: 16px; /* --slds-g-spacing-4 */
+        --ink: #181818;
+        --ink-soft: #5c5c5c;
+        --line: #e5e5e5;
+        --surface: #fff;
+        --page: #f3f3f3;
+        --accent: #0176d3;
+        --warn: #ba0517;
+        --ok: #2e844a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 24px 24px 64px;
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        color: var(--ink);
+        background: var(--page);
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 15px;
+        margin: 32px 0 8px;
+      }
+      .lede {
+        max-width: 78ch;
+        color: var(--ink-soft);
+        margin: 0 0 4px;
+      }
+      .lede strong {
+        color: var(--ink);
+      }
+      .not {
+        max-width: 78ch;
+        margin: 12px 0 24px;
+        padding: 10px 12px;
+        background: #fff8e5;
+        border-left: 3px solid #dd7a01;
+        font-size: 13px;
+      }
+
+      /* ---- controls ---- */
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 24px;
+        align-items: flex-end;
+        padding: 14px 16px;
+        background: var(--surface);
+        border-radius: 8px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+        margin-bottom: 8px;
+      }
+      .ctrl {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .ctrl > span {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--ink-soft);
+      }
+      .seg {
+        display: flex;
+      }
+      .seg button {
+        font: inherit;
+        font-size: 13px;
+        padding: 5px 11px;
+        cursor: pointer;
+        border: 1px solid #c9c9c9;
+        background: #fff;
+        color: var(--ink);
+      }
+      .seg button + button {
+        border-left: none;
+      }
+      .seg button:first-child {
+        border-radius: 4px 0 0 4px;
+      }
+      .seg button:last-child {
+        border-radius: 0 4px 4px 0;
+      }
+      .seg button[aria-pressed="true"] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      label.chk {
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      /* ---- verdict ---- */
+      .verdict {
+        padding: 12px 16px;
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+        margin-bottom: 24px;
+        font-size: 13px;
+      }
+      .verdict .big {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .tag {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 3px;
+        color: #fff;
+        letter-spacing: 0.04em;
+      }
+      .tag.fits {
+        background: var(--ok);
+      }
+      .tag.scrolls {
+        background: var(--warn);
+      }
+
+      /* ---- the viewport frame ---- */
+      .frame-wrap {
+        overflow-x: auto;
+        padding-bottom: 8px;
+      }
+      .frame {
+        border: 1px solid #b9b9b9;
+        background: #fafaf9;
+        border-radius: 4px;
+        transform-origin: 0 0;
+        position: relative;
+      }
+      .frame::before {
+        content: attr(data-label);
+        position: absolute;
+        top: -21px;
+        left: 0;
+        font-size: 11px;
+        color: var(--ink-soft);
+        white-space: nowrap;
+      }
+      .frame {
+        margin-top: 26px;
+      }
+
+      /* the scroll container — this is `.rstk-nav-sections` */
+      .canvas {
+        padding: var(--pad-canvas);
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-outer);
+        overflow-x: auto;
+      }
+      .row {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: nowrap;
+        gap: var(--gap-outer);
+      }
+
+      /* the section card — this is `.rstk-nav-section` */
+      .section {
+        flex: 0 0 auto;
+        width: calc(
+          var(--cols) * var(--col) + (var(--cols) - 1) * var(--gap-inner) + 2 *
+            var(--pad-section)
+        );
+        padding: var(--pad-section);
+        background: var(--surface);
+        border-radius: 8px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+      }
+      .section.fluid {
+        flex: 1 1 auto;
+        width: auto;
+      }
+      .section h3 {
+        font-size: 13px;
+        font-weight: 700;
+        margin: 0 0 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .grid {
+        display: grid;
+        gap: var(--gap-inner);
+        grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+      }
+      .item {
+        font-size: 13px;
+        color: var(--accent);
+        padding: 5px 6px;
+        border-radius: 4px;
+        background: #f3f3f3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .item.wrap {
+        white-space: normal;
+        overflow-wrap: break-word;
+        word-break: break-word;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: var(--lines, 2);
+        overflow: hidden;
+      }
+      .item.uniform {
+        min-height: calc(var(--lines, 2) * 1.5em + 10px);
+      }
+      .cmp {
+        display: flex;
+        gap: 24px;
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+      .cmp > div {
+        background: #fafaf9;
+        padding: 12px;
+        border-radius: 6px;
+        border: 1px solid #d9d9d9;
+      }
+      .rowmeta {
+        font-size: 11px;
+        color: var(--ink-soft);
+        margin: 0 0 2px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      table {
+        border-collapse: collapse;
+        font-size: 13px;
+        margin-top: 4px;
+        background: var(--surface);
+      }
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 5px 10px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      th {
+        background: #fafaf9;
+        font-weight: 600;
+      }
+      td:first-child,
+      th:first-child {
+        text-align: left;
+      }
+      code {
+        font:
+          12px/1.4 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        background: #efefef;
+        padding: 1px 4px;
+        border-radius: 3px;
+      }
+      .formula {
+        font:
+          12px/1.7 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        color: var(--ink-soft);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Section widths — a geometry sketch</h1>
+    <p class="lede">
+      Every width on this page is computed from the real formula and the real
+      SLDS spacing tokens (<code>spacing-2: 0.5rem</code>,
+      <code>spacing-4: 1rem</code>). Change the per-column unit and the viewport
+      and watch whether a row fits or scrolls.
+      <strong
+        >The question this answers is proportion: is a row of narrow sections
+        the right shape, and is the column unit wide enough for a tab
+        label.</strong
+      >
+    </p>
+    <div class="not">
+      <strong>This is not a Lightning facsimile, deliberately.</strong> Density,
+      chrome and native feel are only answerable in a real org — feedback on
+      this page's own inaccuracies would be feedback on the wrong thing. Judge
+      the <em>geometry</em> here; judge the <em>look</em> in a scratch org at
+      Build.
+    </div>
+
+    <div class="controls">
+      <div class="ctrl">
+        <span>Per-column unit</span>
+        <div class="seg" id="unit"></div>
+      </div>
+      <div class="ctrl">
+        <span>Viewport</span>
+        <div class="seg" id="vp"></div>
+      </div>
+      <div class="ctrl">
+        <label class="chk"
+          ><input type="checkbox" id="scale" /> Scale to fit my window</label
+        >
+      </div>
+      <div class="ctrl">
+        <label class="chk"
+          ><input type="checkbox" id="long" checked /> Long labels (stress
+          test)</label
+        >
+      </div>
+      <div class="ctrl">
+        <span>Item text</span>
+        <div class="seg" id="mode"></div>
+      </div>
+      <div class="ctrl">
+        <label class="chk"
+          ><input type="checkbox" id="uniform" /> Uniform pill height</label
+        >
+      </div>
+    </div>
+
+    <div class="verdict" id="verdict"></div>
+
+    <h2>Ellipsis versus wrap, same section, same width</h2>
+    <p class="lede" style="font-size: 13px">
+      Both cards below are the identical 3-column section at the current unit —
+      same width, to the pixel.
+      <strong>Wrapping costs height, never width</strong>, so every number
+      elsewhere on this page is unaffected by this choice.
+    </p>
+    <div class="cmp" id="cmp"></div>
+
+    <h2>The same long label at every unit</h2>
+    <p class="lede" style="font-size: 13px">
+      A column track is exactly <code>--rstk-nav-col-width</code> wide whatever
+      the section's column count, so
+      <strong
+        >truncation is identical in a 1-column section and a 6-column
+        one</strong
+      >
+      — the unit is the only thing that moves it. Character counts are measured,
+      not estimated.
+    </p>
+    <div
+      id="trunc"
+      style="display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start"
+    ></div>
+
+    <h2>Rows under a column budget of 6</h2>
+    <p class="lede" style="font-size: 13px">
+      Each row below holds sections whose column counts sum to 6 — the budget
+      from Q2. Row width is
+      <code>992 + 40k</code> px for <em>k</em> sections at a 10rem unit, so the
+      widest row is always the one with the most sections.
+    </p>
+    <div class="frame-wrap">
+      <div class="frame" id="frame" data-label="">
+        <div class="canvas" id="canvas"></div>
+      </div>
+    </div>
+
+    <h2>Computed widths</h2>
+    <div id="tables" style="display: flex; gap: 32px; flex-wrap: wrap"></div>
+
+    <h2>The Small form factor, for comparison</h2>
+    <p class="lede" style="font-size: 13px">
+      One section per row at full viewport width with
+      <code>minmax(0, 1fr)</code> tracks — today's behaviour, unchanged. Nothing
+      here is at a keyed width, so nothing overflows.
+    </p>
+    <div class="frame-wrap">
+      <div class="frame" id="frameSmall" data-label="Small form factor · 390px">
+        <div class="canvas" id="canvasSmall"></div>
+      </div>
+    </div>
+
+    <h2>The formula</h2>
+    <p class="formula">
+      section(n) &nbsp;=&nbsp; n·col &nbsp;+&nbsp; (n−1)·8 &nbsp;+&nbsp; 2·16<br />
+      row(counts) =&nbsp; Σ section(nᵢ) &nbsp;+&nbsp; (k−1)·16<br />
+      canvas &nbsp;&nbsp;&nbsp;&nbsp;=&nbsp; row &nbsp;+&nbsp; 2·16
+    </p>
+
+    <script>
+      const GAP_INNER = 8,
+        GAP_OUTER = 16,
+        PAD_SECTION = 16,
+        PAD_CANVAS = 16;
+      const UNITS = [9, 10, 11, 12];
+      const VIEWPORTS = [
+        { label: "Tablet 1024", w: 1024 },
+        { label: "Laptop 1280", w: 1280 },
+        { label: "Desktop 1440", w: 1440 },
+        { label: "Wide 1680", w: 1680 }
+      ];
+      const ROWS = [
+        [6],
+        [1, 1, 1, 1, 1, 1],
+        [3, 3],
+        [4, 2],
+        [2, 2, 2],
+        [3, 2, 1]
+      ];
+      const TABS = [
+        "Accounts",
+        "Opportunities",
+        "Contacts",
+        "Leads",
+        "Work Orders",
+        "Cases",
+        "Reports",
+        "Dashboards",
+        "Quotes",
+        "Contracts",
+        "Products",
+        "Price Books",
+        "Assets",
+        "Campaigns",
+        "Tasks",
+        "Files",
+        "Orders",
+        "Invoices"
+      ];
+      const LONG = [
+        "Receivable Transaction Scheduled Payment",
+        "Bank Statement Workbench",
+        "Inventory Transaction Detail",
+        "Purchase Order Receipts",
+        "Manufacturing Cost Variance",
+        "Customer Shipment History",
+        "Work Order Operations",
+        "Supplier Invoice Reconciliation",
+        "Physical Inventory Count Sheets",
+        "Sales Order Acknowledgements",
+        "Engineering Change Orders",
+        "Cycle Count Adjustments",
+        "Landed Cost Allocations"
+      ];
+      const STRESS = "Receivable Transaction Scheduled Payment";
+
+      let unitRem = 12,
+        vpWidth = 1440,
+        doScale = false,
+        useLong = true;
+      let textMode = "wrap",
+        maxLines = 2,
+        uniformH = false;
+      const col = () => unitRem * 16;
+      const sectionW = (n) => n * col() + (n - 1) * GAP_INNER + 2 * PAD_SECTION;
+      const rowW = (ns) =>
+        ns.reduce((a, n) => a + sectionW(n), 0) + (ns.length - 1) * GAP_OUTER;
+      const canvasW = (ns) => rowW(ns) + 2 * PAD_CANVAS;
+
+      function seg(host, items, isOn, onPick) {
+        host.innerHTML = "";
+        items.forEach((it) => {
+          const b = document.createElement("button");
+          b.textContent = it.label;
+          b.setAttribute("aria-pressed", String(isOn(it)));
+          b.onclick = () => {
+            onPick(it);
+            render();
+          };
+          host.appendChild(b);
+        });
+      }
+
+      function makeSection(n, i, fluid, opts) {
+        const o = opts || {
+          mode: textMode,
+          lines: maxLines,
+          uniform: uniformH
+        };
+        const s = document.createElement("div");
+        s.className = "section" + (fluid ? " fluid" : "");
+        s.style.setProperty("--cols", n);
+        const h = document.createElement("h3");
+        h.textContent = [
+          "My Work",
+          "Selling",
+          "Service",
+          "Finance",
+          "Reporting",
+          "Admin"
+        ][i % 6];
+        s.appendChild(h);
+        const g = document.createElement("div");
+        g.className = "grid";
+        const pool = useLong ? LONG : TABS;
+        const count = n * (n === 1 ? 5 : 3);
+        for (let k = 0; k < count; k++) {
+          const a = document.createElement("div");
+          a.className =
+            "item" +
+            (o.mode === "wrap" ? " wrap" : "") +
+            (o.mode === "wrap" && o.uniform ? " uniform" : "");
+          a.style.setProperty("--lines", o.lines);
+          const label =
+            k === 0 && useLong ? STRESS : pool[(k + i * 3) % pool.length];
+          a.textContent = label;
+          a.title = label;
+          g.appendChild(a);
+        }
+        s.appendChild(g);
+        return s;
+      }
+
+      function render() {
+        document.documentElement.style.setProperty("--col", col() + "px");
+
+        seg(
+          document.getElementById("unit"),
+          UNITS.map((u) => ({ label: u + "rem", u })),
+          (it) => it.u === unitRem,
+          (it) => (unitRem = it.u)
+        );
+        seg(
+          document.getElementById("vp"),
+          VIEWPORTS,
+          (it) => it.w === vpWidth,
+          (it) => (vpWidth = it.w)
+        );
+        document.getElementById("scale").checked = doScale;
+
+        // widest row under the budget = the one with the most sections
+        const widest = Math.max(...ROWS.map(canvasW));
+        const fits = widest <= vpWidth;
+        document.getElementById("verdict").innerHTML =
+          '<div class="big">At ' +
+          unitRem +
+          "rem per column, the widest row under a budget of 6 needs " +
+          "<strong>" +
+          widest +
+          'px</strong> &nbsp;<span class="tag ' +
+          (fits ? "fits" : "scrolls") +
+          '">' +
+          (fits ? "FITS " + vpWidth : "SCROLLS at " + vpWidth) +
+          "</span></div>" +
+          '<div style="margin-top:6px;color:var(--ink-soft)">One 6-column section needs ' +
+          canvasW([6]) +
+          "px. Six 1-column sections need " +
+          canvasW([1, 1, 1, 1, 1, 1]) +
+          "px — " +
+          (canvasW([1, 1, 1, 1, 1, 1]) - canvasW([6])) +
+          "px more, which is 40·(6−1) and is independent of the " +
+          "column unit.</div>";
+
+        const canvas = document.getElementById("canvas");
+        canvas.innerHTML = "";
+        ROWS.forEach((ns, ri) => {
+          const meta = document.createElement("p");
+          meta.className = "rowmeta";
+          meta.textContent =
+            ns.join(" + ") +
+            " columns · " +
+            ns.length +
+            " section" +
+            (ns.length > 1 ? "s" : "") +
+            " · row " +
+            rowW(ns) +
+            "px";
+          canvas.appendChild(meta);
+          const row = document.createElement("div");
+          row.className = "row";
+          ns.forEach((n, i) => row.appendChild(makeSection(n, ri + i, false)));
+          canvas.appendChild(row);
+        });
+
+        const frame = document.getElementById("frame");
+        frame.style.width = vpWidth + "px";
+        frame.dataset.label =
+          "Viewport " +
+          vpWidth +
+          "px — the canvas inside scrolls when a row exceeds it";
+
+        const small = document.getElementById("canvasSmall");
+        small.innerHTML = "";
+        [3, 1].forEach((n, i) => {
+          const row = document.createElement("div");
+          row.className = "row";
+          row.appendChild(makeSection(n, i, true));
+          small.appendChild(row);
+        });
+        const fs = document.getElementById("frameSmall");
+        fs.style.width = "390px";
+
+        // scaling
+        const avail = document.body.clientWidth - 48;
+        const k = doScale && vpWidth > avail ? avail / vpWidth : 1;
+        frame.style.transform = "scale(" + k + ")";
+        frame.style.marginBottom =
+          k < 1 ? frame.offsetHeight * (k - 1) + "px" : "0";
+        if (k < 1)
+          frame.dataset.label += "  ·  shown at " + Math.round(k * 100) + "%";
+
+        seg(
+          document.getElementById("mode"),
+          [
+            { label: "Ellipsis", m: "ellipsis", l: 1 },
+            { label: "Wrap 2 lines", m: "wrap", l: 2 },
+            { label: "Wrap 3 lines", m: "wrap", l: 3 }
+          ],
+          (it) =>
+            it.m === textMode && (it.m === "ellipsis" || it.l === maxLines),
+          (it) => {
+            textMode = it.m;
+            if (it.m === "wrap") maxLines = it.l;
+          }
+        );
+        document.getElementById("uniform").checked = uniformH;
+
+        // label truncation, measured against the real font
+        const mc = document.createElement("canvas").getContext("2d");
+        mc.font =
+          '13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        const fitChars = (text, px) => {
+          if (mc.measureText(text).width <= px) return text.length;
+          let n = 0;
+          while (
+            n < text.length &&
+            mc.measureText(text.slice(0, n + 1) + "\u2026").width <= px
+          )
+            n++;
+          return n;
+        };
+        const wrapLines = (text, px) => {
+          const out = [];
+          let cur = "";
+          for (const word of text.split(" ")) {
+            const t = cur ? cur + " " + word : word;
+            if (mc.measureText(t).width <= px) cur = t;
+            else {
+              if (cur) out.push(cur);
+              cur = word;
+            }
+          }
+          if (cur) out.push(cur);
+          return out;
+        };
+        const longest = LONG.concat([STRESS]).reduce((a, b) =>
+          a.length > b.length ? a : b
+        );
+        const trunc = document.getElementById("trunc");
+        trunc.innerHTML = "";
+        UNITS.forEach((u) => {
+          const w = u * 16,
+            avail = w - 12;
+          const n = fitChars(STRESS, avail);
+          const whole = n >= STRESS.length;
+          const lines = wrapLines(STRESS, avail);
+          const worst = wrapLines(longest, avail);
+          const box = document.createElement("div");
+          box.style.cssText =
+            "background:var(--surface);border-radius:8px;padding:14px 16px;" +
+            "box-shadow:0 1px 2px rgba(0,0,0,.14)" +
+            (u === unitRem ? ";outline:2px solid var(--accent)" : "");
+          box.innerHTML =
+            "<div class='rowmeta'>" +
+            u +
+            "rem &middot; track " +
+            w +
+            "px" +
+            (u === unitRem ? " &middot; <strong>current</strong>" : "") +
+            "</div>" +
+            "<div class='rowmeta'>one line: " +
+            (whole
+              ? "<span style='color:var(--ok)'>fits whole</span>"
+              : "<span style='color:var(--warn)'>" +
+                n +
+                " of " +
+                STRESS.length +
+                " chars</span>") +
+            "</div>" +
+            "<div class='rowmeta'>wrapped: <span style='color:" +
+            (lines.length <= 2 ? "var(--ok)" : "var(--warn)") +
+            "'>" +
+            lines.length +
+            " line" +
+            (lines.length > 1 ? "s" : "") +
+            "</span>" +
+            " &middot; worst of " +
+            LONG.length +
+            " names: " +
+            worst.length +
+            " lines</div>";
+          [
+            ["ellipsis", ""],
+            ["wrap", " wrap"]
+          ].forEach(([, cls]) => {
+            const it = document.createElement("div");
+            it.className = "item" + cls;
+            it.style.width = w + "px";
+            it.style.marginTop = "4px";
+            it.style.setProperty("--lines", 2);
+            it.textContent = STRESS;
+            it.title = STRESS;
+            box.appendChild(it);
+          });
+          trunc.appendChild(box);
+        });
+
+        // ellipsis vs wrap, identical section
+        const cmp = document.getElementById("cmp");
+        cmp.innerHTML = "";
+        const variants = [
+          {
+            name: "Ellipsis (one line)",
+            o: { mode: "ellipsis", lines: 1, uniform: false }
+          },
+          {
+            name: "Wrap, auto height",
+            o: { mode: "wrap", lines: 2, uniform: false }
+          },
+          {
+            name: "Wrap, uniform pills",
+            o: { mode: "wrap", lines: 2, uniform: true }
+          }
+        ];
+        variants.forEach((v) => {
+          const holder = document.createElement("div");
+          const cap = document.createElement("div");
+          cap.className = "rowmeta";
+          holder.appendChild(cap);
+          const sec = makeSection(3, 0, false, v.o);
+          holder.appendChild(sec);
+          cmp.appendChild(holder);
+          requestAnimationFrame(() => {
+            cap.innerHTML =
+              "<strong>" +
+              v.name +
+              "</strong> &middot; " +
+              sec.offsetWidth +
+              "px wide &middot; " +
+              sec.offsetHeight +
+              "px tall";
+          });
+        });
+
+        // tables
+        const t1 = [
+          "<table><tr><th>Field columns</th><th>Section width</th></tr>"
+        ];
+        for (let n = 1; n <= 6; n++)
+          t1.push("<tr><td>" + n + "</td><td>" + sectionW(n) + "px</td></tr>");
+        t1.push("</table>");
+        const t2 = [
+          "<table><tr><th>Sections in row</th><th>Columns</th><th>Canvas width</th></tr>"
+        ];
+        ROWS.slice()
+          .sort((a, b) => a.length - b.length)
+          .forEach((ns) =>
+            t2.push(
+              "<tr><td>" +
+                ns.length +
+                "</td><td>" +
+                ns.join("+") +
+                "</td><td>" +
+                canvasW(ns) +
+                "px</td></tr>"
+            )
+          );
+        t2.push("</table>");
+        document.getElementById("tables").innerHTML =
+          "<div><div class='rowmeta'>One section, by its column count</div>" +
+          t1.join("") +
+          "</div>" +
+          "<div><div class='rowmeta'>A full row, by how many sections share it</div>" +
+          t2.join("") +
+          "</div>";
+      }
+
+      document.getElementById("scale").onchange = (e) => {
+        doScale = e.target.checked;
+        render();
+      };
+      document.getElementById("long").onchange = (e) => {
+        useLong = e.target.checked;
+        render();
+      };
+      document.getElementById("uniform").onchange = (e) => {
+        uniformH = e.target.checked;
+        render();
+      };
+      window.addEventListener("resize", () => {
+        if (doScale) render();
+      });
+      render();
+    </script>
+  </body>
+</html>
