@@ -8,6 +8,14 @@ name: pr-checks
 on:
   pull_request:
     branches: [main]
+    # GitHub's default activity types are [opened, synchronize, reopened].
+    # ready_for_review is not one of them, and every job below is guarded on
+    # `draft == false`, so a pull request opened as a draft runs nothing, and
+    # marking it ready triggers nothing either — its checks stay pinned to the
+    # draft-era run reporting `skipping`, which reads as "ran, nothing to do"
+    # rather than "never ran". Naming the list is what closes that;
+    # ready_for_review is the only addition to the default three.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -21,7 +29,24 @@ jobs:
 
   open-boxes:
     name: no undispositioned open boxes
-    if: github.event.pull_request.draft == false
+    # This job infers its sweep path from the branch name, and that inference
+    # is the whole problem: `devpath/${GITHUB_HEAD_REF}` only resolves on a
+    # branch named after a spec directory. A lessons branch is already
+    # devpath/lessons/<slug>, so the path doubles to
+    # devpath/devpath/lessons/<slug>; a ci/ or chore/ branch has no spec
+    # directory at all. Either way `test -d` fails and the job goes red for a
+    # reason unrelated to open boxes.
+    #
+    # The slash is a stand-in for "is this a spec branch". It holds because
+    # spec branches here are bare slugs and everything else carries a type/
+    # prefix, and it keeps the signal `test -d` exists to give: a bare slug
+    # whose directory is missing is still red. Understand it as a convention
+    # check, not a fact check. The durable fix is to derive the spec directory
+    # from the files the pull request actually touches, so that nothing here
+    # depends on how somebody named a branch.
+    if: >-
+      github.event.pull_request.draft == false &&
+      !contains(github.head_ref, '/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,10 +55,16 @@ jobs:
           # The slug comes from the pull request's head ref, never from
           # `git branch --show-current` — this runs on a detached HEAD, where
           # that returns empty and the path collapses to an unscoped sweep of
-          # dev-path/, failing this spec on a neighbour's open boxes.
+          # devpath/, failing this spec on a neighbour's open boxes.
           # `test -d` is what makes a wrong slug red: grep -r on a missing
           # directory exits 2, and a leading `!` would turn that into a pass.
-          SPEC="dev-path/${GITHUB_HEAD_REF:?not a pull request build}"
+          #
+          # devpath/, no hyphen: the installed plugin (0.4.0) fixes this as the
+          # spec directory, hardcoded in its own hooks in .claude/settings.json.
+          # The first spec on this repo predates that convention and still
+          # lives under dev-path/ (hyphenated) — this check only needs to match
+          # what new specs land at, not migrate the old one.
+          SPEC="devpath/${GITHUB_HEAD_REF:?not a pull request build}"
           test -d "$SPEC" && ! grep -rn '^- \[ \]' "$SPEC/"
 
   lwc-tests:
