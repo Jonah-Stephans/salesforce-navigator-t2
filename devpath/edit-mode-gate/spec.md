@@ -2,6 +2,7 @@
 type: feature
 upstream: []
 intent_accepted: true
+design_approved: true
 ---
 
 # Gate Navigator customization behind an edit mode
