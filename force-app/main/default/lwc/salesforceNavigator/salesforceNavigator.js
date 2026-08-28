@@ -138,6 +138,39 @@ const SWITCH_ERROR_MESSAGE =
 const AUTOSAVE_DELAY_MS = 1000;
 
 /**
+ * What the live region says about each edit-mode transition.
+ *
+ * Both transitions are announced, not just the entry: leaving is the half a
+ * screen reader user cannot see happen, and the two exits mean different
+ * things — one wrote, the other did not — so they do not share a sentence.
+ * "Nothing was saved" is true of a Cancel whether or not anything was changed,
+ * which is why it is worded as a fact about the write rather than about the
+ * changes.
+ */
+const ENTER_EDIT_ANNOUNCEMENT =
+  "Edit mode on. Customise your Navigator, then press Save.";
+const SAVE_EDIT_ANNOUNCEMENT = "Changes saved. Edit mode off.";
+const CANCEL_EDIT_ANNOUNCEMENT = "Edit mode off. Nothing was saved.";
+
+/**
+ * Where focus goes on the render that follows an edit-mode transition, and the
+ * selectors it goes to.
+ *
+ * Entering destroys the element that had focus — the affordance is replaced by
+ * Save and Cancel rather than joined by them — so focus has to be moved
+ * explicitly or it falls to `document.body`. The entry selector names two
+ * controls and `querySelector` resolves them in *document order*, so it reads
+ * as "the first revealed control in the action row, or Cancel if New section is
+ * not rendered". Never Save: a stray Enter on the control that has just taken
+ * focus must not commit the session.
+ */
+const EDIT_FOCUS_ENTER = "enter";
+const EDIT_FOCUS_LEAVE = "leave";
+const EDIT_ENTRY_FOCUS_SELECTOR =
+  ".rstk-nav-new-section, .rstk-nav-edit-cancel";
+const EDIT_AFFORDANCE_SELECTOR = ".rstk-nav-edit";
+
+/**
  * The same distinguisher `navigatorSection` carries for the item axis, for
  * the same reason on this one: a live region is read when its content
  * changes, LWC writes nothing for an unchanged bound string, and two
@@ -212,6 +245,45 @@ export default class SalesforceNavigator extends LightningElement {
   // deliberately nowhere near the store — see the PROMPT_* constants.
   layoutPrompt;
   draftLayoutName = "";
+
+  /**
+   * Whether the user is customising rather than navigating. One page-wide
+   * boolean, owned here and passed down as `@api editing` by the later slices
+   * that gate the section and item affordances — page-wide rather than
+   * per-section because there is no per-section header slot to hang a toggle
+   * from, and because "New section", the layout switcher and section
+   * reordering are page-level acts with no per-section home anyway.
+   *
+   * It is a mode, and `canEdit` is a readiness flag; the two are not the same
+   * fact and neither replaces the other. A Tier 1 or Tier 2 control renders
+   * when both hold. The affordance itself renders on `canEdit` alone.
+   */
+  isEditing = false;
+
+  /**
+   * The canvas as it stood when edit mode was entered, or undefined out of it.
+   *
+   * `json` is the serialised payload, taken through `serializeLayout` rather
+   * than a hand-rolled clone: it is byte-for-byte what a save would have
+   * written, so a restore cannot reintroduce a field the stored payload does
+   * not carry, and "has anything changed" is exact string equality against it
+   * rather than a dirty-flag protocol that could disagree with the write.
+   *
+   * `wasStored` records whether the user owned a stored layout at that moment.
+   * Restoring `json` unconditionally would turn "has never changed anything"
+   * — `storedLayout === undefined`, the single fact this component uses to
+   * mean it — into "has a stored layout", by way of a Cancel that is supposed
+   * to write nothing and change nothing.
+   */
+  editSnapshot;
+
+  /**
+   * Which edit-mode transition owes focus a home on the next render, if any.
+   * A one-shot hand-off in the same shape as `cardFocusIndex`, and for the
+   * same reason: the control focus must land on does not exist until the
+   * render that reveals it.
+   */
+  editFocusTarget;
 
   saveTimer;
 
@@ -343,9 +415,27 @@ export default class SalesforceNavigator extends LightningElement {
 
   disconnectedCallback() {
     this.isAttached = false;
-    // A pending debounce must not be dropped on the floor when the user
-    // navigates away — that is precisely the "unsaved state to lose" the
-    // design says does not exist here.
+    // Mid-edit, the user has unsaved work by design and leaving the page is
+    // not consent to write it. Explicit save means nothing is written until
+    // the user says so, and that has to hold when they say nothing at all and
+    // close the tab — so this discards rather than flushes. There is no
+    // `beforeunload` prompt to go with it: this component does not own the
+    // page it sits on inside Salesforce.
+    //
+    // **Belt to the braces, and knowingly so.** No timer can actually be armed
+    // in this state: `handleEditStart` flushes any pending pre-edit save on the
+    // way in, and `scheduleSave` arms nothing while editing. So this branch is
+    // unreachable by construction today and no test can distinguish it from an
+    // unconditional flush. It is kept because the fact it depends on lives in
+    // two other methods, and the cost of it being wrong is a user's unsaved
+    // draft written to their layout without them asking.
+    if (this.isEditing) {
+      this.discardPendingSave();
+      return;
+    }
+    // Out of edit mode a pending debounce must not be dropped on the floor
+    // when the user navigates away — that is precisely the "unsaved state to
+    // lose" the autosave design says does not exist there.
     this.flushPendingSave();
   }
 
@@ -634,6 +724,7 @@ export default class SalesforceNavigator extends LightningElement {
         this.layoutId = saved.layoutId;
         this.layoutName = saved.name || name;
         this.storedLayout = deserializeLayout(layoutJson);
+        this.resnapshotEdit();
         this.announce(`${this.layoutName} created and now showing.`);
       })
       .catch((error) => {
@@ -669,6 +760,13 @@ export default class SalesforceNavigator extends LightningElement {
     if (!this.layoutId) {
       this.layoutName = name;
       this.applyLayout(this.layout);
+      // Tier 2 commits on the spot, and this is the one Tier 2 act that has no
+      // Apex call of its own: a user with no row is renamed by the write that
+      // creates the row, which is the autosave — and in edit mode the autosave
+      // writes nothing. Left to the debounce the rename would sit behind a
+      // Save it is not supposed to wait for, and be thrown away by a Cancel
+      // that is not supposed to reach it.
+      this.commitLayoutNow();
       this.announce(`Layout renamed to ${name}.`);
       return;
     }
@@ -759,11 +857,13 @@ export default class SalesforceNavigator extends LightningElement {
       this.layoutId = undefined;
       this.layoutName = DEFAULT_LAYOUT_NAME;
       this.storedLayout = undefined;
+      this.resnapshotEdit();
       return;
     }
     this.layoutId = active.layoutId;
     this.layoutName = active.name || DEFAULT_LAYOUT_NAME;
     this.storedLayout = deserializeLayout(active.layoutJson);
+    this.resnapshotEdit();
   }
 
   // `page` is the only reactive piece of the wire config — LWC's wire
@@ -910,6 +1010,141 @@ export default class SalesforceNavigator extends LightningElement {
 
   get isEmpty() {
     return !this.isLoading && !this.hasError && this.items.length === 0;
+  }
+
+  // -------------------------------------------------------------------
+  // Edit mode.
+  //
+  // Three tiers of act, and the tier decides everything about it. **Tier 1**
+  // is the canvas — sections, column counts, items, order. It is gated behind
+  // this mode, it is held unwritten until Save, and Cancel reverts it.
+  // **Tier 2** is the set of saved layouts — create, rename, delete. It is
+  // gated too, because naming and deleting layouts is plainly customisation,
+  // but it is not drafted: each of those acts commits through its own Apex
+  // call, and rolling one back means undoing DML rather than restoring an
+  // in-memory object. **Tier 3** is which saved layout is showing, which is
+  // navigation and is not gated at all.
+  //
+  // The seam that leaves is real and is accepted rather than hidden: a user
+  // can enter edit mode, rename a layout, press Cancel, and find the rename
+  // still there. The rule a later Navigator control is tested against: if it
+  // changes the contents of a layout it is Tier 1; if it changes the set of
+  // layouts it is Tier 2; if it changes only which one is showing it is
+  // Tier 3.
+  // -------------------------------------------------------------------
+
+  handleEditStart() {
+    // `canEdit` gates the affordance in the template as well. Asked again here
+    // because a mode that cannot save is the one state this must not enter,
+    // and a template gate is not a guarantee about a handler.
+    if (!this.canEdit || this.isEditing) {
+      return;
+    }
+    // Everything made before this moment belongs to the autosave, not to the
+    // draft. A change made a moment ago is still sitting in its debounce, and
+    // leaving it there would put a write the user was already promised behind
+    // a Save they have not pressed yet — and hand Cancel a change it has no
+    // business reverting. Flushing here makes the boundary exact: the snapshot
+    // below is what is stored, so "restore what was on screen on entry" and
+    // "restore what the store holds" are the same sentence.
+    this.flushPendingSave();
+    this.editSnapshot = this.captureEditSnapshot();
+    this.isEditing = true;
+    this.editFocusTarget = EDIT_FOCUS_ENTER;
+    this.announce(ENTER_EDIT_ANNOUNCEMENT);
+  }
+
+  /**
+   * Writes the session's work and leaves.
+   *
+   * Nothing is written when nothing changed, which is not an optimisation: a
+   * user who has only ever looked owns no layout row, and a Save that wrote
+   * regardless would create one for anybody who opened the mode and closed it
+   * again. The comparison is exact string equality on the canonical payload,
+   * so it agrees with the write by construction.
+   */
+  handleEditSave() {
+    if (this.hasUnsavedCanvasChanges) {
+      this.commitLayoutNow();
+    }
+    this.leaveEditMode();
+    this.announce(SAVE_EDIT_ANNOUNCEMENT);
+  }
+
+  /**
+   * Throws the session's work away and leaves. Writes nothing, and un-writes
+   * nothing: a Tier 2 act committed during the session is not this to reach.
+   */
+  handleEditCancel() {
+    // The same belt-and-braces as `disconnectedCallback`'s, and unreachable
+    // for the same reason: nothing arms a timer while editing. Kept because it
+    // is the difference between a Cancel that writes nothing and a Cancel that
+    // writes the draft it has just thrown off the screen.
+    this.discardPendingSave();
+    this.restoreEditSnapshot();
+    this.leaveEditMode();
+    this.announce(CANCEL_EDIT_ANNOUNCEMENT);
+  }
+
+  /** The canvas as it stands, in the shape `restoreEditSnapshot` reads back. */
+  captureEditSnapshot() {
+    return {
+      json: serializeLayout(this.layout),
+      wasStored: this.storedLayout !== undefined
+    };
+  }
+
+  restoreEditSnapshot() {
+    const snapshot = this.editSnapshot;
+    if (!snapshot) {
+      return;
+    }
+    this.storedLayout = snapshot.wasStored
+      ? deserializeLayout(snapshot.json)
+      : undefined;
+  }
+
+  /**
+   * Re-takes the snapshot after a Tier 2 act has replaced the canvas wholesale.
+   *
+   * Creating a layout, deleting one and switching to one all put a *different*
+   * layout on screen and all commit on the spot. A Cancel that then restored
+   * the snapshot taken before one of them would paint the previous layout's
+   * sections onto the layout now showing, and hold them there as unwritten
+   * draft — reverting a Tier 1 change the user never made, onto a row the
+   * revert was never about. No-op out of edit mode, which is why the two call
+   * sites can be unconditional.
+   */
+  resnapshotEdit() {
+    if (!this.isEditing) {
+      return;
+    }
+    this.editSnapshot = this.captureEditSnapshot();
+  }
+
+  /**
+   * Whether Save has anything to write. String equality on the canonical
+   * payload — exact, cheap, and it reuses the persistence contract rather than
+   * inventing a dirty flag that could disagree with what would be written.
+   */
+  get hasUnsavedCanvasChanges() {
+    if (!this.editSnapshot) {
+      return false;
+    }
+    return serializeLayout(this.layout) !== this.editSnapshot.json;
+  }
+
+  leaveEditMode() {
+    this.isEditing = false;
+    this.editSnapshot = undefined;
+    this.editFocusTarget = EDIT_FOCUS_LEAVE;
+    // Any keyboard grab still in flight ends with the mode. This is a
+    // correctness bug rather than a nicety: `renderedCallback` restores focus
+    // to a grabbed card *by index*, and a stale grab pointing at a card that
+    // is no longer grabbable makes that restoration silently fight the
+    // hand-off above for the same render.
+    this.releaseSectionGrab();
+    this.cardFocusIndex = undefined;
   }
 
   // -------------------------------------------------------------------
@@ -1343,6 +1578,10 @@ export default class SalesforceNavigator extends LightningElement {
     // keyboard user would otherwise be left with focus on nothing.
     this.focusLayoutPrompt();
 
+    // The same hand-off for the two edit-mode transitions, and for the same
+    // reason: each destroys the control the user just activated.
+    this.focusEditTransition();
+
     // A live grab wins, because it is re-asserted on every render for as long
     // as the drag lasts; `cardFocusIndex` is the one-shot hand-off the two
     // gestures that *end* a drag leave behind, and it is consumed here
@@ -1360,6 +1599,28 @@ export default class SalesforceNavigator extends LightningElement {
     const grabbed = cards[target];
     if (grabbed && this.template.activeElement !== grabbed) {
       grabbed.focusCard();
+    }
+  }
+
+  /**
+   * Puts focus where an edit-mode transition left it owing. Consumed whether
+   * or not it was used, so a hand-off cannot outlive the render it was set for
+   * and steal focus from something else later — the same one-shot discipline
+   * `cardFocusIndex` carries, and for the same reason.
+   */
+  focusEditTransition() {
+    const transition = this.editFocusTarget;
+    if (!transition) {
+      return;
+    }
+    this.editFocusTarget = undefined;
+    const selector =
+      transition === EDIT_FOCUS_ENTER
+        ? EDIT_ENTRY_FOCUS_SELECTOR
+        : EDIT_AFFORDANCE_SELECTOR;
+    const control = this.template.querySelector(selector);
+    if (control && this.template.activeElement !== control) {
+      control.focus();
     }
   }
 
@@ -1385,6 +1646,38 @@ export default class SalesforceNavigator extends LightningElement {
     this.scheduleSave();
   }
 
+  /**
+   * Which layout is being written, and what to. Captured **at the moment of
+   * the change** rather than when the write runs — see `pendingSave` for why
+   * that difference is the whole of it — and shared by the debounced path and
+   * the two paths that write immediately, so the three cannot disagree about
+   * what a save is addressed to.
+   */
+  captureSaveTarget() {
+    return {
+      layoutId: this.layoutId,
+      name: this.layoutName,
+      layoutJson: serializeLayout(this.layout)
+    };
+  }
+
+  /**
+   * Writes the layout as it stands, now, instead of when a debounce would have
+   * fired. `flushPendingSave` cannot do this job: it is a no-op unless a timer
+   * is already armed, and in edit mode no timer is ever armed.
+   */
+  commitLayoutNow() {
+    if (this.hasLayoutLoadError) {
+      return;
+    }
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+    }
+    this.pendingSave = this.captureSaveTarget();
+    this.save();
+  }
+
   scheduleSave() {
     // Nothing is written while the stored layout is unknown. The section
     // menus live in a child component and stay operable, so the change is
@@ -1394,15 +1687,24 @@ export default class SalesforceNavigator extends LightningElement {
     if (this.hasLayoutLoadError) {
       return;
     }
+    // **The whole of the explicit-save suppression, in one place.** Every
+    // Tier 1 mutation reaches the store through `applyLayout`, and
+    // `applyLayout` reaches the timer through here — so one guard covers all
+    // ten call sites. Ten guards at ten call sites is exactly what
+    // `.claude/rules/rstk-dry-enforcement.md` exists to prevent.
+    //
+    // The debounce is neutered by this, not deleted. With every mutation
+    // behind edit mode it can no longer legitimately fire — but it is the only
+    // thing standing between a future ungated write and a save storm, and
+    // removing it is a larger diff than leaving it behind one guard.
+    if (this.isEditing) {
+      return;
+    }
     // **Which layout is being written is decided here — at the moment of the
     // change — and carried to the call.** See `pendingSave`. A burst
     // overwrites it, which is exactly what the debounce coalescing means: the
     // last change in a burst is the state the layout is in.
-    this.pendingSave = {
-      layoutId: this.layoutId,
-      name: this.layoutName,
-      layoutJson: serializeLayout(this.layout)
-    };
+    this.pendingSave = this.captureSaveTarget();
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
     }

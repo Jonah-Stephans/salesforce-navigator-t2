@@ -26,31 +26,78 @@
             checked={choice.checked}
           ></lightning-menu-item>
         </template>
-        <lightning-menu-divider></lightning-menu-divider>
-        <lightning-menu-item
-          value="new-layout"
-          label="New layout…"
-        ></lightning-menu-item>
-        <lightning-menu-item
-          value="rename-layout"
-          label="Rename layout…"
-        ></lightning-menu-item>
-        <!-- Absent, not disabled, for a user with no stored layout: there is
-             nothing to delete, and an entry that cannot do what it says is
-             worse than one that is not offered. -->
-        <template lwc:if={canDeleteLayout}>
+        <!-- The Tier 2 / Tier 3 split, rendered inside one control. Choosing
+             which saved layout you are looking at is navigation and stays
+             available always; naming, creating and deleting layouts is
+             customisation and is gated with everything else. Absent from the
+             DOM rather than disabled, so neither the tab order nor a screen
+             reader can reach an entry the user is not being offered. -->
+        <template lwc:if={isEditing}>
+          <lightning-menu-divider></lightning-menu-divider>
           <lightning-menu-item
-            value="delete-layout"
-            label="Delete layout…"
+            value="new-layout"
+            label="New layout…"
           ></lightning-menu-item>
+          <lightning-menu-item
+            value="rename-layout"
+            label="Rename layout…"
+          ></lightning-menu-item>
+          <!-- Absent, not disabled, for a user with no stored layout: there is
+               nothing to delete, and an entry that cannot do what it says is
+               worse than one that is not offered. -->
+          <template lwc:if={canDeleteLayout}>
+            <lightning-menu-item
+              value="delete-layout"
+              label="Delete layout…"
+            ></lightning-menu-item>
+          </template>
         </template>
       </lightning-button-menu>
 
-      <lightning-button
-        slot="actions"
-        label="New section"
-        onclick={handleAddSection}
-      ></lightning-button>
+      <!-- The top right, in its two states. In edit mode:
+           [ switcher ] [ New section ] [ Cancel ] [ Save ]. Out of it:
+           [ switcher ] [ edit ]. The affordance is *replaced* by Save and
+           Cancel rather than joined by them, so there is exactly one way to
+           leave the mode from the action row; Save carries `variant="brand"`
+           and sits last, per the SLDS convention that the primary action in an
+           action row is the rightmost one. -->
+      <template lwc:if={isEditing}>
+        <lightning-button
+          slot="actions"
+          class="rstk-nav-new-section"
+          label="New section"
+          onclick={handleAddSection}
+        ></lightning-button>
+        <lightning-button
+          slot="actions"
+          class="rstk-nav-edit-cancel"
+          label="Cancel"
+          onclick={handleEditCancel}
+        ></lightning-button>
+        <lightning-button
+          slot="actions"
+          class="rstk-nav-edit-save"
+          label="Save"
+          variant="brand"
+          onclick={handleEditSave}
+        ></lightning-button>
+      </template>
+      <template lwc:else>
+        <!-- Rendered on `canEdit` alone, which is the one control here that
+             is: a Navigator whose stored layout could not be read must offer
+             no way into a mode that could not save. `alternative-text` is not
+             optional on an icon-only button — without it a screen reader
+             announces the only route into customisation as nothing at all. -->
+        <lightning-button-icon
+          slot="actions"
+          class="rstk-nav-edit"
+          icon-name="utility:edit"
+          variant="border-filled"
+          alternative-text="Edit Navigator"
+          title="Edit Navigator"
+          onclick={handleEditStart}
+        ></lightning-button-icon>
+      </template>
     </template>
 
     <template lwc:if={isLoading}>
