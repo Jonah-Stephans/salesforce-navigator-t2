@@ -107,10 +107,14 @@ on a desktop who zooms in still gets the side-by-side layout and its scroll bar.
   `.rstk-nav-sections.rstk-nav-sections_small`, so the single-track override wins on specificity (0,2,0)
   rather than on source order (0,1,0) tied with the six-track rule it overrides — see the critique finding
   below and the updated comment in salesforceNavigator.css above that rule.
-- [ ] excess — force-app/main/default/lwc/salesforceNavigator/salesforceNavigator.html, committed by
-      `git add -A` and outside this slice's `touches`. The canvas div's static `class="rstk-nav-sections"`
+- [x] false positive — force-app/main/default/lwc/salesforceNavigator/salesforceNavigator.html, committed
+      by `git add -A` and outside this slice's `touches`. The canvas div's static `class="rstk-nav-sections"`
       had to become `class={sectionsCanvasClass}` for the getter to reach it, so the template is where the
-      mechanism is bound; `touches` listed the css, the js and the test file but not the html.
+      mechanism is bound; `touches` listed the css, the js and the test file but not the html. The file was
+      in scope and `touches` was incomplete — the binding is inseparable from the mechanism and there was
+      nowhere else for it to go. `touches` is left as the slicer wrote it: it records what was predicted at
+      cut time, nothing reads it after the build, and backfilling it would erase the mismatch this line
+      documents.
 
 ## Critique findings
 
