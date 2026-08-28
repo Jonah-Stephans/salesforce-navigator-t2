@@ -44,6 +44,16 @@ Items stay on one line. A label too long for its column is truncated with an ell
 - O11 — An item label too long for its column is truncated with an ellipsis rather than overflowing its
   pill or wrapping, and the full label remains available to a pointer, a screen reader and find-in-page.
 
+## Outcome checks
+
+- [x] met O1
+- [x] met O10
+- [x] met O3
+- [x] met O4
+- [x] met O7
+- [x] met O8
+- [x] met O11
+
 ## Out of scope
 
 - **Section height and vertical sizing.** Nothing here changes how tall a section is or how it grows.
