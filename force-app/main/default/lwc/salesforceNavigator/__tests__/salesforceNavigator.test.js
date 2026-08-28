@@ -803,7 +803,9 @@ describe("c-salesforce-navigator", () => {
       // its own fallback of the length it used to be hard-coded to —
       // `--slds-g-sizing-13` (10rem) and `--slds-g-sizing-16` (30rem). The
       // ceiling used to be a raw `26rem`, invisible to
-      // `no-hardcoded-values-slds2` because no hook mapped to it; this regex
+      // `no-hardcoded-values-slds2` not because no hook mapped to it but
+      // because the rule is property-scoped and never checks
+      // `grid-template-columns` — see the trap on this; this regex
       // requires the tokenised form exactly, so a raw length sneaking back
       // into the ceiling — or the wrong hook, or a hook missing its fallback
       // — fails it. Both sit behind the `--rstk-nav-col-min` /
