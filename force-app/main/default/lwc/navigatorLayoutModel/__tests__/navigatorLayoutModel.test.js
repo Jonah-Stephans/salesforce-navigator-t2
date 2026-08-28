@@ -268,7 +268,8 @@ describe("resolveLayout — the render-time access intersection", () => {
   });
 
   // spanClass is the card's own footprint in the canvas's six-track CSS
-  // Grid (`.rstk-nav-section_span-N` in navigatorSection.css) — the seam
+  // Grid (`.rstk-nav-section_span-N` in salesforceNavigator.css, bound onto
+  // the `<c-navigator-section>` host in salesforceNavigator.html) — the seam
   // that drives a section's width off its column count instead of the
   // full-width stretch every section used to get alike. It comes off the
   // same clamped `columns` columnClass does, one definition shared between

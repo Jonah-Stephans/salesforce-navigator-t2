@@ -143,14 +143,23 @@
       >{announcement}</span
     >
 
-    <!-- Attached only while this card is grabbed, never permanently. -->
+    <!-- Attached only while this card is grabbed, never permanently.
+
+         "Earlier or later", not "up or down": the arrow keys move a section
+         one place through the sections' own stored order (`CARD_ARROW_DELTAS`
+         below), and that order is what packs into the canvas's rows — it is
+         not an up/down/left/right move through the two-dimensional layout the
+         canvas grid renders. On a row shared with another section, the two
+         read the same as "up" or "down" only by coincidence of the packing;
+         saying "up"/"down" here would promise a spatial move this key does
+         not make. -->
     <template lwc:if={grabbed}>
       <span
         id={instructionsId}
         class="slds-assistive-text rstk-nav-section__instructions"
       >
-        Use the arrow keys to move this section, Space to drop it, Escape to
-        cancel.
+        Use the arrow keys to move this section earlier or later, Space to drop
+        it, Escape to cancel.
       </span>
     </template>
   </article>

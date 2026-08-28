@@ -29,7 +29,19 @@ const ADD_ITEMS = "Add items";
  */
 const ANNOUNCEMENT_NONCE = "\u200B";
 
-/** See the note on ARROW_DELTAS in navigatorItem — a section is a grid. */
+/**
+ * All four arrow keys move a grabbed section card by one place through the
+ * sections' own flat stored order — the same order that packs into the
+ * canvas's rows — never by a row or a column of the two-dimensional canvas
+ * itself. `## Design` keeps row membership out of JS on purpose: there is no
+ * row or column index to move by, only a position in the list. So ArrowDown
+ * on a card sharing a row with another section moves it later in that list,
+ * which visually can land it beside itself rather than in a row below — a
+ * real limitation, named for the user in the drag instructions' own wording
+ * ("earlier or later") rather than implied away by calling this a grid move,
+ * which — unlike an item's own ARROW_DELTAS in navigatorItem, genuinely
+ * moving within one section's own grid of field columns — it is not.
+ */
 const CARD_ARROW_DELTAS = {
   ArrowUp: -1,
   ArrowLeft: -1,
@@ -167,8 +179,20 @@ export default class NavigatorSection extends LightningElement {
     }));
   }
 
+  /**
+   * The card's own class list. **Deliberately not `spanClass`** — the card
+   * this getter styles is the `<article>` inside this component's own shadow
+   * root, and the canvas's six-track grid (`.rstk-nav-sections` in
+   * salesforceNavigator.css) is a level up, in the parent's shadow root. A
+   * `grid-column` rule reaches nothing written against an element in here:
+   * the grid's actual children are the `<c-navigator-section>` hosts, so the
+   * span class is applied there instead — `class={section.spanClass}` on
+   * `<c-navigator-section>` in salesforceNavigator.html — which is the one
+   * place a rule carrying `grid-column` can reach the element the grid
+   * actually lays out.
+   */
   get cardClass() {
-    const classes = ["rstk-nav-section", this.spanClass];
+    const classes = ["rstk-nav-section"];
     if (this.grabbed) {
       classes.push("rstk-nav-section_grabbed");
     }
@@ -176,22 +200,6 @@ export default class NavigatorSection extends LightningElement {
       classes.push("rstk-nav-section_droptarget");
     }
     return classes.join(" ");
-  }
-
-  /**
-   * `span-N`, computed by the model rather than assembled here so that the
-   * clamp and the class have one definition between them — the same reason
-   * `gridClass` below reads `columnClass` off the section instead of
-   * recomputing it. This is the card's own footprint in the canvas's
-   * six-track CSS Grid (`.rstk-nav-sections` in salesforceNavigator.css): a
-   * section spans as many of the six tracks as it holds field columns, which
-   * is what makes a one-column section narrow, a six-column section the full
-   * row, and several narrow sections able to sit side by side.
-   */
-  get spanClass() {
-    return this.section
-      ? this.section.spanClass
-      : `rstk-nav-section_span-${MIN_COLUMNS}`;
   }
 
   /**

@@ -9,7 +9,12 @@ import { getNavigateCalledWith } from "lightning/navigation";
 // entry does are driven against the component that ships.
 import { getOpenModals, resetModals, configOf } from "lightning/modal";
 import { MAX_PAGE_SIZE, NAV_ITEMS_CONFIG } from "c/navigatorTabSource";
-import { SCHEMA_VERSION, reorder } from "c/navigatorLayoutModel";
+import {
+  SCHEMA_VERSION,
+  reorder,
+  MIN_COLUMNS,
+  MAX_COLUMNS
+} from "c/navigatorLayoutModel";
 import getLayouts from "@salesforce/apex/NavigatorLayoutController.getLayouts";
 import createLayout from "@salesforce/apex/NavigatorLayoutController.createLayout";
 import updateLayout from "@salesforce/apex/NavigatorLayoutController.updateLayout";
@@ -740,9 +745,12 @@ describe("c-salesforce-navigator", () => {
         // The card's own footprint in the canvas grid follows the same
         // column count — this is what makes the section's width follow how
         // many field columns it holds, rather than every card stretching to
-        // the same full width regardless.
-        const card = section.shadowRoot.querySelector("article");
-        expect(card.className).toContain(`rstk-nav-section_span-${columns}`);
+        // the same full width regardless. Asserted on `section` itself, the
+        // `<c-navigator-section>` host and `.rstk-nav-sections`'s actual
+        // direct child — not on the `<article>` inside its shadow root,
+        // which the canvas grid never lays out and which carried no span
+        // class this component could ever style with `grid-column`.
+        expect(section.className).toContain(`rstk-nav-section_span-${columns}`);
 
         await settleAutosave();
         expect(lastSavedLayout(createLayout).sections[0].columns).toBe(columns);
@@ -773,12 +781,70 @@ describe("c-salesforce-navigator", () => {
       const body = rule[0];
 
       expect(body).toContain("display: grid");
+      // Driven off MAX_COLUMNS rather than a literal 6: the six tracks here
+      // are the CSS's own copy of the same maximum navigatorLayoutModel.js
+      // and NavigatorLayoutController.cls each keep — see the trap on the
+      // three of them moving in lockstep. A hard-coded `6` in this regex
+      // would stay green if the maximum ever moved and the CSS did not.
+      //
+      // The floor's fallback is the SLDS styling hook `--slds-g-sizing-13`
+      // (itself carrying its own fallback of the same `10rem`), tokenised at
+      // the engineer's decision; the ceiling stays a raw `26rem` because no
+      // sizing hook matches it. Both sit behind the `--rstk-nav-col-min` /
+      // `--rstk-nav-col-max` override seam, unchanged.
       expect(body).toMatch(
-        /grid-template-columns:\s*repeat\(\s*6\s*,\s*minmax\(\s*var\(--rstk-nav-col-min,\s*10rem\)\s*,\s*var\(--rstk-nav-col-max,\s*26rem\)\s*\)\s*\)/
+        new RegExp(
+          `grid-template-columns:\\s*repeat\\(\\s*${MAX_COLUMNS}\\s*,\\s*minmax\\(\\s*var\\(--rstk-nav-col-min,\\s*var\\(--slds-g-sizing-13,\\s*10rem\\)\\s*\\)\\s*,\\s*var\\(--rstk-nav-col-max,\\s*26rem\\)\\s*\\)\\s*\\)`
+        )
       );
       expect(body).toContain("grid-auto-flow: row");
       expect(body).toContain("justify-content: start");
       expect(body).toContain("overflow-x: auto");
+    });
+
+    it("defines a real grid-column span, on this stylesheet, for every column count the menu offers", () => {
+      // The mirror of navigatorSection.test.js's cols-N stylesheet pin, but
+      // for the span rules — which live here, beside the grid they size,
+      // rather than in navigatorSection.css. Driven off MIN_COLUMNS/MAX_COLUMNS
+      // for the same reason navigatorSection.test.js's own span coverage was:
+      // a hard-coded 1..6 would stay green if the range ever moved and this
+      // file's rules did not move with it.
+      const css = readFileSync(
+        join(__dirname, "..", "salesforceNavigator.css"),
+        "utf8"
+      );
+
+      for (let columns = MIN_COLUMNS; columns <= MAX_COLUMNS; columns += 1) {
+        expect(css).toMatch(
+          new RegExp(
+            `\\.rstk-nav-section_span-${columns}\\s*\\{[^}]*grid-column:\\s*span\\s*${columns}`
+          )
+        );
+      }
+    });
+
+    it("puts the section's span class on .rstk-nav-sections's own direct children, not merely somewhere inside them", async () => {
+      // This is the trap Finding 1 named: a class-name check on the inner
+      // `<article>`, or a stylesheet-text pin, both stay green whether or not
+      // the span class ever reaches an actual child of the grid. Before the
+      // fix, `.rstk-nav-sections`'s direct children — the `<c-navigator-section>`
+      // hosts — carried no class at all, so this failed; the class was being
+      // written one shadow root too deep to matter.
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const canvas = element.shadowRoot.querySelector(".rstk-nav-sections");
+      expect(canvas).not.toBeNull();
+
+      const directChildren = Array.from(canvas.children);
+      expect(directChildren).toHaveLength(1);
+      expect(directChildren[0].tagName.toLowerCase()).toBe(
+        "c-navigator-section"
+      );
+      // The seeded layout's one section holds every reachable tab at
+      // DEFAULT_COLUMNS (3) — see navigatorLayoutModel.js.
+      expect(directChildren[0].className).toContain("rstk-nav-section_span-3");
     });
   });
 
