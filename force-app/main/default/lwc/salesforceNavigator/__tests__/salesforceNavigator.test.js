@@ -4238,6 +4238,7 @@ describe("c-salesforce-navigator", () => {
     it("a store whose active layout is one this version cannot read still shows a layout the user owns, not the seeded one", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       deleteLayout.mockResolvedValueOnce([
         {
@@ -4266,14 +4267,19 @@ describe("c-salesforce-navigator", () => {
     });
 
     /**
-     * Why the delete path *discards* a pending change where the switch path
-     * flushes one: a payload written to a row that is about to be deleted is
-     * work with no reader, and a failure would report a save error about a
-     * layout that no longer exists.
+     * Once Tier 2 requires edit mode, this can no longer be a race against a
+     * *live* debounce: entering edit mode is a precondition for reaching
+     * "delete-layout" at all, and entering it is exactly what stops a Tier 1
+     * change from ever arming a debounce in the first place. What survives of
+     * the original claim is the outcome — a canvas change made and then its
+     * layout deleted, inside the same session, writes nothing — proven here
+     * by `scheduleSave`'s `isEditing` guard rather than by `persist`'s
+     * `stillExists` check, which this interleaving can no longer reach.
      */
-    it("a change still in the debounce when its layout is deleted is dropped rather than written", async () => {
+    it("a change made and then its layout deleted, inside the same edit session, writes nothing", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectSectionMenuItem(element, 0, "columns-6");
       await flush();
@@ -4289,21 +4295,19 @@ describe("c-salesforce-navigator", () => {
     });
 
     /**
-     * The other half of the same rule, and the half `discardPendingSave` cannot
-     * reach: the change is made *after* the gesture, while the delete is still
-     * in flight. `this.layoutId` still names the doomed row until the reply
-     * lands, so the change is captured against it — and a write addressed
-     * there is refused, telling the user a save failed about the very layout
-     * they had just asked to be rid of, beside a screen already showing its
-     * successor.
-     *
-     * Interleaved by hand rather than through `settleAutosave`, which advances
-     * the timer first and so could never see the delete land ahead of the
-     * pending debounce.
+     * The delete itself is unaffected by an edit session in progress: it
+     * still commits on the spot, still adopts the store's own answer about
+     * which layout replaces the one removed, and still reports no save error,
+     * because nothing was attempted. Once Tier 2 requires edit mode, a canvas
+     * change made while the delete's round trip is in flight is a Tier 1
+     * draft rather than a pending debounce — `scheduleSave`'s `isEditing`
+     * guard is what keeps it unwritten now, not `persist`'s `stillExists`
+     * check, which this interleaving can no longer reach.
      */
-    it("a change made while its layout is being deleted is written nowhere and reports no save error", async () => {
+    it("a canvas change made while its layout is being deleted is written nowhere and reports no save error", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
       const releaseDelete = store.deferNextDelete();
 
       selectLayoutMenu(element, "delete-layout");
@@ -4333,17 +4337,22 @@ describe("c-salesforce-navigator", () => {
     });
 
     /**
-     * `rememberSaved`'s create-adoption guard, which needs both of its
-     * conditions and can only be reached by making a change while a *create* is
-     * in flight. The change belongs to a user who owned no row, so it creates
-     * one — correctly, that is what a first change does — but the layout on
-     * screen by the time it lands is the one *New layout* made, and adopting
-     * the id would point every later save at a layout the change was never
-     * made on.
+     * `rememberSaved`'s create-adoption guard needed *two* concurrent creates
+     * to reach — one from *New layout*, one from an ordinary Tier 1 autosave
+     * racing it. Once Tier 2 requires edit mode, that second create cannot
+     * happen any more: a Tier 1 change made during this wait is a draft held
+     * by the same session, never an autosave of its own, so the two creates
+     * this guard exists to referee can no longer occur together. See the
+     * slice's fix-pass report for the mutation check confirming the guard is
+     * now unreachable by any user path, kept for the same reason the file's
+     * other unreachable-by-construction guards are kept. What remains
+     * reachable, and is what this proves now, is that the screen shows
+     * nothing of the new layout until the write actually lands.
      */
-    it("a change made while a new layout is being created gets its own row, and the new layout stays the one on screen", async () => {
+    it("a new layout being created does not show on screen until the write lands", async () => {
       const store = installStore([]);
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
       const releaseCreate = store.deferNextCreate();
 
       selectLayoutMenu(element, "new-layout");
@@ -4355,17 +4364,15 @@ describe("c-salesforce-navigator", () => {
       input.dispatchEvent(new CustomEvent("commit"));
       await flush();
 
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
-      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
-      await flush();
+      // Nothing on the server yet: the create has not landed.
+      expect(store.names()).toEqual([]);
 
       releaseCreate();
       await flush();
       await flush();
       await flush();
 
-      expect(store.names()).toEqual(["Weekly review", "My Navigator"]);
+      expect(store.names()).toEqual(["Weekly review"]);
       expect(
         layoutMenuEntries(element)
           .filter((entry) => entry.checked)
@@ -4424,6 +4431,7 @@ describe("c-salesforce-navigator", () => {
     it("a new layout sits beside the existing ones rather than renaming and overwriting one", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "new-layout");
       await flush();
@@ -4443,6 +4451,7 @@ describe("c-salesforce-navigator", () => {
     it("a new layout starts from every tab the user can reach, as a first open does", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "new-layout");
       await flush();
@@ -4461,6 +4470,7 @@ describe("c-salesforce-navigator", () => {
     it("renaming a layout renames that layout in the store and leaves its payload and its neighbours alone", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "rename-layout");
       await flush();
@@ -4483,6 +4493,7 @@ describe("c-salesforce-navigator", () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
       renameLayout.mockRejectedValueOnce(new Error("Refused"));
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "rename-layout");
       await flush();
@@ -4492,11 +4503,18 @@ describe("c-salesforce-navigator", () => {
       expect(layoutMenuEntries(element).map((entry) => entry.label)).toEqual([
         "Selling",
         "Support",
-        "Admin"
+        "Admin",
+        "New layout…",
+        "Rename layout…",
+        "Delete layout…"
       ]);
 
+      // A canvas change made in the same session, unrelated to the refused
+      // rename, and committed by Save rather than by an autosave — Tier 1
+      // writes only happen that way once edit mode is entered.
       selectSectionMenuItem(element, 0, "columns-6");
-      await settleAutosave();
+      await flush();
+      await saveEdits(element);
 
       expect(updateLayout).toHaveBeenCalledWith(
         expect.objectContaining({ layoutId: SECOND_ID, name: "Support" })
@@ -4511,6 +4529,7 @@ describe("c-salesforce-navigator", () => {
     it("deleting the active layout leaves the layout that takes its place active and on screen", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "delete-layout");
       await flush();
@@ -4535,6 +4554,7 @@ describe("c-salesforce-navigator", () => {
         }
       ]);
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "delete-layout");
       await flush();
@@ -4555,6 +4575,7 @@ describe("c-salesforce-navigator", () => {
     it("opening the menu, and opening each of its dialogs, writes nothing for a user who has never changed anything", async () => {
       const store = installStore([]);
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       layoutMenu(element).dispatchEvent(new CustomEvent("open"));
       await settleAutosave();
@@ -4576,6 +4597,7 @@ describe("c-salesforce-navigator", () => {
     it("cancelling New layout, Rename layout and Delete layout each writes nothing", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       for (const entry of ["new-layout", "rename-layout", "delete-layout"]) {
         selectLayoutMenu(element, entry);
@@ -5011,8 +5033,18 @@ describe("c-salesforce-navigator", () => {
       // the autosave writes nothing in edit mode. Left to the debounce this
       // rename would sit behind a Save it is not supposed to wait for, and be
       // thrown away by a Cancel that is not supposed to reach it.
+      //
+      // A canvas change is made *before* the rename, per the spec's trap: a
+      // rename committed against the current canvas rather than the entry
+      // snapshot would carry that unsaved change onto the server the moment
+      // the layout was named — the exact write Cancel is supposed to be able
+      // to undo. A test that renames without first changing the canvas is
+      // green whether or not that bug exists, because there is nothing yet
+      // for the two payloads to disagree about.
       const element = await navigatorWithTabs();
       await enterEditMode(element);
+      await addSection(element);
+      expect(sectionNames(element)).toEqual(["All Items", "New section"]);
 
       selectLayoutMenu(element, "rename-layout");
       await flush();
@@ -5020,10 +5052,39 @@ describe("c-salesforce-navigator", () => {
 
       expect(createLayout).toHaveBeenCalledTimes(1);
       expect(createLayout.mock.calls[0][0].name).toBe("Daily driver");
+      // The payload is the entry snapshot — the canvas as it stood before
+      // "New section" was pressed — never the draft the canvas is showing.
+      const written = createLayout.mock.calls[0][0].layoutJson;
+      expect(
+        JSON.parse(written).sections.map((section) => section.name)
+      ).toEqual(["All Items"]);
 
       await cancelEdits(element);
 
+      // The row this write created holds the snapshot's payload, and Cancel
+      // must land on it: the section added after the write, and thrown away
+      // by Cancel, is gone — and the layout the row now names is not.
       expect(layoutMenu(element).label).toBe("Daily driver");
+      expect(sectionNames(element)).toEqual(["All Items"]);
+
+      // Remounted on the payload the write actually captured, so the section
+      // added and then cancelled is confirmed gone on the server, not merely
+      // absent from a canvas that could have been rebuilt from the seed.
+      document.body.removeChild(element);
+      jest.runOnlyPendingTimers();
+      await flush();
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: CREATED_LAYOUT_ID,
+          name: "Daily driver",
+          isActive: true,
+          isReadable: true,
+          layoutJson: written
+        }
+      ]);
+      const reloaded = await navigatorWithTabs();
+
+      expect(sectionNames(reloaded)).toEqual(["All Items"]);
     });
 
     it("commits a layout created inside an edit session, and a later Cancel leaves the new layout on screen", async () => {
@@ -5095,9 +5156,29 @@ describe("c-salesforce-navigator", () => {
       await cancelEdits(element);
       expect(announcement(element)).toBe(CANCEL_ANNOUNCEMENT);
 
+      // A real change, so this Save is a write — the no-op case is its own
+      // test below, and must not share this one's announcement.
       await enterEditMode(element);
+      await addSection(element);
       await saveEdits(element);
       expect(announcement(element)).toBe(SAVE_ANNOUNCEMENT);
+    });
+
+    it("announces that nothing was saved when Save is pressed with no changes, not a save that did not happen", async () => {
+      // The guard that correctly stops the write does not, on its own, reach
+      // the sentence: the live region is the one channel a screen-reader user
+      // has, and `CANCEL_ANNOUNCEMENT` is already worded as a fact about the
+      // write rather than about the changes. Save has to hold itself to that
+      // same standard, or this is the one path on which it lies about having
+      // saved.
+      const element = await storedNavigator();
+
+      await enterEditMode(element);
+      await saveEdits(element);
+
+      expect(announcement(element)).toBe(CANCEL_ANNOUNCEMENT);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
     });
 
     it("moves focus to the first revealed control on entry, and back to the edit affordance on the way out", async () => {

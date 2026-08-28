@@ -597,6 +597,21 @@ export default class SalesforceNavigator extends LightningElement {
   handleLayoutMenuSelect(event) {
     const value = event.detail.value;
 
+    // Tier 2 is gated behind edit mode in the template — the three
+    // `lwc:if={isEditing}` entries above it — and `handleEditStart` already
+    // re-checks `canEdit` for the same reason: a template gate is not a
+    // guarantee about a handler. Tier 3 (`layout:…`) is deliberately not
+    // included here; choosing which layout is showing is navigation, not
+    // customisation, and stays reachable whatever `isEditing` is.
+    if (
+      (value === NEW_LAYOUT ||
+        value === RENAME_LAYOUT ||
+        value === DELETE_LAYOUT) &&
+      !this.isEditing
+    ) {
+      return;
+    }
+
     if (value === NEW_LAYOUT) {
       this.openPrompt(PROMPT_NEW, "");
       return;
@@ -758,6 +773,7 @@ export default class SalesforceNavigator extends LightningElement {
     }
 
     if (!this.layoutId) {
+      const sessionSnapshot = this.editSnapshot;
       this.layoutName = name;
       this.applyLayout(this.layout);
       // Tier 2 commits on the spot, and this is the one Tier 2 act that has no
@@ -766,8 +782,25 @@ export default class SalesforceNavigator extends LightningElement {
       // writes nothing. Left to the debounce the rename would sit behind a
       // Save it is not supposed to wait for, and be thrown away by a Cancel
       // that is not supposed to reach it.
-      this.commitLayoutNow();
+      //
+      // `commitLayoutNow` addresses this write to the entry snapshot rather
+      // than to `this.layout`, so the row it creates can never carry a Tier 1
+      // draft. Once that write lands, the row holds exactly the snapshot's
+      // payload — the same thing a Cancel would restore — so the snapshot's
+      // `wasStored` moves from false to true: a Cancel after this point must
+      // restore *to* the row the user now owns, not erase it back to
+      // `undefined` on a user who by then owns one.
+      const committed = this.commitLayoutNow(
+        sessionSnapshot ? sessionSnapshot.json : undefined
+      );
       this.announce(`Layout renamed to ${name}.`);
+      if (sessionSnapshot && committed) {
+        committed.then(() => {
+          if (this.layoutId && this.editSnapshot === sessionSnapshot) {
+            this.editSnapshot = { ...sessionSnapshot, wasStored: true };
+          }
+        });
+      }
       return;
     }
 
@@ -1062,13 +1095,24 @@ export default class SalesforceNavigator extends LightningElement {
    * regardless would create one for anybody who opened the mode and closed it
    * again. The comparison is exact string equality on the canonical payload,
    * so it agrees with the write by construction.
+   *
+   * **The announcement follows the write, not the button pressed.** A Save
+   * with nothing to write leaves edit mode having written nothing — the same
+   * as a Cancel — so it says exactly what Cancel says rather than claiming a
+   * save that did not happen. `CANCEL_EDIT_ANNOUNCEMENT` is already worded as
+   * a fact about the write rather than about the changes; reusing it here
+   * holds Save to that same standard instead of inventing a second sentence
+   * that says the same thing.
    */
   handleEditSave() {
-    if (this.hasUnsavedCanvasChanges) {
+    const wroteChanges = this.hasUnsavedCanvasChanges;
+    if (wroteChanges) {
       this.commitLayoutNow();
     }
     this.leaveEditMode();
-    this.announce(SAVE_EDIT_ANNOUNCEMENT);
+    this.announce(
+      wroteChanges ? SAVE_EDIT_ANNOUNCEMENT : CANCEL_EDIT_ANNOUNCEMENT
+    );
   }
 
   /**
@@ -1652,12 +1696,17 @@ export default class SalesforceNavigator extends LightningElement {
    * that difference is the whole of it — and shared by the debounced path and
    * the two paths that write immediately, so the three cannot disagree about
    * what a save is addressed to.
+   *
+   * `layoutJson` defaults to the canvas as it stands, which is right for every
+   * caller except one: `commitLayoutNow`, mid-edit-session, passes the entry
+   * snapshot's payload instead, because "the canvas as it stands" is the Tier
+   * 1 draft there — see it for why that distinction exists at all.
    */
-  captureSaveTarget() {
+  captureSaveTarget(layoutJson = serializeLayout(this.layout)) {
     return {
       layoutId: this.layoutId,
       name: this.layoutName,
-      layoutJson: serializeLayout(this.layout)
+      layoutJson
     };
   }
 
@@ -1665,17 +1714,34 @@ export default class SalesforceNavigator extends LightningElement {
    * Writes the layout as it stands, now, instead of when a debounce would have
    * fired. `flushPendingSave` cannot do this job: it is a no-op unless a timer
    * is already armed, and in edit mode no timer is ever armed.
+   *
+   * **"As it stands" is not always `this.layout`, so a caller may override
+   * it.** `handleEditSave` calls this with nothing, and there "as it stands"
+   * rightly means the current canvas — that write is Save committing the Tier
+   * 1 draft the user asked to keep. `renameCurrentLayout`'s no-row branch is
+   * different: it is a Tier 2 act, and while editing `this.layout` is that
+   * same Tier 1 draft, not what Save would write, because the user has not
+   * pressed Save. Committing the draft there the moment a layout is named
+   * would carry it to the server behind Cancel's back, which is exactly the
+   * write explicit-save exists to prevent — so that caller passes the entry
+   * snapshot's payload instead, the canvas as it was and as Cancel would
+   * restore it.
+   *
+   * Returns the save chain so a caller that needs to know when *this*
+   * particular write has landed — `renameCurrentLayout`'s no-row branch,
+   * to flip `editSnapshot.wasStored` once the row it creates exists — can
+   * wait on it.
    */
-  commitLayoutNow() {
+  commitLayoutNow(layoutJson) {
     if (this.hasLayoutLoadError) {
-      return;
+      return undefined;
     }
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = undefined;
     }
-    this.pendingSave = this.captureSaveTarget();
-    this.save();
+    this.pendingSave = this.captureSaveTarget(layoutJson);
+    return this.save();
   }
 
   scheduleSave() {
