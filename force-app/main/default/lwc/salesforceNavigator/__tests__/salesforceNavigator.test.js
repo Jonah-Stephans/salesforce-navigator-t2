@@ -886,6 +886,97 @@ describe("c-salesforce-navigator", () => {
     });
   });
 
+  describe("the sections canvas on a phone (Small form factor stands the mechanism down)", () => {
+    // O8's whole content: on `Small`, the canvas is stood down to a single
+    // full-width track and every section spans it, restoring today's shipped
+    // behaviour rather than the six-track mechanism above. `## Design`'s own
+    // "Test entry points" note applies here exactly as it does to that
+    // mechanism: rendered width is not assertable in jest, so what these
+    // tests pin is the stylesheet that ships and the one DOM-observable fact
+    // this mechanism produces — which class reaches the canvas element —
+    // not the pixels that class then produces in a real browser. Whether the
+    // canvas actually carries that class on the `Small` form factor itself
+    // is covered in salesforceNavigator.smallFormFactor.test.js, a separate
+    // file for one mechanical reason: `@salesforce/client/formFactor` is
+    // resolved once, when this module is first required, and every other
+    // test in this file already depends on it resolving to its unmocked
+    // fallback of "Large" — so a form factor override belongs in a file of
+    // its own rather than disturbing that shared assumption here.
+    it("collapses the canvas to a single full-width track under .rstk-nav-sections_small, with no floor to overflow", () => {
+      const css = readFileSync(
+        join(__dirname, "..", "salesforceNavigator.css"),
+        "utf8"
+      );
+
+      const rule = css.match(/\.rstk-nav-sections_small\s*\{[^}]*\}/);
+      expect(rule).not.toBeNull();
+      // `minmax(0, 1fr)` carries no floor, unlike the six-track template
+      // above — there is nothing left for `overflow-x: auto` (inherited,
+      // unchanged) to ever have to scroll on this form factor.
+      expect(rule[0]).toContain("grid-template-columns: minmax(0, 1fr)");
+    });
+
+    it("overrides every span-N rule back down to span 1 while .rstk-nav-sections_small is in force, for every column count the menu offers", () => {
+      // Driven off MIN_COLUMNS/MAX_COLUMNS rather than a literal 1..6, for
+      // the same reason the six-track pin above is: a hard-coded range would
+      // stay green if the maximum ever moved and this override did not move
+      // with it. Left un-overridden, a span greater than 1 against the
+      // single explicit column of .rstk-nav-sections_small would ask the
+      // grid to generate implicit tracks to hold it — sized by
+      // grid-auto-columns, not this 1fr track — rather than collapsing to
+      // one full-width row.
+      const css = readFileSync(
+        join(__dirname, "..", "salesforceNavigator.css"),
+        "utf8"
+      );
+
+      const rule = css.match(
+        /\.rstk-nav-sections_small\s*>\s*\.rstk-nav-section_span-1[\s\S]*?\{[^}]*\}/
+      );
+      expect(rule).not.toBeNull();
+      const block = rule[0];
+
+      for (let columns = MIN_COLUMNS; columns <= MAX_COLUMNS; columns += 1) {
+        expect(block).toContain(
+          `.rstk-nav-sections_small > .rstk-nav-section_span-${columns}`
+        );
+      }
+      expect(block).toMatch(/grid-column:\s*span\s*1\b/);
+    });
+
+    it("introduces no @media query anywhere in this stylesheet", () => {
+      // The trap this closes: a width-keyed breakpoint cannot tell a phone
+      // from a zoomed-in desktop, and the zoomed-in desktop is exactly the
+      // case the design wants the horizontal scroll bar from (slice 01),
+      // not this single-track stand-down. FORM_FACTOR is the only mechanism
+      // permitted to choose between them.
+      const css = readFileSync(
+        join(__dirname, "..", "salesforceNavigator.css"),
+        "utf8"
+      );
+      // Comments are stripped first, so a mention of the string "@media" in
+      // prose — such as this file's own comment explaining why one was not
+      // used — cannot make this assertion pass without checking anything.
+      const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
+      expect(withoutComments).not.toMatch(/@media/);
+    });
+
+    it("does not put the small-form-factor class on the canvas under this file's own default form factor", async () => {
+      // Every other test in this file renders with no
+      // `@salesforce/client/formFactor` mock in place, which falls back to
+      // this module's own default of "Large" — so this is what every one of
+      // those tests' canvas already looks like, asserted directly here
+      // rather than only implied by the rest of the file passing.
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
+      await flush();
+
+      const canvas = element.shadowRoot.querySelector(".rstk-nav-sections");
+      expect(canvas).not.toBeNull();
+      expect(canvas.className).not.toContain("rstk-nav-sections_small");
+    });
+  });
+
   describe("surviving a reload", () => {
     it("renders the stored sections, names and column counts rather than the seeded layout", async () => {
       getLayouts.mockResolvedValue([

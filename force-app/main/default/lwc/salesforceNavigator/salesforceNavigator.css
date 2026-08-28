@@ -78,7 +78,8 @@
    no padding of its own; it does, below.
 
    The `Small` form factor stands this down to a single full-width track —
-   see the next slice; nothing here branches on it yet. */
+   `.rstk-nav-sections_small`, below, joins this class rather than replacing
+   it, and overrides only what it needs to. */
 .rstk-nav-sections {
   display: grid;
   grid-template-columns: repeat(
@@ -126,6 +127,48 @@
 
 .rstk-nav-section_span-6 {
   grid-column: span 6;
+}
+
+/* The `Small` form factor's stand-down: today's shipped behaviour, before
+   any of this spec's mechanism existed, restored on that one form factor.
+   `rstk-nav-sections_small` is bound alongside `rstk-nav-sections` on the
+   very same canvas element (see `sectionsCanvasClass` in
+   salesforceNavigator.js), rather than being a separate element or a
+   replacement class, so this block only has to override what the six-track
+   rule above set rather than restate the whole grid.
+
+   No `@media` query decides this, here or anywhere in this component's
+   CSS. FORM_FACTOR is a device class the platform reports once; unlike a
+   width-keyed breakpoint it cannot be changed by resizing or zooming a
+   desktop window, which is the one property this stand-down cannot afford
+   to get backwards (see the design's "Form factor, not viewport width" and
+   the trap on the same page).
+
+   `minmax(0, 1fr)` has no floor, so nothing here can ever overflow the
+   container and there is nothing for `overflow-x: auto` (inherited,
+   unchanged, above) to ever have to scroll.
+
+   Every section still carries its ordinary `.rstk-nav-section_span-N`
+   class from the same `spanClass` `resolveLayout` always computes -- that
+   computation does not change here, on this form factor or any other. Left
+   alone, a span greater than 1 against a single explicit column would ask
+   the grid to generate implicit tracks to hold it (sized by
+   `grid-auto-columns`, not this `1fr` track), which would break the single
+   full-width row this stand-down exists to produce -- so every span rule is
+   overridden back down to `span 1` here. The six rules below win on
+   specificity over the six above (two classes each, against one), so this
+   holds regardless of which block a later edit places first in the file. */
+.rstk-nav-sections_small {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.rstk-nav-sections_small > .rstk-nav-section_span-1,
+.rstk-nav-sections_small > .rstk-nav-section_span-2,
+.rstk-nav-sections_small > .rstk-nav-section_span-3,
+.rstk-nav-sections_small > .rstk-nav-section_span-4,
+.rstk-nav-sections_small > .rstk-nav-section_span-5,
+.rstk-nav-sections_small > .rstk-nav-section_span-6 {
+  grid-column: span 1;
 }
 
 /* The layout menu's three dialogs. A row, so the commit and the cancel sit

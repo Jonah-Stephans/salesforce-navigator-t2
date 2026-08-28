@@ -152,7 +152,7 @@
         </div>
       </template>
 
-      <div class="rstk-nav-sections">
+      <div class={sectionsCanvasClass}>
         <template for:each={sections} for:item="section">
           <!-- `class={section.spanClass}` is bound here, on the grid's own
                direct child, rather than on anything inside `c-navigator-section`'s
