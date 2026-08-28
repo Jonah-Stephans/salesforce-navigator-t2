@@ -249,12 +249,14 @@ rejected fixed-width model and is retracted here rather than carried.
 **Why `-16` and not the raw `26rem` an earlier pass settled on.** 26rem/416px was measured as the width
 at which the longest name in the org fits whole — 350px of label after the 66px of chrome, against the
 343px the name needs. It is therefore _exactly at_ the fitting threshold, with 7px of margin and no room
-for a longer tab name or a different font. It is also a hardcoded sizing value that the linter cannot
-catch, because no hook maps to it and so `no-hardcoded-values-slds2` never fires — the rule doc's own
-"the linter is the backstop, not the design step" case. The pass that settled on it stopped its hook
-search at `--slds-g-sizing-14` and concluded nothing matched; the scale in fact continues to `-15`
-(20rem) and `-16` (30rem). `-15` leaves 254px of label, about **30 of 40** characters, and fails the
-ceiling's one job. `-16` leaves 414px and fits the name whole with 71px to spare.
+for a longer tab name or a different font. It is also a hardcoded sizing value the linter never sees:
+`no-hardcoded-values-slds2` is **property-scoped**, and `grid-template-columns` is not a property it
+checks, so a raw length in the track function passes in silence whether or not a hook maps to it. The
+measurement is under `## Traps`. That makes this the rule doc's own "the linter is the backstop, not the
+design step" case twice over — here there is no backstop at all. The pass that settled on it stopped
+its hook search at `--slds-g-sizing-14` and concluded nothing matched; the scale in fact continues to
+`-15` (20rem) and `-16` (30rem). `-15` leaves 254px of label, about **30 of 40** characters, and fails
+the ceiling's one job. `-16` leaves 414px and fits the name whole with 71px to spare.
 
 **What moving the ceiling changes, and it is nearly nothing.** The ceiling binds only once six tracks
 plus five 1rem gaps plus 2rem of canvas padding exceed the space available: **2,608px at 416px per

@@ -43,8 +43,9 @@
    no hook mapped to it but because the rule is property-scoped and never
    checks `grid-template-columns` — see the trap on this; the scale runs
    `-13` 10rem, `-14` 15rem, `-15` 20rem, `-16` 30rem, and an earlier pass
-   stopped its search at `-14` and concluded nothing matched. The ceiling's only job is capping track
-   growth on a very wide display: six tracks always exist, so a lone
+   stopped its search at `-14` and concluded nothing matched. The
+   ceiling's only job is capping track growth on a very wide display: six
+   tracks always exist, so a lone
    one-column section is always exactly one of them and is never wider than
    any other one-column section, ceiling or no. (An earlier draft of this
    comment claimed the ceiling was what stopped a lone one-column section
