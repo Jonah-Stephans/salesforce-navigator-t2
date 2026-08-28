@@ -24,7 +24,7 @@ on a desktop who zooms in still gets the side-by-side layout and its scroll bar.
 - [ ] On the `Small` form factor every section occupies its own row at the full width of the viewport.
 - [ ] On `Small`, a section's field columns divide the section's width equally, exactly as they do today.
 - [ ] On `Small`, no horizontal scroll bar appears at any section column count.
-- [ ] On `Medium` and `Large` the behaviour built in slice 01 is unchanged.
+- [ ] On `Medium` and `Large` the behaviour built in slices 01 and 04 is unchanged.
 - [ ] Zooming in on a desktop does not switch the layout into the `Small` behaviour — it produces the
       horizontal scroll bar from slice 01 instead.
 - [ ] No CSS media query is introduced anywhere in the component.

@@ -195,6 +195,15 @@ dropdown-clipping finding:**
   more sections could still clip a dropdown neither direction has room for, or to treat that as a blocking
   gap needing a different mechanism (a design question, not this pass's to make).
 
+**Reworked design, 2026-08-28:**
+
+- 01 built O10's ceiling as a raw `26rem`; the design was reworked to express it as
+  `--slds-g-sizing-16` (30rem/480px), and slice 04 changes that value and its mechanism. Criterion 5
+  above keeps its tick, because 01 genuinely deployed and met it. Its second clause — that the ceiling
+  stops a lone one-column section stretching across an ultrawide monitor — describes something six
+  fixed tracks cannot do, and is retracted in `## Design`'s `### The floor and the ceiling`; the tick
+  stands on the first clause alone.
+
 ## Critique findings
 
 - [x] fixed — the `span-N` class never reaches a grid item, so the width mechanism is inert: `.rstk-nav-sections` (`salesforceNavigator.css:50`) is the grid and its direct children are the `<c-navigator-section>` hosts (`salesforceNavigator.html:157`), but `cardClass` puts `span-N` on an `<article>` inside `navigatorSection`'s shadow root (`navigatorSection.html:6`, `navigatorSection.js:170`), where `grid-column` applies to nothing — probed in jsdom, the grid container's own child has `className === ""` and the `<article>` has `parentElement === null`, so every section occupies exactly one of the six tracks whatever its column count, leaving criteria 1, 2, 8 and 9 ticked but unsatisfied and O1, O3 and O7 unmet
