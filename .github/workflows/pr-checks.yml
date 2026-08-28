@@ -56,15 +56,31 @@ jobs:
           # directory again, this alternation is the one line to extend, and
           # until it is extended the job sweeps nothing rather than failing
           # every pull request.
+          # Both the diff and the fallback below are defined against a pull
+          # request, so refuse anything else loudly. A gate that sweeps nothing
+          # and reports green is a worse failure than one that stops the build:
+          # silence here reads as "no open boxes" to every later reader,
+          # including Integrate. This is what the old `${GITHUB_HEAD_REF:?}`
+          # bought, kept now that the ref is no longer interpolated into a path.
+          : "${GITHUB_HEAD_REF:?not a pull request build}"
+
           SPECS=$(git diff --name-only "$(git merge-base "$BASE" HEAD)" HEAD \
                   | grep -oE '^(devpath|dev-path)/[^/]+/' | sed 's:/$::' | sort -u)
 
           # Additive: a spec branch whose pull request edited only code still
           # gets its own spec swept. Guarded on the directory existing, so it
-          # cannot reintroduce the missing-path failure this replaced.
-          for p in "devpath/$GITHUB_HEAD_REF" "dev-path/$GITHUB_HEAD_REF"; do
-            if [ -d "$p" ]; then SPECS=$(printf '%s\n%s\n' "$SPECS" "$p"); fi
-          done
+          # cannot reintroduce the missing-path failure this replaced, and on a
+          # non-empty ref independently of the check above. With an empty ref
+          # these tests reduce to `[ -d devpath/ ]`, which is true, and SPECS
+          # collapses to the whole tree — the unscoped sweep that fails this
+          # spec on a neighbouring spec's open boxes. Belt and braces on
+          # purpose: the guard above is a policy choice someone may revisit,
+          # this one is what keeps the fallback correct if they do.
+          if [ -n "$GITHUB_HEAD_REF" ]; then
+            for p in "devpath/$GITHUB_HEAD_REF" "dev-path/$GITHUB_HEAD_REF"; do
+              if [ -d "$p" ]; then SPECS=$(printf '%s\n%s\n' "$SPECS" "$p"); fi
+            done
+          fi
 
           # Keep only paths that exist at HEAD. A pull request deleting a spec
           # directory would otherwise hand grep a missing path, where it exits
@@ -80,8 +96,13 @@ jobs:
             exit 0
           fi
 
+          # `^[[:space:]]*`, never a bare `^`. A formatter that renests a
+          # list indents the box; under a bare `^` the grep finds nothing, the
+          # job goes green, and Integrate arms a merge on a spec holding an
+          # open box, with no second check that would notice. devpath's own
+          # tests/gate.sh check 4 exists to stop this anchor being narrowed.
           echo "Sweeping: $SPECS"
-          ! grep -rn '^- \[ \]' $SPECS
+          ! grep -rn '^[[:space:]]*- \[ \]' $SPECS
 
   lwc-tests:
     name: LWC jest suite
