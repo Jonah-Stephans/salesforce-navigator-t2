@@ -40,6 +40,12 @@
      drag-and-drop already separates a click from a drag. The cursor is the
      only affordance saying so. */
   cursor: grab;
+  /* Now that a column bounds this pill's width, a label longer than that
+     column must clip at the pill's own edge rather than spill past its
+     border or over the overflow menu beside it. The label span carries its
+     own overflow:hidden and the ellipsis (via slds-truncate); this is the
+     outer belt to the inner suspenders. */
+  overflow: hidden;
 }
 
 .rstk-nav-item:hover {
