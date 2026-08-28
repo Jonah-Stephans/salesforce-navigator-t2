@@ -751,6 +751,18 @@ describe("c-salesforce-navigator", () => {
         // which the canvas grid never lays out and which carried no span
         // class this component could ever style with `grid-column`.
         expect(section.className).toContain(`rstk-nav-section_span-${columns}`);
+        // And only that one — a host carrying two of the mutually-exclusive
+        // rstk-nav-section_span-1…-6 classes renders at whichever the
+        // stylesheet happens to order last, and a toContain check alone
+        // stays green on it. Run at every column count, not a single pinned
+        // one, so a duplicate emitted for only some counts cannot hide
+        // behind the one case a narrower guard would have checked. Same
+        // shape as navigatorSection.test.js's cols-N uniqueness guard
+        // (lines 199-204).
+        const appliedSpans = section.className
+          .split(/\s+/)
+          .filter((name) => /^rstk-nav-section_span-\d+$/.test(name));
+        expect(appliedSpans).toEqual([`rstk-nav-section_span-${columns}`]);
 
         await settleAutosave();
         expect(lastSavedLayout(createLayout).sections[0].columns).toBe(columns);

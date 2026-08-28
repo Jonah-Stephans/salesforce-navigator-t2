@@ -147,6 +147,54 @@ and 9:**
 - Finding 3, the `overflow-x` dropdown-clipping finding, remains untouched at the engineer's explicit
   instruction — not this pass's to fix or disposition.
 
+**Fix pass, on the uniqueness guard's coverage and an attempted fix for the `overflow-x`
+dropdown-clipping finding:**
+
+- The uniqueness guard's coverage is fixed. The `it.each([1, 2, 3, 4, 5, 6])` at
+  `salesforceNavigator.test.js:734-758` — the loop that already drives all six column counts through the
+  real column menu — now also filters the section host's class list to `/^rstk-nav-section_span-\d+$/`
+  after its `toContain` and asserts exactly one member, mirroring `navigatorSection.test.js:199-204`,
+  rather than relying on the single-case, `DEFAULT_COLUMNS`-pinned guard the previous pass added.
+  Confirmed red against the mutation named in the finding
+  (``spanClass: `rstk-nav-section_span-${columns}` + (columns === 3 ? "" : " rstk-nav-section_span-6")``
+  in `resolveLayout`, `navigatorLayoutModel.js:106`) and restored byte-for-byte; `git diff` on that file is
+  empty and the full suite is green at 449. One honest note against the finding's own prediction: the
+  guard reddened on 4 of the 6 cases (1, 2, 4, 5), not 5 — column 6's case appends a duplicate of the
+  identical class already present, and the rendered host's `className` carries that class once, not
+  twice (checked directly), because an exact-duplicate class token is inert to both the framework's own
+  class rendering and to CSS matching itself (`class="span-6 span-6"` resolves identically to
+  `class="span-6"` in any browser). The shape the trap actually warns against — two _different_ members
+  of the family landing on one host — is caught at every column count where it can occur; a same-value
+  duplicate is not a rendering hazard this or any DOM-level guard could observe, because it is not one.
+- The `overflow-x` dropdown-clipping finding was investigated this pass, at the engineer's explicit
+  authorization, looking for a fix that changes _how_ the slice is built rather than _what_ it builds.
+  Checked beyond what was already ruled out: (1) `lightning-button-menu`'s complete public attribute list,
+  fetched from the current Salesforce Lightning Component Reference — `menu-alignment` is the only
+  attribute governing dropdown position (values `left`/`center`/`right`/`bottom-left`/`bottom-center`/
+  `bottom-right`/`auto`); no attribute exists for z-index, overlay container, or portal rendering. The
+  documentation's own guidance for this exact scenario — "If you're using `lightning-button-menu` in a
+  container that specifies the `overflow:hidden` CSS property, setting `menu-alignment='auto'` makes sure
+  that the dropdown menu isn't hidden from view" — is already applied on both menus
+  (`navigatorSection.html:75`, `navigatorItem.html:60`); there is no further platform attribute to reach
+  for. (2) The CSS route: `overflow-y: clip` paired with `overflow-x: auto` does not get coerced to `auto`
+  the way `overflow-y: visible` does — the coercion rule is specific to `visible` — but `clip` still clips
+  any descendant, in-flow or absolutely positioned, that extends past the box's edge; it only forgoes a
+  scrollbar and script-driven scrolling on that axis, so a dropdown overflowing in Y is clipped exactly as
+  it is today. `visible` is the one value that would let it escape, and pairing it with a non-`visible`
+  `overflow-x` is the exact combination `## Traps` already records as forced back to `auto` — confirmed
+  against current CSS overflow documentation, not reopened. No overflow value scrolls one axis without
+  clipping descendants on the other.
+- **No route was found that keeps O4's scroll bar, keeps `lightning-button-menu`, and removes the
+  clipping risk.** Every remaining lever — replacing the platform component with a custom
+  overlay-portaled menu, dropping `.rstk-nav-sections` as the scroll container for a different mechanism,
+  or restructuring where menus render relative to the scroller — changes what this slice builds, not how.
+  Finding 3 is left open and undispositioned. **Decision needed, in the engineer's own words:** the hazard
+  is confirmed real and currently latent — today's measured case fits (350px dropdown against a 540px
+  scroller) and SLDS auto-flip already covers the one tight case tested (a bottom-row item menu opening
+  upward, no clipping) — so the question is whether to ship this slice accepting that a taller layout with
+  more sections could still clip a dropdown neither direction has room for, or to treat that as a blocking
+  gap needing a different mechanism (a design question, not this pass's to make).
+
 ## Critique findings
 
 - [x] fixed — the `span-N` class never reaches a grid item, so the width mechanism is inert: `.rstk-nav-sections` (`salesforceNavigator.css:50`) is the grid and its direct children are the `<c-navigator-section>` hosts (`salesforceNavigator.html:157`), but `cardClass` puts `span-N` on an `<article>` inside `navigatorSection`'s shadow root (`navigatorSection.html:6`, `navigatorSection.js:170`), where `grid-column` applies to nothing — probed in jsdom, the grid container's own child has `className === ""` and the `<article>` has `parentElement === null`, so every section occupies exactly one of the six tracks whatever its column count, leaving criteria 1, 2, 8 and 9 ticked but unsatisfied and O1, O3 and O7 unmet
@@ -158,4 +206,4 @@ and 9:**
 - [x] false positive — `--rstk-nav-col-min` and `--rstk-nav-col-max` are declared nowhere in the repo, but `var()` resolves to its fallback when the property is undeclared, so the 10rem floor and the 26rem ceiling do apply; the undeclared names are an override seam, not dead code
 - [x] fixed — the deleted `navigatorSection.test.js` span-N test asserted two things and only one was replaced: besides the class being present it filtered the card's class list to `/^rstk-nav-section_span-\d+$/` and required exactly one member, and nothing now covers that half — `salesforceNavigator.test.js:753` and `:847` are both `toContain`, so emitting `` spanClass: `rstk-nav-section_span-${columns} rstk-nav-section_span-6` `` from `resolveLayout` (`navigatorLayoutModel.js:106`) leaves all 449 tests green where the deleted assertion would have gone red (mutated and restored to confirm), and a host carrying two span classes renders at whichever the stylesheet orders last — six tracks wide whatever its column count, breaking O1 and O10 silently; the sibling `cols-N` uniqueness guard at `navigatorSection.test.js:199-204` survives, so the span family is now the only one of the two computed class families with no such guard
 - [x] fixed — `CARD_ARROW_DELTAS`' new doc comment (`navigatorSection.js:41-43`) justifies the reworded assistive text by contrasting the section axis with "an item's own ARROW_DELTAS in navigatorItem, genuinely moving within one section's own grid of field columns", but `navigatorItem.js:10-15` is the identical `{ ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }`, dispatched as `itemkeymove` and applied by `handleItemKeyMove` as `to = from + delta` over the flat `items` array whose members render into the `cols-N` grid — the item axis has exactly the same flat-order-versus-two-dimensional-render mismatch, `navigatorItem.html:100` already says only "move this item" for that reason, and so the contrast the comment draws is false; doc-only, and the ±1 arithmetic itself is settled and is not re-raised
-- [ ] the restored uniqueness guard runs at one column count where the deleted one ran at six: the deleted `navigatorSection.test.js` span-N test was an `it.each([1, 2, 3, 4, 5, 6])` filtering and comparing at every member of the family, while its replacement (`salesforceNavigator.test.js:855-858`) sits inside a single-case test pinned to the seeded layout's `DEFAULT_COLUMNS` of 3, and the `it.each([1, 2, 3, 4, 5, 6])` at `:734-758` that does drive all six counts through the real column menu still stops at `toContain` on `:753` — so emitting ``spanClass: `rstk-nav-section_span-${columns}` + (columns === 3 ? "" : " rstk-nav-section_span-6")`` from `resolveLayout` (`navigatorLayoutModel.js:106`) leaves all 449 tests green (mutated and restored byte-for-byte to confirm, tree left clean) where the deleted `it.each` would have gone red on five of its six cases, and a 4-column section carrying both `span-4` and `span-6` renders six tracks wide, breaking O1 and O10 exactly as the fixed finding above described; a count-dependent duplicate is the realistic shape of this hazard rather than a contrived one, because an override that has to beat a section's stored span is conditional by nature, and the fix is the same four-line filter-and-compare inside the `it.each` that already holds the `<c-navigator-section>` host it needs
+- [x] fixed — the restored uniqueness guard runs at one column count where the deleted one ran at six: the deleted `navigatorSection.test.js` span-N test was an `it.each([1, 2, 3, 4, 5, 6])` filtering and comparing at every member of the family, while its replacement (`salesforceNavigator.test.js:855-858`) sits inside a single-case test pinned to the seeded layout's `DEFAULT_COLUMNS` of 3, and the `it.each([1, 2, 3, 4, 5, 6])` at `:734-758` that does drive all six counts through the real column menu still stops at `toContain` on `:753` — so emitting ``spanClass: `rstk-nav-section_span-${columns}` + (columns === 3 ? "" : " rstk-nav-section_span-6")`` from `resolveLayout` (`navigatorLayoutModel.js:106`) leaves all 449 tests green (mutated and restored byte-for-byte to confirm, tree left clean) where the deleted `it.each` would have gone red on five of its six cases, and a 4-column section carrying both `span-4` and `span-6` renders six tracks wide, breaking O1 and O10 exactly as the fixed finding above described; a count-dependent duplicate is the realistic shape of this hazard rather than a contrived one, because an override that has to beat a section's stored span is conditional by nature, and the fix is the same four-line filter-and-compare inside the `it.each` that already holds the `<c-navigator-section>` host it needs
