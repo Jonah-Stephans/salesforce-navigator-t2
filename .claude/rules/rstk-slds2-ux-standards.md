@@ -37,6 +37,24 @@ than inventing one. Fallbacks in this document are the linter's own suggestions.
 }
 ```
 
+### The hardcoded-value rule is property-scoped, so grid track sizing is unguarded
+
+`no-hardcoded-values-slds2` checks a fixed list of properties. It does **not** check
+`grid-template-columns`, `grid-template-rows`, `gap` or `flex-basis`, so a raw length inside a grid
+track function passes `npm run lint --max-warnings 0` in silence whether or not a hook maps to it.
+Measured against a probe stylesheet under `**/lwc/**`: a raw `30rem` — which maps exactly to
+`--slds-g-sizing-16` — warns on `width` and draws nothing at all on any of those four. The rule does
+fire on unmapped values, so a silent pass says nothing about whether a hook exists.
+
+Two consequences:
+
+- **Search the whole `--slds-g-sizing-*` scale before concluding nothing matches.** It runs
+  `-13` (10rem), `-14` (15rem), `-15` (20rem), `-16` (30rem), and stops. A raw `26rem` shipped for
+  three fix cycles because a search stopped at `-14`.
+- **Where lint cannot reach, a test has to.** A stylesheet-text pin over the track function is the
+  only guard there is, and it must be able to fail on a raw length reappearing anywhere in it —
+  floor, ceiling or track count.
+
 ### Never author against `--slds-c-*`, `--slds-s-*`, `--lwc-*` or `--sds-*`
 
 `--slds-g-*` is the only authoring target. `--slds-c-*` component hooks are unsupported under SLDS 2
