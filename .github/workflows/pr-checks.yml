@@ -29,43 +29,59 @@ jobs:
 
   open-boxes:
     name: no undispositioned open boxes
-    # This job infers its sweep path from the branch name, and that inference
-    # is the whole problem: `devpath/${GITHUB_HEAD_REF}` only resolves on a
-    # branch named after a spec directory. A lessons branch is already
-    # devpath/lessons/<slug>, so the path doubles to
-    # devpath/devpath/lessons/<slug>; a ci/ or chore/ branch has no spec
-    # directory at all. Either way `test -d` fails and the job goes red for a
-    # reason unrelated to open boxes.
-    #
-    # The slash is a stand-in for "is this a spec branch". It holds because
-    # spec branches here are bare slugs and everything else carries a type/
-    # prefix, and it keeps the signal `test -d` exists to give: a bare slug
-    # whose directory is missing is still red. Understand it as a convention
-    # check, not a fact check. The durable fix is to derive the spec directory
-    # from the files the pull request actually touches, so that nothing here
-    # depends on how somebody named a branch.
-    if: >-
-      github.event.pull_request.draft == false &&
-      !contains(github.head_ref, '/')
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: grep the spec directory for open boxes
+        with:
+          # The diff below needs the base commit, which a depth-1 checkout of
+          # the merge ref does not have.
+          fetch-depth: 0
+      - name: sweep the spec directories this pull request touches
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          # The slug comes from the pull request's head ref, never from
-          # `git branch --show-current` — this runs on a detached HEAD, where
-          # that returns empty and the path collapses to an unscoped sweep of
-          # devpath/, failing this spec on a neighbour's open boxes.
-          # `test -d` is what makes a wrong slug red: grep -r on a missing
-          # directory exits 2, and a leading `!` would turn that into a pass.
+          # This job used to build its sweep path by gluing `devpath/` onto the
+          # head ref, which only resolves on a branch named after a spec
+          # directory. A lessons branch is already devpath/lessons/<slug>, so
+          # the path doubled; a ci/ or chore/ branch has no spec directory at
+          # all. Either way the path did not exist and the job went red for a
+          # reason unrelated to open boxes. Skipping branches whose name held a
+          # slash fixed the symptom and left the guess in place.
           #
-          # devpath/, no hyphen: the installed plugin (0.4.0) fixes this as the
-          # spec directory, hardcoded in its own hooks in .claude/settings.json.
-          # The first spec on this repo predates that convention and still
-          # lives under dev-path/ (hyphenated) — this check only needs to match
-          # what new specs land at, not migrate the old one.
-          SPEC="devpath/${GITHUB_HEAD_REF:?not a pull request build}"
-          test -d "$SPEC" && ! grep -rn '^- \[ \]' "$SPEC/"
+          # The spec directories now come from the diff, so nothing here
+          # depends on what anybody named a branch. `dev-path/` (hyphenated) is
+          # matched alongside `devpath/` because the first spec on this repo
+          # predates the current convention; if the plugin renames the
+          # directory again, this alternation is the one line to extend, and
+          # until it is extended the job sweeps nothing rather than failing
+          # every pull request.
+          SPECS=$(git diff --name-only "$(git merge-base "$BASE" HEAD)" HEAD \
+                  | grep -oE '^(devpath|dev-path)/[^/]+/' | sed 's:/$::' | sort -u)
+
+          # Additive: a spec branch whose pull request edited only code still
+          # gets its own spec swept. Guarded on the directory existing, so it
+          # cannot reintroduce the missing-path failure this replaced.
+          for p in "devpath/$GITHUB_HEAD_REF" "dev-path/$GITHUB_HEAD_REF"; do
+            if [ -d "$p" ]; then SPECS=$(printf '%s\n%s\n' "$SPECS" "$p"); fi
+          done
+
+          # Keep only paths that exist at HEAD. A pull request deleting a spec
+          # directory would otherwise hand grep a missing path, where it exits
+          # 2 and the leading `!` below would read that as a pass.
+          KEPT=""
+          for p in $SPECS; do
+            if [ -d "$p" ]; then KEPT="$KEPT $p"; fi
+          done
+          SPECS=$(printf '%s' "$KEPT" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+
+          if [ -z "$SPECS" ]; then
+            echo "No spec directory in this diff, and none named by the branch. Nothing to sweep."
+            exit 0
+          fi
+
+          echo "Sweeping: $SPECS"
+          ! grep -rn '^- \[ \]' $SPECS
 
   lwc-tests:
     name: LWC jest suite
