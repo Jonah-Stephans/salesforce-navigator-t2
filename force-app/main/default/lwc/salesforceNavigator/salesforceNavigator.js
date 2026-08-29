@@ -371,6 +371,21 @@ export default class SalesforceNavigator extends LightningElement {
   // which call to make.
   saveChain = Promise.resolve();
 
+  /**
+   * The most recent `commitLayoutNow` create still waiting on its round trip
+   * for a user who owns no row, or `undefined` once none is outstanding.
+   *
+   * `captureSaveTarget` reads `this.layoutId` synchronously, and for a user
+   * with no row that stays `undefined` until this create resolves and
+   * `rememberSaved` adopts the id it returns — so a second immediate write
+   * made inside that window would otherwise be captured with `layoutId:
+   * undefined` too, exactly as the first one was, and become a second
+   * `createLayout` rather than the update it should be. `commitLayoutNow` is
+   * the only reader and writer of this field; see it for how the wait is
+   * used to fold the second write onto the row the first one is creating.
+   */
+  creatingLayout;
+
   // Indexed by page number rather than appended to, so that a wire
   // re-emission for a page already received (an LDS cache refresh
   // redelivering the current, possibly final, page — a normal event for a
@@ -1182,6 +1197,18 @@ export default class SalesforceNavigator extends LightningElement {
     this.isEditing = false;
     this.editSnapshot = undefined;
     this.editFocusTarget = EDIT_FOCUS_LEAVE;
+    // A Tier 2 prompt is customisation UI and has no business outliving the
+    // mode that revealed it: the "New layout…" / "Rename layout…" input and
+    // the "Delete layout…" confirmation render on `hasItems`, not on
+    // `isEditing`, so leaving edit mode by either route — Save or Cancel —
+    // would otherwise leave one standing, with its commit and its confirm
+    // button both still wired to act. Closing it here, in the one place edit
+    // mode ends, removes the prompt from the DOM outright rather than adding
+    // an `isEditing` re-check to each of its two handlers — one guard instead
+    // of two, per `rstk-dry-enforcement.md`, and it also fixes the case a
+    // handler-side check alone would not: the stale dialog itself, which a
+    // screen reader would otherwise still announce as open.
+    this.closePrompt();
     // Any keyboard grab still in flight ends with the mode. This is a
     // correctness bug rather than a nicety: `renderedCallback` restores focus
     // to a grabbed card *by index*, and a stale grab pointing at a card that
@@ -1731,6 +1758,19 @@ export default class SalesforceNavigator extends LightningElement {
    * particular write has landed — `renameCurrentLayout`'s no-row branch,
    * to flip `editSnapshot.wasStored` once the row it creates exists — can
    * wait on it.
+   *
+   * **A create still in flight is made visible to the next call, here and
+   * nowhere else.** Both callers — Save and `renameCurrentLayout`'s no-row
+   * branch — reach the server through this one method, so this is the single
+   * place `rstk-dry-enforcement.md` asks the guard to live, rather than a
+   * copy at each call site. Without it, a second call made before the first
+   * create's round trip lands would read `this.layoutId` as still `undefined`
+   * — precisely as the first call did — and be captured as another create,
+   * leaving the user with two rows and the server's active flag on whichever
+   * one lands last. `creatingLayout` names that window: a call made inside it
+   * waits for the in-flight create and then calls itself again, so it
+   * captures *after* `this.layoutId` is known and lands as an update of the
+   * row the first call is creating, never as a second row.
    */
   commitLayoutNow(layoutJson) {
     if (this.hasLayoutLoadError) {
@@ -1740,8 +1780,19 @@ export default class SalesforceNavigator extends LightningElement {
       clearTimeout(this.saveTimer);
       this.saveTimer = undefined;
     }
+    if (!this.layoutId && this.creatingLayout) {
+      return this.creatingLayout.then(() => this.commitLayoutNow(layoutJson));
+    }
     this.pendingSave = this.captureSaveTarget(layoutJson);
-    return this.save();
+    const isCreate = !this.pendingSave.layoutId;
+    const result = this.save();
+    if (isCreate) {
+      this.creatingLayout = result.then(() => {
+        this.creatingLayout = undefined;
+      });
+      return this.creatingLayout;
+    }
+    return result;
   }
 
   scheduleSave() {

@@ -4337,17 +4337,62 @@ describe("c-salesforce-navigator", () => {
     });
 
     /**
-     * `rememberSaved`'s create-adoption guard needed *two* concurrent creates
+     * Re-review finding C. Narrowing the race above to `scheduleSave`'s
+     * `isEditing` guard dropped the suite's only coverage of `persist`'s
+     * `stillExists` early return — and that guard is still reachable, just
+     * not through the autosave. Save is an immediate write and does not check
+     * `isEditing`: pressed while this layout's own delete is still in flight,
+     * it captures `target.layoutId` as the doomed row, and by the time it
+     * runs, `adoptFromStore` has already dropped that row from
+     * `this.layouts`. Disabling `stillExists` here calls `updateLayout` on a
+     * layout that no longer exists and reports a save error about it.
+     */
+    it("a Save that lands after its own layout has been deleted writes nothing and reports no save error", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      const releaseDelete = store.deferNextDelete();
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await flush();
+
+      // Still looking at Support — the delete has not landed — and Save is
+      // pressed on it while the delete is in flight.
+      expect(sectionNames(element)).toEqual(["Support"]);
+      await saveEdits(element);
+
+      releaseDelete();
+      await flush();
+      await flush();
+      await flush();
+
+      expect(sectionNames(element)).toEqual(["Admin"]);
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(store.names()).toEqual(["Selling", "Admin"]);
+      expect(store.activeName()).toBe("Admin");
+      expect(element.shadowRoot.querySelector('[role="alert"]')).toBeNull();
+    });
+
+    /**
+     * `rememberSaved`'s create-adoption guard does not need a Tier 1 autosave
      * to reach — one from *New layout*, one from an ordinary Tier 1 autosave
-     * racing it. Once Tier 2 requires edit mode, that second create cannot
-     * happen any more: a Tier 1 change made during this wait is a draft held
-     * by the same session, never an autosave of its own, so the two creates
-     * this guard exists to referee can no longer occur together. See the
-     * slice's fix-pass report for the mutation check confirming the guard is
-     * now unreachable by any user path, kept for the same reason the file's
-     * other unreachable-by-construction guards are kept. What remains
-     * reachable, and is what this proves now, is that the screen shows
-     * nothing of the new layout until the write actually lands.
+     * racing it was the pairing the fix pass measured, and once Tier 2
+     * requires edit mode that specific pairing cannot happen any more: a
+     * Tier 1 change made during this wait is a draft held by the same
+     * session, never an autosave of its own. **Re-review correction:** that
+     * is not the only pairing, and the fix pass's conclusion — that the
+     * guard is therefore unreachable by any user path — does not follow from
+     * it. `createNewLayout` does not leave edit mode, so a user can press
+     * Save on the draft it is replacing while its own create is still in
+     * flight; the test below this one reaches the guard through exactly
+     * that pairing. What this test proves is narrower and still true: the
+     * screen shows nothing of the new layout until the write actually lands.
      */
     it("a new layout being created does not show on screen until the write lands", async () => {
       const store = installStore([]);
@@ -4373,6 +4418,56 @@ describe("c-salesforce-navigator", () => {
       await flush();
 
       expect(store.names()).toEqual(["Weekly review"]);
+      expect(
+        layoutMenuEntries(element)
+          .filter((entry) => entry.checked)
+          .map((entry) => entry.label)
+      ).toEqual(["Weekly review"]);
+    });
+
+    /**
+     * Re-review finding B. `rememberSaved`'s create-adoption guard
+     * (`!target.layoutId && this.layoutId === undefined`) is live, not dead.
+     * `createNewLayout` does not leave edit mode, so a user can press Save —
+     * an immediate write — on the draft it is replacing while its own create
+     * is still in flight. That Save is captured with `layoutId: undefined`,
+     * exactly as New layout's own create was, and by the time it lands
+     * `this.layoutId` already names the layout New layout created. With the
+     * guard intact the switcher's checked entry stays on New layout's row;
+     * collapsed to `if (!target.layoutId)`, adopting the Save's id
+     * unconditionally would move it back onto the draft the user has already
+     * moved on from.
+     */
+    it("a Save that lands after New layout does not move the active layout back to the draft it replaced", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      const releaseCreate = store.deferNextCreate();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+
+      // The abandoned draft, saved while New layout's create is still in
+      // flight.
+      await saveEdits(element);
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
       expect(
         layoutMenuEntries(element)
           .filter((entry) => entry.checked)
@@ -5087,6 +5182,75 @@ describe("c-salesforce-navigator", () => {
       expect(sectionNames(reloaded)).toEqual(["All Items"]);
     });
 
+    /**
+     * Re-review finding A. `commitLayoutNow` calls `captureSaveTarget`
+     * synchronously, and that reads `this.layoutId` — which stays `undefined`
+     * for a user with no row until the rename's create round trip lands. A
+     * Save pressed before it lands must not be captured with `layoutId:
+     * undefined` too, or it becomes a second `createLayout` and the user ends
+     * up with two rows, the server's active flag on whichever lands last.
+     * The first Apex call is deferred so the second act can be made inside
+     * the wait, per the spec's trap on this exact hazard.
+     */
+    it("a Save issued while a no-row rename's create is still in flight updates that row instead of creating a second one", async () => {
+      let releaseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = () =>
+              resolve({
+                layoutId: CREATED_LAYOUT_ID,
+                name: "Daily driver",
+                isActive: true
+              });
+          })
+      );
+      updateLayout.mockImplementationOnce(({ layoutId, name, layoutJson }) =>
+        Promise.resolve({ layoutId, name, layoutJson, isActive: true })
+      );
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+      await addSection(element);
+      expect(sectionNames(element)).toEqual(["All Items", "New section"]);
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await commitLayoutName(element, "Daily driver");
+
+      // The rename's create has been issued and is being held open.
+      expect(createLayout).toHaveBeenCalledTimes(1);
+
+      await saveEdits(element);
+
+      // Still just the one create — Save must wait rather than issue its own.
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).not.toHaveBeenCalled();
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // At most one row: the second write landed as an update of the row the
+      // first one created, never as a create of its own.
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ layoutId: CREATED_LAYOUT_ID })
+      );
+      expect(layoutMenu(element).label).toBe("Daily driver");
+      expect(
+        Array.from(
+          element.shadowRoot.querySelectorAll("lightning-menu-item")
+        ).filter((entry) => entry.checked)
+      ).toHaveLength(1);
+      // Save's write is what landed: the section added after the rename
+      // survives, because Save committed the full canvas onto the row the
+      // rename created.
+      expect(sectionNames(element)).toEqual(["All Items", "New section"]);
+    });
+
     it("commits a layout created inside an edit session, and a later Cancel leaves the new layout on screen", async () => {
       createLayout.mockResolvedValue({
         layoutId: CREATED_LAYOUT_ID,
@@ -5141,6 +5305,57 @@ describe("c-salesforce-navigator", () => {
       expect(sectionNames(element)).toEqual(["All Items"]);
       expect(createLayout).not.toHaveBeenCalled();
       expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    // ---------------------------------------------------------------
+    // Re-review finding D: a Tier 2 prompt cannot outlive the mode that
+    // opened it. The inline prompt renders on `hasItems`, not on `isEditing`,
+    // so leaving edit mode used to leave it standing, with its commit and its
+    // confirm button both still wired to act.
+    // ---------------------------------------------------------------
+
+    it("closes an open delete-layout prompt when Cancel ends edit mode, so the confirm button cannot act", async () => {
+      // Reproduced: enter edit mode, open "Delete layout…", press Cancel —
+      // the affordance comes back, and the confirmation used to still be on
+      // screen with a working button.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      expect(
+        element.shadowRoot.querySelector('[role="alertdialog"]')
+      ).not.toBeNull();
+
+      await cancelEdits(element);
+
+      expect(
+        element.shadowRoot.querySelector('[role="alertdialog"]')
+      ).toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      expect(deleteLayout).not.toHaveBeenCalled();
+    });
+
+    it("closes an open rename prompt when Save ends edit mode, so a stray commit does not fire afterward", async () => {
+      // New layout and Rename layout leak the same way, through
+      // `handleLayoutNameCommit` — this drives the naming prompt through the
+      // other exit route, Save, so both handlers and both routes out of the
+      // mode are covered between the two tests.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input")
+      ).not.toBeNull();
+
+      await saveEdits(element);
+
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input")
+      ).toBeNull();
+      expect(renameLayout).not.toHaveBeenCalled();
     });
 
     // ---------------------------------------------------------------
