@@ -4330,6 +4330,20 @@ describe("c-salesforce-navigator", () => {
       }));
     }
 
+    /**
+     * Whether the switcher's `value` entry is `disabled` right now — a
+     * separate helper from `layoutMenuEntries` rather than a new key added to
+     * it, because that function's return shape is asserted with `toEqual`
+     * against object literals elsewhere in this file and a new key would
+     * break every one of them for a fact they are not about.
+     */
+    function menuItemDisabled(element, value) {
+      const item = Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).find((entry) => entry.value === value);
+      return item ? item.disabled === true : undefined;
+    }
+
     function selectLayoutMenu(element, value) {
       layoutMenu(element).dispatchEvent(
         new CustomEvent("select", { detail: { value } })
@@ -4916,19 +4930,29 @@ describe("c-salesforce-navigator", () => {
     });
 
     /**
-     * Revised per Jonah's decision (2026-08-31): a no-row rename that lands
-     * inside New layout's round trip is a *different* act from New layout —
-     * it is addressed to whatever was on screen when the user typed it, not
-     * to the row New layout is creating. Both acts are honoured: the rename
-     * gets its own row, New layout keeps its own, and the Navigator shows
-     * whichever the user is actually looking at (New layout, since
-     * `this.layoutId` never moves off it while its own create is what
-     * resolves last on the client). This test used to pin the opposite —
-     * the rename silently folded into New layout's row and the name typed
-     * reached nothing, `createLayout` called once and `store.names()` just
-     * `["Weekly review"]`. See the finding this replaces for the repro.
+     * Superseded by the sixth pass's lockout (Jonah's decision, 2026-08-31).
+     * This test used to pin the *coalescing* mechanism's correctness under an
+     * overlap the client used to allow — a no-row rename made while New
+     * layout's own create was still open landed as its own, separate row
+     * rather than silently folding into it. `isWriteLocked` now closes that
+     * overlap outright: Rename layout is one of the four writing controls it
+     * disables — the `disabled` attribute in the template and the
+     * handler-side re-check in `handleLayoutMenuSelect` both — for as long as
+     * *any* of the four has a round trip outstanding, so the rename prompt
+     * cannot even be opened until New layout's create lands. What remains
+     * true and reachable is checked instead: the attempt does nothing while
+     * locked, and once New layout's create settles, that is the layout on
+     * screen — renaming it renames that one row, not a second.
+     *
+     * The mutation this test used to catch — `rememberSaved`'s create-
+     * adoption guard, `!target.layoutId && this.layoutId === undefined`,
+     * collapsed to `if (!target.layoutId)` — needs two creates racing for the
+     * same rowless user to discriminate at all, and the lockout is exactly
+     * what makes that pairing unreachable now; see the corresponding
+     * `## Deviations` bullet on whether anything else in this file still
+     * discriminates it.
      */
-    it("a no-row rename that lands after New layout creates its own row rather than losing the rename", async () => {
+    it("cannot open Rename layout while New layout's create is still open, and renames the layout it created once it lands", async () => {
       const store = installStore([]);
       const element = await navigatorOnStore(store);
       await enterEditMode(element);
@@ -4947,20 +4971,14 @@ describe("c-salesforce-navigator", () => {
       input.dispatchEvent(new CustomEvent("commit"));
       await flush();
 
-      // A no-row rename, issued while New layout's create is still in
-      // flight — addressed to what was on screen at that moment, not to the
-      // row New layout is about to create.
+      // The attempt itself: Rename layout is disabled while New layout's own
+      // create is still outstanding, and selecting it does nothing — no
+      // prompt opens, and no second `createLayout` is queued behind it.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(true);
       selectLayoutMenu(element, "rename-layout");
       await flush();
-      await typeLayoutName(element, "Renamed");
-
-      // The act happened — asserted here, before New layout's create even
-      // lands, so a later coalescing bug that erases it cannot also erase
-      // this assertion's evidence. `store.names()` and `activeName()` are
-      // the floor, not the ceiling: this checks that the announcement made
-      // matches the rename actually performed.
-      const region = element.shadowRoot.querySelector(".rstk-nav-announcer");
-      expect(spoken(region.textContent)).toBe("Layout renamed to Renamed.");
+      expect(promptInput(element)).toBeNull();
+      expect(createLayout).toHaveBeenCalledTimes(1);
 
       releaseCreate();
       await flush();
@@ -4969,71 +4987,41 @@ describe("c-salesforce-navigator", () => {
       await flush();
       await flush();
 
-      // Two rows, not one: New layout's own, and the rename's own, each
-      // still under its own name.
-      expect(createLayout).toHaveBeenCalledTimes(2);
-      expect(store.names()).toEqual(["Weekly review", "Renamed"]);
-      expect(store.activeName()).toBe("Weekly review");
+      // The lock has cleared: Rename layout is available again, and it
+      // renames the layout New layout created, since that is what is on
+      // screen now.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Renamed");
 
-      // Re-review finding 3. `rememberSaved`'s create-adoption guard
-      // (`!target.layoutId && this.layoutId === undefined`) is a surviving
-      // mutant on `store.names()` and `store.activeName()` alone, because
-      // the create's own `makeActive` now asks the same question the guard
-      // asks — the store stops moving under the mutation and the switcher
-      // is what moves instead. Collapsed to `if (!target.layoutId)`, the
-      // rename's create adopts `this.layoutId` unconditionally and the
-      // checked entry moves onto "Renamed" — a layout the user is not
-      // looking at and one the server holds inactive.
-      expect(
-        layoutMenuEntries(element)
-          .filter((entry) => entry.checked)
-          .map((entry) => entry.label)
-      ).toEqual(["Weekly review"]);
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(store.names()).toEqual(["Renamed"]);
+      expect(store.activeName()).toBe("Renamed");
     });
 
     /**
-     * Re-review finding 2, adapted rather than inherited. The finding's own
-     * probe: a create the server rejects leaves a no-row user with
-     * `layoutId` undefined and the draft still in `storedLayout`, so
-     * re-entering edit mode takes the draft, not the seed, as the new
-     * session's entry snapshot; New layout then races a no-row rename
-     * exactly as the test above does. The finding asked this to pin
-     * `commitLayoutNow`'s post-wait re-resolution of the entry-snapshot
-     * override against `this.editSnapshot`, which at the time was
-     * completely uncovered.
+     * Superseded by the sixth pass's lockout (Jonah's decision, 2026-08-31),
+     * for the same reason as the test above and for one more of its own. The
+     * original scenario needed a no-row rename to land *while* New layout's
+     * own create was still open, captured against the abandoned six-column
+     * draft a rejected Save had left in `storedLayout` — `isWriteLocked`
+     * forecloses the overlap itself, and by the time Rename layout is
+     * available again, New layout's own successful create has already
+     * replaced the canvas with its own seed (`createNewLayout`'s success
+     * handler sets `storedLayout` and re-takes the entry snapshot), so the
+     * rejected draft is gone before a rename could ever reach it — there is
+     * no sequence left that reaches a rename holding six columns here.
      *
-     * It no longer can. That re-resolution existed to correct a *fold* — a
-     * second write recapturing after waiting on a distinct act's create,
-     * onto the row that act made. Finding 1's fix removes the fold itself
-     * for exactly this pairing: a no-row rename racing a distinct create
-     * (`createNewLayout`'s) now falls through and makes its own row,
-     * addressed to its own entry snapshot, without ever waiting on New
-     * layout's create or re-reading `this.editSnapshot` afterward. Checked
-     * both ways rather than assumed: collapsing the wait's re-resolution to
-     * a bare `return inFlight.promise.then(() => this.commitLayoutNow(layoutJson));`
-     * leaves this test, and the full suite, identically green — the create
-     * this rename makes is captured before any wait, so nothing this pass
-     * touches ever exercises the collapsed line differently. A second probe
-     * (two no-row renames in a row, the second racing the first's own
-     * still-open create) is the only remaining way to reach that branch at
-     * all post-fix, and there `this.editSnapshot.json` never moves either,
-     * for the same reason: nothing but a *distinct* act's `resnapshotEdit`
-     * ever changes it, and a distinct act no longer waits. So the line is
-     * reachable in that one remaining shape but not mutation-discriminating
-     * in it. No production change follows from this: the branch still
-     * defends the invariant it was written for, if a future `resnapshotEdit`
-     * call site is ever added that is not tagged `distinct` — it is dead
-     * today by construction, the same standing as the two guards this
-     * slice's Deviations already keep on that basis, not a hazard to clean
-     * up.
-     *
-     * What this test pins instead, and what remains true and worth pinning:
-     * the rename's own row is unaffected by the abandoned draft being what
-     * the *entry snapshot* now holds — it is written correctly, under its
-     * own name, with the content that was actually on screen when the user
-     * renamed it, and New layout's row is not corrupted by it.
+     * What the prior rejection can still affect, and what remains worth
+     * checking: that its stale draft does not leak into New layout's own
+     * seed. Structurally this cannot happen — `createNewLayout` seeds from
+     * `this.items`, the live tab list, never from `this.layout` — but that
+     * guarantee is worth a direct assertion rather than an inference from
+     * reading the method, and the rejection is what puts a draft in
+     * `storedLayout` for it to fail to leak from.
      */
-    it("a no-row rename racing New layout after an earlier create was rejected still writes its own row correctly", async () => {
+    it("a rejected create's abandoned draft does not leak into a New layout made afterward", async () => {
       const store = installStore([]);
       const element = await navigatorOnStore(store);
       await enterEditMode(element);
@@ -5047,49 +5035,32 @@ describe("c-salesforce-navigator", () => {
       await saveEdits(element);
 
       // Re-entering takes the abandoned draft as this session's entry
-      // snapshot, not the seed — the exact condition the finding's probe
-      // needs for a no-row rename's own row to hold anything other than
-      // New layout's seeded content.
+      // snapshot, not the seed.
       await enterEditMode(element);
+      expect(renderedColumns(element, 0)).toBe(6);
 
-      const releaseCreate = store.deferNextCreate();
       selectLayoutMenu(element, "new-layout");
       await flush();
-      const input = promptInput(element);
-      input.dispatchEvent(
-        new CustomEvent("change", { detail: { value: "Weekly review" } })
-      );
-      input.dispatchEvent(new CustomEvent("commit"));
-      await flush();
+      await typeLayoutName(element, "Weekly review");
 
+      // New layout's own seed, three columns — not the rejected draft's six.
+      expect(store.names()).toEqual(["Weekly review"]);
+      expect(JSON.parse(store.rows[0].layoutJson).sections[0].columns).toBe(3);
+      expect(renderedColumns(element, 0)).toBe(3);
+
+      // The lock has cleared now that New layout's create has landed:
+      // Rename layout renames the layout actually on screen.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
       selectLayoutMenu(element, "rename-layout");
       await flush();
       await typeLayoutName(element, "Renamed");
 
-      releaseCreate();
-      await flush();
-      await flush();
-      await flush();
-      await flush();
-      await flush();
-
-      expect(store.names()).toEqual(["Weekly review", "Renamed"]);
-      expect(store.activeName()).toBe("Weekly review");
-
-      // New layout's row holds its own seed, three columns, untouched by
-      // the rejected draft.
-      const weeklyReview = store.rows.find(
-        (row) => row.name === "Weekly review"
-      );
-      expect(JSON.parse(weeklyReview.layoutJson).sections[0].columns).toBe(3);
-
-      // The rename's own row holds what was actually on screen when the
-      // user renamed it — the abandoned six-column draft, not New layout's
-      // seed and not silently dropped.
-      const renamed = store.rows.find((row) => row.name === "Renamed");
-      expect(renamed).toBeDefined();
-      expect(renamed.isActive).toBe(false);
-      expect(JSON.parse(renamed.layoutJson).sections[0].columns).toBe(6);
+      // Two `createLayout` calls total: the rejected one from the earlier
+      // Save, and New layout's own successful one — never a third, since the
+      // rename above is a with-row rename of the layout New layout created.
+      expect(createLayout).toHaveBeenCalledTimes(2);
+      expect(store.names()).toEqual(["Renamed"]);
+      expect(store.activeName()).toBe("Renamed");
     });
 
     /**
@@ -5105,13 +5076,28 @@ describe("c-salesforce-navigator", () => {
      * !this.creatingLayout`, skipped the wait a bare call is documented to
      * always take, and was captured as a third create.
      *
-     * A refused create is what opens the window: a create that succeeds
-     * sets `this.layoutId`, and the wait's own `!this.layoutId` guard
-     * closes it before a second act can reach the bug. New layout's create
-     * is refused here — not merely delayed — which is what no other test
-     * in the file does.
+     * **Superseded by the sixth pass's lockout (Jonah's decision,
+     * 2026-08-31), and this is finding 2's own disposition.** Finding 2
+     * asked for coverage of `commitLayoutNow`'s ownership check on its own
+     * create's clear, walking exactly the sequence this test used to: a
+     * no-row rename's create held open, New layout's own create *also*
+     * started and refused inside that window, then Save pressed while the
+     * rename's create was still open. `isWriteLocked` closes the setup at
+     * its second step — New layout is one of the four controls the lockout
+     * disables while any of them, including a rename, has a round trip
+     * outstanding — so New layout can no longer be attempted at all while
+     * the rename's own create is open, refused or not. This is unreachable
+     * rather than corrected: no production line inside `commitLayoutNow`
+     * changed for this disposition, and the ownership check itself stands
+     * exactly as finding 1 left it, as defence in depth behind the lockout
+     * rather than the thing now closing the race.
+     *
+     * What remains true and reachable, walked as far as it still goes: New
+     * layout and Save are both genuinely blocked while the rename's own
+     * create is open, and once it clears, Save is an ordinary single write
+     * — the only shape a write can still take once two cannot overlap.
      */
-    it("a Save made while a no-row rename's create is open still updates that row after a distinct create it raced was refused", async () => {
+    it("New layout and Save are both blocked while a no-row rename's create is open, closing the race finding 2 asked for coverage of", async () => {
       const store = installStore([]);
       const element = await navigatorOnStore(store);
       await enterEditMode(element);
@@ -5119,51 +5105,28 @@ describe("c-salesforce-navigator", () => {
       selectSectionMenuItem(element, 0, "columns-6");
       await flush();
 
-      // New layout's create — held open, then refused rather than
-      // resolved. `store.deferNextCreate()` only ever resolves the call it
-      // holds, so this one is built by hand.
-      let refuseNewLayoutCreate;
-      createLayout.mockImplementationOnce(
-        () =>
-          new Promise((_resolve, reject) => {
-            refuseNewLayoutCreate = () =>
-              reject(new Error("That layout could not be saved."));
-          })
-      );
-
-      selectLayoutMenu(element, "new-layout");
-      await flush();
-      const input = promptInput(element);
-      input.dispatchEvent(
-        new CustomEvent("change", { detail: { value: "Weekly review" } })
-      );
-      input.dispatchEvent(new CustomEvent("commit"));
-      await flush();
-
-      // The rename falls through past New layout's still-open `distinct`
-      // create and queues its own — held open too, so the window this
-      // finding needs (Save pressed after New layout settles but before
-      // the rename's own create does) is wide rather than a one-microtask
-      // race. Registered before New layout is released, so it is the
-      // *second* call the mock queue hands out regardless of when the
-      // rename's actual Apex call fires.
       const releaseRenameCreate = store.deferNextCreate();
       selectLayoutMenu(element, "rename-layout");
       await flush();
       await typeLayoutName(element, "Renamed");
 
-      // New layout's create is refused while the rename's own is still
-      // open.
-      refuseNewLayoutCreate();
+      // New layout, attempted while the rename's own create is still open:
+      // blocked, not raced. This is the step finding 2's own probe needed
+      // to get past to reach `commitLayoutNow`'s ownership-check race, and
+      // it cannot anymore.
+      expect(menuItemDisabled(element, "new-layout")).toBe(true);
+      selectLayoutMenu(element, "new-layout");
       await flush();
-      await flush();
-      await flush();
+      expect(promptInput(element)).toBeNull();
+      expect(createLayout).toHaveBeenCalledTimes(1);
 
-      // Save, pressed while the rename's own create is still in flight.
-      // On the regression this reads `creatingLayout` as empty (New
-      // layout's settlement wiped the rename's entry) and issues a third
-      // `createLayout` of its own.
+      // Save, attempted in the same window, is blocked the same way — it
+      // does nothing rather than waiting to coalesce.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
       await saveEdits(element);
+      expect(updateLayout).not.toHaveBeenCalled();
 
       releaseRenameCreate();
       await flush();
@@ -5172,82 +5135,90 @@ describe("c-salesforce-navigator", () => {
       await flush();
       await flush();
 
-      // One row for the rename, not two: Save waited on the rename's
-      // in-flight create and landed as an update of the row it made,
-      // never as a create of its own. New layout made no row at all —
-      // its create was refused.
-      expect(createLayout).toHaveBeenCalledTimes(2);
+      // The lock has cleared: Save now updates the row the rename created
+      // — the only write left to make, since the race this finding named
+      // has no walkable path to it anymore.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        false
+      );
+      await saveEdits(element);
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
       expect(updateLayout).toHaveBeenCalledTimes(1);
       expect(store.names()).toEqual(["Renamed"]);
-      expect(store.activeName()).toBe("Renamed");
-
-      // Save's own write is what landed on the row, not lost on a second,
-      // inactive, identically named one: the six-column change is there.
       const renamed = store.rows.find((row) => row.name === "Renamed");
       expect(JSON.parse(renamed.layoutJson).sections[0].columns).toBe(6);
     });
 
     /**
-     * Finding 2, re-review. The comment on `commitLayoutNow`'s wait
-     * previously claimed the ternary re-resolving an override against
-     * `this.editSnapshot` was unreachable with effect, on the grounds that
-     * "the only thing that ever moves `editSnapshot.json` mid-session is
-     * `resnapshotEdit`." That enumeration missed two routes: re-entering
-     * edit mode re-takes the snapshot on every entry
-     * (`handleEditStart`'s `captureEditSnapshot()`), and for a no-row user
-     * the snapshot is built from `this.items`, which the tab wire can
-     * redeliver on an LDS cache refresh. This walks both: a second no-row
-     * rename waits on the first's still-open create, the session is
-     * cancelled and re-entered with a shorter tab list in between, and the
-     * wait clears only after the snapshot has moved twice.
+     * Superseded by the sixth pass's lockout (Jonah's decision, 2026-08-31).
+     * The original scenario needed a *second* no-row rename to be attempted
+     * while the first's own create was still open, so `commitLayoutNow`'s
+     * wait-and-recapture branch would re-read `this.editSnapshot` after the
+     * wait cleared rather than replay the stale value handed in when the
+     * second call was made. `isWriteLocked` forecloses attempting a second
+     * Tier 2 act at all while the first has a round trip outstanding — Rename
+     * layout disables the instant the first rename's create begins — so that
+     * branch has no remaining route through the UI; see the corresponding
+     * `## Deviations` bullet. And once the first rename's create has landed,
+     * `this.layoutId` is set, so a rename attempted afterward is no longer a
+     * no-row rename at all: it is the ordinary with-row path (`renameLayout`,
+     * which "carries no payload"), and there is no sequence left in which a
+     * *second* no-row rename's payload could ever be built from a snapshot
+     * other than the one current when it was made — there is no longer a
+     * second no-row rename to be made.
+     *
+     * What that leaves worth pinning, in place of the original: once a
+     * no-row rename's create has landed, a later rename of the same layout
+     * changes only its name — the canvas the first rename actually sent
+     * survives untouched, whatever the tab list has done since.
      */
-    it("a no-row rename's overridden write resolves against the entry snapshot current when its wait clears, not the one handed in when it started", async () => {
+    it("a rename made after a no-row rename's create has landed changes only the name, not the canvas it already sent", async () => {
       const store = installStore([]);
       const element = await navigatorOnStore(store);
       await enterEditMode(element);
 
-      // The first rename's create — held open so the second rename below
-      // has something to wait on.
-      const releaseFirstCreate = store.deferNextCreate();
+      const releaseCreate = store.deferNextCreate();
       selectLayoutMenu(element, "rename-layout");
       await flush();
       await typeLayoutName(element, "First");
 
-      // A second no-row rename, made while the first's create is still
-      // open. It is an overridden call, and the first rename's create is
-      // not `distinct`, so it waits rather than folding into a `distinct`
-      // act — this is the branch under test.
+      // A second attempt, while the first's create is still open, does
+      // nothing: Rename layout is locked.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(true);
       selectLayoutMenu(element, "rename-layout");
       await flush();
-      await typeLayoutName(element, "Second");
+      expect(promptInput(element)).toBeNull();
 
-      await cancelEdits(element);
-
-      // An LDS cache refresh redelivering a shorter tab list is a normal
+      // A tab list change arriving while the create is in flight — a normal
       // event for a UI API adapter, per this file's own comment on
       // `wiredNavItems`.
       getNavItems.emit({ navItems: [ACCOUNT_ITEM] });
       await flush();
 
-      // Re-entering re-takes the entry snapshot. This user still owns no
-      // row — the first rename's create has not landed yet — so the fresh
-      // snapshot is built from `this.items` as it now stands: one item,
-      // not the three the second rename's write started with.
-      await enterEditMode(element);
-
-      releaseFirstCreate();
+      releaseCreate();
       await flush();
       await flush();
       await flush();
       await flush();
       await flush();
 
-      // One row, under the second rename's name, holding the entry
-      // snapshot as it stood when the wait cleared — one item — not the
-      // stale three-item snapshot the write was made against.
+      // The lock has cleared, and `this.layoutId` now names the row the
+      // first rename created — a second rename is an ordinary with-row
+      // rename, not a second no-row create.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Second");
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(renameLayout).toHaveBeenCalledTimes(1);
       expect(store.names()).toEqual(["Second"]);
+
+      // The name changed; the canvas the first rename actually sent — three
+      // items, from before the tab list shrank — did not.
       const row = store.rows.find((existing) => existing.name === "Second");
-      expect(JSON.parse(row.layoutJson).sections[0].items).toHaveLength(1);
+      expect(JSON.parse(row.layoutJson).sections[0].items).toHaveLength(3);
     });
 
     it("the chosen layout is still the active one after a reload", async () => {
@@ -5436,6 +5407,97 @@ describe("c-salesforce-navigator", () => {
       expect(itemLabelsBySection(element)).toEqual([
         ["Accounts", "Contacts", "Action Plans"]
       ]);
+    });
+
+    // ---------------------------------------------------------------
+    // The lockout (sixth pass, Jonah's decision, 2026-08-31): while any one
+    // of the four writing controls has a round trip outstanding, all four
+    // disable — not only the one pressed — so a second layout operation
+    // cannot be issued inside the first's server round trip.
+    // ---------------------------------------------------------------
+
+    it("Delete layout disables all four writing controls while its own delete is outstanding, and clears them once it lands", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      const releaseDelete = store.deferNextDelete();
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await flush();
+
+      // The delete is outstanding: every one of the four controls is
+      // disabled, not only Delete layout itself.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
+      expect(menuItemDisabled(element, "new-layout")).toBe(true);
+      expect(menuItemDisabled(element, "rename-layout")).toBe(true);
+      expect(menuItemDisabled(element, "delete-layout")).toBe(true);
+
+      // None of them can be issued while locked — attempting each does
+      // nothing.
+      await saveEdits(element);
+      expect(updateLayout).not.toHaveBeenCalled();
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      expect(promptInput(element)).toBeNull();
+
+      releaseDelete();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // The lock has cleared: all four are available again.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        false
+      );
+      expect(menuItemDisabled(element, "new-layout")).toBe(false);
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+      expect(store.names()).toEqual(["Selling", "Admin"]);
+    });
+
+    it("the lockout clears on a refused write exactly as it does on a successful one", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      // New layout's own create — held open, then refused rather than
+      // resolved.
+      let refuseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            refuseCreate = () =>
+              reject(new Error("That layout could not be saved."));
+          })
+      );
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await typeLayoutName(element, "Weekly review");
+
+      // Locked while the refusal is still pending.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(true);
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
+
+      refuseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // A refusal clears the lock exactly as a success does — a stuck-open
+      // lockout would be worse than the race it exists to close.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        false
+      );
+      expect(store.rows).toEqual([]);
     });
 
     // ---------------------------------------------------------------
@@ -5977,8 +6039,20 @@ describe("c-salesforce-navigator", () => {
      * up with two rows, the server's active flag on whichever lands last.
      * The first Apex call is deferred so the second act can be made inside
      * the wait, per the spec's trap on this exact hazard.
+     *
+     * **Updated for the sixth pass's lockout (Jonah's decision, 2026-08-31).**
+     * A Save pressed in this window used to *wait* on the rename's create and
+     * land automatically once it resolved — `commitLayoutNow`'s coalescing
+     * mechanism, finding A's own fix. `isWriteLocked` disables Save outright
+     * for as long as the rename's create is outstanding, so that Save press
+     * is now a no-op rather than a queued wait: nothing lands until the user
+     * presses Save again, which they can once the lock clears. What the
+     * mechanism used to do automatically, the lockout now makes into two
+     * explicit user actions — but the outcome finding A cared about is the
+     * same: never a second row, and the row that exists ends up holding the
+     * full canvas.
      */
-    it("a Save issued while a no-row rename's create is still in flight updates that row instead of creating a second one", async () => {
+    it("Save is blocked while a no-row rename's create is still in flight, and updates that row once pressed again after it lands", async () => {
       let releaseCreate;
       createLayout.mockImplementationOnce(
         () =>
@@ -6006,9 +6080,11 @@ describe("c-salesforce-navigator", () => {
       // The rename's create has been issued and is being held open.
       expect(createLayout).toHaveBeenCalledTimes(1);
 
+      // Save, pressed while that create is still open: blocked, not queued.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
       await saveEdits(element);
-
-      // Still just the one create — Save must wait rather than issue its own.
       expect(createLayout).toHaveBeenCalledTimes(1);
       expect(updateLayout).not.toHaveBeenCalled();
 
@@ -6017,6 +6093,13 @@ describe("c-salesforce-navigator", () => {
       await flush();
       await flush();
       await flush();
+
+      // The lock has cleared: Save is available again, and pressing it now
+      // is what actually commits the canvas.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        false
+      );
+      await saveEdits(element);
 
       // At most one row: the second write landed as an update of the row the
       // first one created, never as a create of its own.
@@ -6227,6 +6310,128 @@ describe("c-salesforce-navigator", () => {
 
       expect(moved[moved.length - 1]).toBe(
         element.shadowRoot.querySelector(EDIT_AFFORDANCE)
+      );
+    });
+
+    // ---------------------------------------------------------------
+    // The lockout (sixth pass, Jonah's decision, 2026-08-31)
+    // ---------------------------------------------------------------
+
+    function menuItemDisabled(element, value) {
+      const item = Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).find((entry) => entry.value === value);
+      return item ? item.disabled === true : undefined;
+    }
+
+    it("disables Save, New layout and Rename layout while New layout's own create is outstanding, and clears them once it lands", async () => {
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+
+      let releaseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = () =>
+              resolve({
+                layoutId: CREATED_LAYOUT_ID,
+                name: "Weekly review",
+                isActive: true
+              });
+          })
+      );
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
+      expect(menuItemDisabled(element, "new-layout")).toBe(true);
+      expect(menuItemDisabled(element, "rename-layout")).toBe(true);
+
+      releaseCreate();
+      await flush();
+      await flush();
+
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        false
+      );
+      expect(menuItemDisabled(element, "new-layout")).toBe(false);
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+    });
+
+    it("moves focus to the layout switcher when New layout's own create leaves it disabled without leaving edit mode", async () => {
+      // New layout does not leave edit mode, unlike Save — so it cannot rely
+      // on the pencil hand-off `EDIT_FOCUS_LEAVE` gives Save. The prompt it
+      // was pressed from closes (`closePrompt()`) without restoring focus on
+      // its own, so the switcher — the control that opened the prompt in the
+      // first place — is where the deliberate hand-off has to land, or focus
+      // falls to `document.body`, Trap 3's hazard one control over.
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+
+      let releaseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = () =>
+              resolve({
+                layoutId: CREATED_LAYOUT_ID,
+                name: "Weekly review",
+                isActive: true
+              });
+          })
+      );
+
+      const moved = recordFocusMoves();
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+
+      expect(moved[moved.length - 1]).toBe(
+        element.shadowRoot.querySelector(".rstk-nav-layout-menu")
+      );
+
+      releaseCreate();
+      await flush();
+      await flush();
+    });
+
+    it("announces that the writing controls are unavailable while New layout's own create is outstanding, superseded once it lands", async () => {
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+
+      let releaseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = () =>
+              resolve({
+                layoutId: CREATED_LAYOUT_ID,
+                name: "Weekly review",
+                isActive: true
+              });
+          })
+      );
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+
+      expect(announcement(element)).toBe(
+        "Saving. Save, New layout, Rename layout and Delete layout are unavailable until this finishes."
+      );
+
+      releaseCreate();
+      await flush();
+      await flush();
+
+      // Superseded once the create lands — a screen reader user is told
+      // what actually happened, not left holding the busy message.
+      expect(announcement(element)).toBe(
+        "Weekly review created and now showing."
       );
     });
   });

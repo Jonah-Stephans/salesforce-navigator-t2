@@ -32,15 +32,23 @@
              customisation and is gated with everything else. Absent from the
              DOM rather than disabled, so neither the tab order nor a screen
              reader can reach an entry the user is not being offered. -->
+        <!-- Sixth pass: New layout, Rename layout and Delete layout are three
+             of the four writing controls the lockout disables while any of
+             them has a round trip outstanding — `disabled`, not `lwc:if`,
+             because this is a transient busy state rather than a mode; the
+             opposite of the absence rule the gate itself uses elsewhere, and
+             deliberately so. See `isWriteLocked`. -->
         <template lwc:if={isEditing}>
           <lightning-menu-divider></lightning-menu-divider>
           <lightning-menu-item
             value="new-layout"
             label="New layout…"
+            disabled={isWriteLocked}
           ></lightning-menu-item>
           <lightning-menu-item
             value="rename-layout"
             label="Rename layout…"
+            disabled={isWriteLocked}
           ></lightning-menu-item>
           <!-- Absent, not disabled, for a user with no stored layout: there is
                nothing to delete, and an entry that cannot do what it says is
@@ -49,6 +57,7 @@
             <lightning-menu-item
               value="delete-layout"
               label="Delete layout…"
+              disabled={isWriteLocked}
             ></lightning-menu-item>
           </template>
         </template>
@@ -74,11 +83,17 @@
           label="Cancel"
           onclick={handleEditCancel}
         ></lightning-button>
+        <!-- The fourth writing control the lockout disables — see the note
+             above the layout menu's New/Rename/Delete entries. Cancel is
+             deliberately not one of them: it does not write, and Tier 2's
+             own seam already means Cancel does not reach a Tier 2 act
+             outstanding here regardless of the lockout. -->
         <lightning-button
           slot="actions"
           class="rstk-nav-edit-save"
           label="Save"
           variant="brand"
+          disabled={isWriteLocked}
           onclick={handleEditSave}
         ></lightning-button>
       </template>

@@ -153,6 +153,17 @@ const SAVE_EDIT_ANNOUNCEMENT = "Changes saved. Edit mode off.";
 const CANCEL_EDIT_ANNOUNCEMENT = "Edit mode off. Nothing was saved.";
 
 /**
+ * Sixth pass, Jonah's decision (2026-08-31): the writing controls disable
+ * while one of their own acts is outstanding, so a screen reader user is told
+ * why Save/New layout/Rename layout/Delete layout just stopped responding
+ * rather than left to wonder. Named explicitly rather than left generic
+ * ("Saving…") because the four are exactly what `isWriteLocked` disables —
+ * see it and `beginWrite`.
+ */
+const WRITE_LOCK_ANNOUNCEMENT =
+  "Saving. Save, New layout, Rename layout and Delete layout are unavailable until this finishes.";
+
+/**
  * Where focus goes on the render that follows an edit-mode transition, and the
  * selectors it goes to.
  *
@@ -163,12 +174,31 @@ const CANCEL_EDIT_ANNOUNCEMENT = "Edit mode off. Nothing was saved.";
  * as "the first revealed control in the action row, or Cancel if New section is
  * not rendered". Never Save: a stray Enter on the control that has just taken
  * focus must not commit the session.
+ *
+ * **`lock` is the sixth pass's addition.** Committing New layout, Rename
+ * layout or Delete layout closes the inline prompt (`closePrompt()`) without
+ * restoring focus anywhere, and none of those three acts leaves edit mode —
+ * so the control the user just pressed is gone and focus would otherwise fall
+ * to `document.body`, the exact hazard Trap 3 names at the pencil. It goes to
+ * the layout switcher, since that is the control that opened the prompt in
+ * the first place. Save is the exception among the four writing controls: it
+ * always calls `leaveEditMode()` in the same handler, and that assigns
+ * `EDIT_FOCUS_LEAVE` *after* `beginWrite` would have assigned `lock` — so the
+ * later write wins and Save's own press still restores focus to the pencil,
+ * unchanged from before this pass.
  */
 const EDIT_FOCUS_ENTER = "enter";
 const EDIT_FOCUS_LEAVE = "leave";
+const EDIT_FOCUS_LOCK = "lock";
 const EDIT_ENTRY_FOCUS_SELECTOR =
   ".rstk-nav-new-section, .rstk-nav-edit-cancel";
 const EDIT_AFFORDANCE_SELECTOR = ".rstk-nav-edit";
+const WRITE_LOCK_FOCUS_SELECTOR = ".rstk-nav-layout-menu";
+const EDIT_FOCUS_SELECTORS = {
+  [EDIT_FOCUS_ENTER]: EDIT_ENTRY_FOCUS_SELECTOR,
+  [EDIT_FOCUS_LEAVE]: EDIT_AFFORDANCE_SELECTOR,
+  [EDIT_FOCUS_LOCK]: WRITE_LOCK_FOCUS_SELECTOR
+};
 
 /**
  * The same distinguisher `navigatorSection` carries for the item axis, for
@@ -284,6 +314,22 @@ export default class SalesforceNavigator extends LightningElement {
    * render that reveals it.
    */
   editFocusTarget;
+
+  /**
+   * How many of the four writing acts — Save, New layout, Rename layout,
+   * Delete layout — have an outstanding round trip right now. Backs
+   * `isWriteLocked`, which the template disables all four controls on: the
+   * sixth pass's lockout, and now the primary guard against the "two rows for
+   * one user" class of race — see `creatingLayout` for the backstop this
+   * stands in front of, which stays rather than being removed.
+   *
+   * A counter, not a boolean, because `beginWrite`/`endWrite` are called at
+   * each act's own external entry point (not inside `commitLayoutNow`, whose
+   * internal wait-and-retry can itself take a moment) and a defensive floor
+   * of zero in `endWrite` means a stray extra call can never make it negative
+   * and hold the lockout open past its own act finishing.
+   */
+  writeInFlight = 0;
 
   saveTimer;
 
@@ -420,6 +466,21 @@ export default class SalesforceNavigator extends LightningElement {
    * the second's entry out from under it, and the next immediate write
    * sees no create in flight and makes a row of its own instead of
    * waiting — closed by the fix to slice 01's finding 1.
+   *
+   * **Sixth pass: this mechanism is now the backstop, not the primary
+   * guard.** `isWriteLocked` disables all four writing controls while any one
+   * of them has a round trip outstanding, and `handleEditSave` and
+   * `handleLayoutMenuSelect` both re-check it in the handler, not only in the
+   * template — so a second write can no longer be *issued* while a first is
+   * in flight, which is the precondition every interleaving this field
+   * unwinds depends on. This field, `distinct`, the ownership checks on both
+   * writers' clears, and the wait in `commitLayoutNow` all stay: they are
+   * defence-in-depth behind the lockout, not superseded by it, per
+   * `.claude/rules/rstk-preserve-defensive-checks.md` and the same argument
+   * `## Design`'s "The draft boundary" already makes about the debounce —
+   * neutered, not deleted. Nothing here is claimed dead by construction; that
+   * claim has been made about this file three times before this pass and was
+   * wrong twice.
    */
   creatingLayout;
 
@@ -655,11 +716,19 @@ export default class SalesforceNavigator extends LightningElement {
     // guarantee about a handler. Tier 3 (`layout:…`) is deliberately not
     // included here; choosing which layout is showing is navigation, not
     // customisation, and stays reachable whatever `isEditing` is.
+    //
+    // **`isWriteLocked` joins the re-check as of the sixth pass, for the same
+    // "template gate is not a guarantee about a handler" reasoning.** The
+    // `disabled` attribute on these three `lightning-menu-item`s is the
+    // visible half of the lockout; this is the half that holds even if that
+    // attribute is ever bypassed. It is what makes New layout and Rename
+    // layout unable to open a *second* prompt while one of the four writing
+    // acts already has a round trip outstanding — see `isWriteLocked`.
     if (
       (value === NEW_LAYOUT ||
         value === RENAME_LAYOUT ||
         value === DELETE_LAYOUT) &&
-      !this.isEditing
+      (!this.isEditing || this.isWriteLocked)
     ) {
       return;
     }
@@ -786,6 +855,15 @@ export default class SalesforceNavigator extends LightningElement {
     // `creatingLayout` would go unread. See `creatingLayout` for why this is
     // a write-only use of the field here.
     const wasRowless = !this.layoutId;
+    // Sixth pass: New layout is one of the four writing controls the lockout
+    // disables while any of them has a round trip outstanding. Branched off
+    // `created` with its own `.finally()` rather than folded into the
+    // `.then()`/`.catch()` above or into what gets assigned to
+    // `this.saveChain` below — a second subscriber on the same promise runs
+    // on its own schedule and cannot change when `this.saveChain` itself
+    // settles, so every other write already chained onto it keeps the exact
+    // timing it had before this pass.
+    this.beginWrite();
     const created = this.saveChain
       .then(() => createLayout({ name, layoutJson, makeActive: true }))
       .then((saved) => {
@@ -808,6 +886,7 @@ export default class SalesforceNavigator extends LightningElement {
           SAVE_ERROR_MESSAGE
         );
       });
+    created.finally(() => this.endWrite());
     this.saveChain = created;
     if (wasRowless) {
       // Cleared only if this call's own entry is still the one in the
@@ -868,9 +947,21 @@ export default class SalesforceNavigator extends LightningElement {
       // `wasStored` moves from false to true: a Cancel after this point must
       // restore *to* the row the user now owns, not erase it back to
       // `undefined` on a user who by then owns one.
+      // Sixth pass: this is one of the two paths that reach `commitLayoutNow`
+      // (the other is Save), and Rename layout is one of the four writing
+      // controls the lockout disables while any of them has a round trip
+      // outstanding. Wrapped around `commitLayoutNow`'s own return value,
+      // never around `commitLayoutNow` itself — it already covers its own
+      // internal wait-and-retry, since that call does not settle until every
+      // recursion has. `commitLayoutNow` can return `undefined` only when
+      // `hasLayoutLoadError` holds, which cannot be true in edit mode; the
+      // fallback costs one line and removes any dependence on that chain
+      // holding forever.
+      this.beginWrite();
       const committed = this.commitLayoutNow(
         sessionSnapshot ? sessionSnapshot.json : undefined
       );
+      (committed || Promise.resolve()).finally(() => this.endWrite());
       this.announce(`Layout renamed to ${name}.`);
       if (sessionSnapshot && committed) {
         committed.then(() => {
@@ -885,7 +976,12 @@ export default class SalesforceNavigator extends LightningElement {
     const layoutId = this.layoutId;
     const previousName = this.layoutName;
     this.adoptLayoutName(layoutId, name);
-    this.saveChain = this.saveChain
+    // Sixth pass, same reasoning as the no-row branch above and as
+    // `createNewLayout`: branched off `renamed` with its own `.finally()`
+    // rather than folded into the chain assigned to `this.saveChain`, so this
+    // pass changes nothing about when `this.saveChain` itself settles.
+    this.beginWrite();
+    const renamed = this.saveChain
       .then(() => renameLayout({ layoutId, name }))
       .then((saved) => {
         this.saveErrorMessage = undefined;
@@ -899,6 +995,8 @@ export default class SalesforceNavigator extends LightningElement {
           SAVE_ERROR_MESSAGE
         );
       });
+    renamed.finally(() => this.endWrite());
+    this.saveChain = renamed;
   }
 
   /**
@@ -934,7 +1032,12 @@ export default class SalesforceNavigator extends LightningElement {
       return;
     }
     this.discardPendingSave();
-    this.saveChain = this.saveChain
+    // Sixth pass, same reasoning as the other three writing controls:
+    // branched off `deleted` with its own `.finally()`, so this pass changes
+    // nothing about when `this.saveChain` itself settles for whatever is
+    // chained onto it next.
+    this.beginWrite();
+    const deleted = this.saveChain
       .then(() => deleteLayout({ layoutId }))
       .then((rows) => {
         this.saveErrorMessage = undefined;
@@ -947,6 +1050,8 @@ export default class SalesforceNavigator extends LightningElement {
           SAVE_ERROR_MESSAGE
         );
       });
+    deleted.finally(() => this.endWrite());
+    this.saveChain = deleted;
   }
 
   /**
@@ -1181,11 +1286,27 @@ export default class SalesforceNavigator extends LightningElement {
    * a fact about the write rather than about the changes; reusing it here
    * holds Save to that same standard instead of inventing a second sentence
    * that says the same thing.
+   *
+   * **Re-checks `isWriteLocked` on the way in, the same reasoning already
+   * applied to `handleEditStart`'s `canEdit` re-check: a template gate — the
+   * `disabled` attribute on the Save button — is not a guarantee about a
+   * handler.** This is what actually closes the race the sixth pass exists
+   * for, not the attribute; see `isWriteLocked`.
    */
   handleEditSave() {
+    if (this.isWriteLocked) {
+      return;
+    }
     const wroteChanges = this.hasUnsavedCanvasChanges;
     if (wroteChanges) {
-      this.commitLayoutNow();
+      this.beginWrite();
+      const written = this.commitLayoutNow();
+      // `commitLayoutNow` only returns `undefined` when `hasLayoutLoadError`
+      // holds, which cannot be true here — reaching Save requires having
+      // been in edit mode, which requires `canEdit`, which requires
+      // `!hasLayoutLoadError` — but the fallback costs one line and removes
+      // any dependence on that chain holding forever.
+      (written || Promise.resolve()).finally(() => this.endWrite());
     }
     this.leaveEditMode();
     this.announce(
@@ -1254,6 +1375,58 @@ export default class SalesforceNavigator extends LightningElement {
       return false;
     }
     return serializeLayout(this.layout) !== this.editSnapshot.json;
+  }
+
+  /**
+   * Whether any of the four writing acts — Save, New layout, Rename layout,
+   * Delete layout — has an outstanding round trip. The template disables all
+   * four on this, whichever one is actually in flight: the point is that a
+   * *second* layout operation cannot be issued inside the first's round trip,
+   * not only that the same one cannot be pressed twice.
+   */
+  get isWriteLocked() {
+    return this.writeInFlight > 0;
+  }
+
+  /**
+   * Call at each of the four writing acts' own entry point — `handleEditSave`,
+   * `createNewLayout`, both branches of `renameCurrentLayout`, and
+   * `deleteCurrentLayout` — never inside `commitLayoutNow` itself. Wrapping
+   * the outer call is what makes this safe to add without touching
+   * `commitLayoutNow`'s own wait-and-retry: whatever it returns does not
+   * settle until every internal recursion has, so a `.finally(() =>
+   * this.endWrite())` on the outer call's own return value already covers the
+   * whole window regardless of how many times it recurses, with no risk of
+   * this counter going stale mid-wait.
+   *
+   * Also owns the two accessibility obligations that come with disabling a
+   * control the user just pressed: an announcement, since a screen reader
+   * user gets no other signal that the four controls just went quiet, and a
+   * focus hand-off, since New layout, Rename layout and Delete layout all
+   * close the inline prompt they were pressed from (`closePrompt()`) without
+   * restoring focus, and none of the three leaves edit mode — see
+   * `EDIT_FOCUS_LOCK`. Save is the exception: it always calls `leaveEditMode`
+   * in the same handler, and that assigns `EDIT_FOCUS_LEAVE` after this
+   * assigns `EDIT_FOCUS_LOCK`, so the later write wins and Save keeps
+   * returning focus to the pencil, unchanged.
+   *
+   * The announcement is gated to the 0→1 transition only, so a call made
+   * while another is already outstanding — which `isWriteLocked` and the
+   * handler-side re-checks below mean should not happen from a real user
+   * gesture, but this stays cheap insurance against announcing "unavailable"
+   * twice in a row for one busy period.
+   */
+  beginWrite() {
+    this.writeInFlight += 1;
+    if (this.writeInFlight === 1) {
+      this.announce(WRITE_LOCK_ANNOUNCEMENT);
+    }
+    this.editFocusTarget = EDIT_FOCUS_LOCK;
+  }
+
+  /** The other half of `beginWrite`. Clears on failure exactly as it does on success — both reach this the same way, through `.finally()` on the act's own promise, never through its `.then()` alone. */
+  endWrite() {
+    this.writeInFlight = Math.max(0, this.writeInFlight - 1);
   }
 
   leaveEditMode() {
@@ -1748,11 +1921,8 @@ export default class SalesforceNavigator extends LightningElement {
       return;
     }
     this.editFocusTarget = undefined;
-    const selector =
-      transition === EDIT_FOCUS_ENTER
-        ? EDIT_ENTRY_FOCUS_SELECTOR
-        : EDIT_AFFORDANCE_SELECTOR;
-    const control = this.template.querySelector(selector);
+    const selector = EDIT_FOCUS_SELECTORS[transition];
+    const control = selector ? this.template.querySelector(selector) : null;
     if (control && this.template.activeElement !== control) {
       control.focus();
     }
