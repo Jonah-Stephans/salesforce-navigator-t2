@@ -4525,10 +4525,19 @@ describe("c-salesforce-navigator", () => {
     });
 
     /**
-     * The same hazard through the other pairing the finding names: a no-row
-     * rename, rather than Save, landing inside New layout's round trip.
+     * Revised per Jonah's decision (2026-08-31): a no-row rename that lands
+     * inside New layout's round trip is a *different* act from New layout —
+     * it is addressed to whatever was on screen when the user typed it, not
+     * to the row New layout is creating. Both acts are honoured: the rename
+     * gets its own row, New layout keeps its own, and the Navigator shows
+     * whichever the user is actually looking at (New layout, since
+     * `this.layoutId` never moves off it while its own create is what
+     * resolves last on the client). This test used to pin the opposite —
+     * the rename silently folded into New layout's row and the name typed
+     * reached nothing, `createLayout` called once and `store.names()` just
+     * `["Weekly review"]`. See the finding this replaces for the repro.
      */
-    it("a no-row rename that lands after New layout does not create a second row on the server", async () => {
+    it("a no-row rename that lands after New layout creates its own row rather than losing the rename", async () => {
       const store = installStore([]);
       const element = await navigatorOnStore(store);
       await enterEditMode(element);
@@ -4548,7 +4557,105 @@ describe("c-salesforce-navigator", () => {
       await flush();
 
       // A no-row rename, issued while New layout's create is still in
-      // flight — the draft it would otherwise commit is the abandoned one.
+      // flight — addressed to what was on screen at that moment, not to the
+      // row New layout is about to create.
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Renamed");
+
+      // The act happened — asserted here, before New layout's create even
+      // lands, so a later coalescing bug that erases it cannot also erase
+      // this assertion's evidence. `store.names()` and `activeName()` are
+      // the floor, not the ceiling: this checks that the announcement made
+      // matches the rename actually performed.
+      const region = element.shadowRoot.querySelector(".rstk-nav-announcer");
+      expect(spoken(region.textContent)).toBe("Layout renamed to Renamed.");
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // Two rows, not one: New layout's own, and the rename's own, each
+      // still under its own name.
+      expect(createLayout).toHaveBeenCalledTimes(2);
+      expect(store.names()).toEqual(["Weekly review", "Renamed"]);
+      expect(store.activeName()).toBe("Weekly review");
+    });
+
+    /**
+     * Re-review finding 2, adapted rather than inherited. The finding's own
+     * probe: a create the server rejects leaves a no-row user with
+     * `layoutId` undefined and the draft still in `storedLayout`, so
+     * re-entering edit mode takes the draft, not the seed, as the new
+     * session's entry snapshot; New layout then races a no-row rename
+     * exactly as the test above does. The finding asked this to pin
+     * `commitLayoutNow`'s post-wait re-resolution of the entry-snapshot
+     * override against `this.editSnapshot`, which at the time was
+     * completely uncovered.
+     *
+     * It no longer can. That re-resolution existed to correct a *fold* — a
+     * second write recapturing after waiting on a distinct act's create,
+     * onto the row that act made. Finding 1's fix removes the fold itself
+     * for exactly this pairing: a no-row rename racing a distinct create
+     * (`createNewLayout`'s) now falls through and makes its own row,
+     * addressed to its own entry snapshot, without ever waiting on New
+     * layout's create or re-reading `this.editSnapshot` afterward. Checked
+     * both ways rather than assumed: collapsing the wait's re-resolution to
+     * a bare `return inFlight.promise.then(() => this.commitLayoutNow(layoutJson));`
+     * leaves this test, and the full suite, identically green — the create
+     * this rename makes is captured before any wait, so nothing this pass
+     * touches ever exercises the collapsed line differently. A second probe
+     * (two no-row renames in a row, the second racing the first's own
+     * still-open create) is the only remaining way to reach that branch at
+     * all post-fix, and there `this.editSnapshot.json` never moves either,
+     * for the same reason: nothing but a *distinct* act's `resnapshotEdit`
+     * ever changes it, and a distinct act no longer waits. So the line is
+     * reachable in that one remaining shape but not mutation-discriminating
+     * in it. No production change follows from this: the branch still
+     * defends the invariant it was written for, if a future `resnapshotEdit`
+     * call site is ever added that is not tagged `distinct` — it is dead
+     * today by construction, the same standing as the two guards this
+     * slice's Deviations already keep on that basis, not a hazard to clean
+     * up.
+     *
+     * What this test pins instead, and what remains true and worth pinning:
+     * the rename's own row is unaffected by the abandoned draft being what
+     * the *entry snapshot* now holds — it is written correctly, under its
+     * own name, with the content that was actually on screen when the user
+     * renamed it, and New layout's row is not corrupted by it.
+     */
+    it("a no-row rename racing New layout after an earlier create was rejected still writes its own row correctly", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      // A change, then a Save the server rejects: `layoutId` stays
+      // undefined and the draft stays in `storedLayout` rather than being
+      // replaced by a seed the server never confirmed.
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      createLayout.mockRejectedValueOnce(new Error("The save failed."));
+      await saveEdits(element);
+
+      // Re-entering takes the abandoned draft as this session's entry
+      // snapshot, not the seed — the exact condition the finding's probe
+      // needs for a no-row rename's own row to hold anything other than
+      // New layout's seeded content.
+      await enterEditMode(element);
+
+      const releaseCreate = store.deferNextCreate();
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+
       selectLayoutMenu(element, "rename-layout");
       await flush();
       await typeLayoutName(element, "Renamed");
@@ -4560,9 +4667,23 @@ describe("c-salesforce-navigator", () => {
       await flush();
       await flush();
 
-      expect(createLayout).toHaveBeenCalledTimes(1);
-      expect(store.names()).toEqual(["Weekly review"]);
+      expect(store.names()).toEqual(["Weekly review", "Renamed"]);
       expect(store.activeName()).toBe("Weekly review");
+
+      // New layout's row holds its own seed, three columns, untouched by
+      // the rejected draft.
+      const weeklyReview = store.rows.find(
+        (row) => row.name === "Weekly review"
+      );
+      expect(JSON.parse(weeklyReview.layoutJson).sections[0].columns).toBe(3);
+
+      // The rename's own row holds what was actually on screen when the
+      // user renamed it — the abandoned six-column draft, not New layout's
+      // seed and not silently dropped.
+      const renamed = store.rows.find((row) => row.name === "Renamed");
+      expect(renamed).toBeDefined();
+      expect(renamed.isActive).toBe(false);
+      expect(JSON.parse(renamed.layoutJson).sections[0].columns).toBe(6);
     });
 
     it("the chosen layout is still the active one after a reload", async () => {

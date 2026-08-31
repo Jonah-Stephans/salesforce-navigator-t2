@@ -373,7 +373,9 @@ export default class SalesforceNavigator extends LightningElement {
 
   /**
    * The most recent create still waiting on its round trip for a user who
-   * owned no row when it started, or `undefined` once none is outstanding.
+   * owned no row when it started, or `undefined` once none is outstanding —
+   * `{ promise, distinct }`, not a bare promise, because the wait needs an
+   * identity to fold correctly rather than by accident.
    *
    * `captureSaveTarget` reads `this.layoutId` synchronously, and for a user
    * with no row that stays `undefined` until a create resolves and
@@ -383,14 +385,28 @@ export default class SalesforceNavigator extends LightningElement {
    * the first one was, and become a second `createLayout` rather than the
    * update it should be.
    *
+   * **`distinct` is what tells "a create for the layout I am writing" from
+   * "some other layout's create".** `commitLayoutNow`'s own create (Save, or
+   * a no-row rename that is itself the first write) leaves it unset: it is
+   * the same implicit, still-rowless layout a later write on this same no-row
+   * user is addressed to, so a second such write should wait for it and land
+   * as an update of the row it creates. `createNewLayout`'s create sets it
+   * `true`: "New layout" always makes its own, separate row, seeded from
+   * scratch, regardless of who else is creating one — it is never the layout
+   * a *different* write is addressed to. An overridden write (only
+   * `renameCurrentLayout`'s no-row branch passes one) is addressed to a
+   * specific entry snapshot, not to "whichever layout is current", so it must
+   * not wait on a `distinct` create and fold into it — that would recapture
+   * against the distinct layout's own id and name once the wait cleared,
+   * silently losing the act the override was for. It instead falls through
+   * and makes its own row, honouring both acts. A bare write (Save) carries
+   * no identity of its own — it means "whatever is on screen" — so it always
+   * waits, `distinct` or not, and recaptures fresh once the wait clears.
+   *
    * **Three call sites touch this field, not two.** `commitLayoutNow` both
    * reads it (to wait) and writes it (for its own create) — see it for how
    * the wait is used to fold a second write onto the row the first one is
-   * creating. `createNewLayout` only writes it: "New layout" always makes
-   * its own, separate row regardless of who else is creating one, so it
-   * never needs to wait — it only has to be visible to a Save or a no-row
-   * rename that lands inside *its* round trip, or that write would still
-   * read `this.layoutId` as `undefined` and make a second row of its own.
+   * creating. `createNewLayout` only writes it, tagged `distinct: true`.
    */
   creatingLayout;
 
@@ -781,9 +797,12 @@ export default class SalesforceNavigator extends LightningElement {
       });
     this.saveChain = created;
     if (wasRowless) {
-      this.creatingLayout = created.then(() => {
-        this.creatingLayout = undefined;
-      });
+      this.creatingLayout = {
+        promise: created.then(() => {
+          this.creatingLayout = undefined;
+        }),
+        distinct: true
+      };
     }
   }
 
@@ -1795,21 +1814,26 @@ export default class SalesforceNavigator extends LightningElement {
    * flag on whichever one lands last. `creatingLayout` names that window: a
    * call made inside it waits for the in-flight create and then calls itself
    * again, so it captures *after* `this.layoutId` is known and lands as an
-   * update of the row the first call is creating, never as a second row.
+   * update of the row the first call is creating, never as a second row —
+   * **for a create the wait may correctly fold into.** See `creatingLayout`
+   * for `distinct`, the flag that says whether it may.
    *
-   * **An entry-snapshot override is re-resolved after the wait, not replayed
-   * from before it.** `renameCurrentLayout`'s no-row branch is the one caller
-   * that passes `layoutJson` rather than leaving it to default, and it means
-   * "the entry snapshot" — a fact that can move while this call is waiting,
-   * because `createNewLayout` landing during the wait calls `resnapshotEdit`
-   * and re-takes it. Replaying the value handed in before the wait would
-   * write the snapshot as it stood for a layout that is no longer the one
-   * this write is addressed to; reading `this.editSnapshot.json` fresh once
-   * the wait clears keeps the override meaning what it always meant — "what
-   * Cancel would currently restore" — rather than a moment the wait has
-   * already passed. A bare call (`Save`, `layoutJson` left `undefined`) is
-   * untouched by this: `undefined` recurses as `undefined`, and
-   * `captureSaveTarget`'s own default reads `this.layout` fresh regardless.
+   * **An overridden call never folds into a `distinct` create.**
+   * `renameCurrentLayout`'s no-row branch is the one caller that passes
+   * `layoutJson`, and doing so means this write is addressed to a specific
+   * entry snapshot — a specific act — not to "whichever layout is current".
+   * `createNewLayout`'s create is a different act making a different,
+   * separate layout; waiting for it and then recapturing would read
+   * `this.layoutId` and `this.layoutName` as *its* id and *its* name, which
+   * by then they are, and silently turn the override's write into a no-op
+   * update of a row it was never addressed to — the act it carried erased
+   * rather than committed. So an overridden call falls through instead and
+   * makes its own row, addressed to what it was always addressed to: two
+   * acts, two rows, both honoured. A bare call (`Save`, `layoutJson` left
+   * `undefined`) carries no such identity — it means "whatever is on
+   * screen" — so it always waits, `distinct` or not, and recaptures fresh
+   * once the wait clears: `captureSaveTarget`'s own default reads
+   * `this.layout` fresh regardless of what replaced it while waiting.
    */
   commitLayoutNow(layoutJson) {
     if (this.hasLayoutLoadError) {
@@ -1820,22 +1844,46 @@ export default class SalesforceNavigator extends LightningElement {
       this.saveTimer = undefined;
     }
     if (!this.layoutId && this.creatingLayout) {
-      return this.creatingLayout.then(() => {
-        const resolvedOverride =
-          layoutJson !== undefined && this.editSnapshot
-            ? this.editSnapshot.json
-            : layoutJson;
-        return this.commitLayoutNow(resolvedOverride);
-      });
+      const inFlight = this.creatingLayout;
+      if (layoutJson === undefined || !inFlight.distinct) {
+        return inFlight.promise.then(() => {
+          // Re-resolves an override against `this.editSnapshot` fresh
+          // rather than replaying the value handed in before the wait.
+          // **Unreachable with effect today, and kept deliberately, the same
+          // standing as the two guards in `## Deviations` this slice already
+          // keeps on that basis.** The only thing that ever moves
+          // `editSnapshot.json` mid-session is `resnapshotEdit`, and every
+          // caller of it is now either `distinct` (skips this branch
+          // entirely for an override, above) or requires a `layoutId` this
+          // branch's own guard already rules out. So `this.editSnapshot.json`
+          // and `layoutJson` always agree here now — confirmed by mutation,
+          // collapsing this to `resolvedOverride = layoutJson` leaves the
+          // full suite green. It stays because the fact it depends on
+          // (every `resnapshotEdit` caller being accounted for above) lives
+          // in other methods, and the cost of a future one going uncounted
+          // is a Tier 2 write silently addressed to a superseded snapshot.
+          const resolvedOverride =
+            layoutJson !== undefined && this.editSnapshot
+              ? this.editSnapshot.json
+              : layoutJson;
+          return this.commitLayoutNow(resolvedOverride);
+        });
+      }
+      // Else: `inFlight` is a distinct act's create (`createNewLayout`'s),
+      // and this call carries an override — a specific act of its own. Fall
+      // through and make this write's own row rather than folding onto one
+      // it was never addressed to.
     }
     this.pendingSave = this.captureSaveTarget(layoutJson);
     const isCreate = !this.pendingSave.layoutId;
     const result = this.save();
     if (isCreate) {
-      this.creatingLayout = result.then(() => {
-        this.creatingLayout = undefined;
-      });
-      return this.creatingLayout;
+      this.creatingLayout = {
+        promise: result.then(() => {
+          this.creatingLayout = undefined;
+        })
+      };
+      return this.creatingLayout.promise;
     }
     return result;
   }
@@ -1976,7 +2024,21 @@ export default class SalesforceNavigator extends LightningElement {
     // payload to the layout it was made on without dragging the active flag
     // back there. A late answer here cannot reach the wrong row, because the
     // row is already decided.
-    const isCurrent = target.layoutId === this.layoutId;
+    //
+    // **The create branch asks the same question its neighbours already ask,
+    // rather than assuming yes.** A create's row has no id yet to compare, so
+    // "is this still the one on screen" reads as "is the screen still
+    // undecided" — `this.layoutId === undefined` — which is exactly the fact
+    // `rememberSaved` checks one step later to decide whether to adopt this
+    // row as current at all. Hard-coding `true` here let two creates racing
+    // for the same rowless user (this one, and a distinct act's own, e.g.
+    // `createNewLayout`) both claim the active flag, and the last to land on
+    // the server won regardless of which one `this.layoutId` had already
+    // moved on to — the same "one row, two meanings" failure this file exists
+    // to keep shut, reached a fourth way.
+    const isCurrent = target.layoutId
+      ? target.layoutId === this.layoutId
+      : this.layoutId === undefined;
 
     const call = target.layoutId
       ? updateLayout({
@@ -1988,7 +2050,7 @@ export default class SalesforceNavigator extends LightningElement {
       : createLayout({
           name: target.name,
           layoutJson: target.layoutJson,
-          makeActive: true
+          makeActive: isCurrent
         });
 
     return call
