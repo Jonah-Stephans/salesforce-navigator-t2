@@ -137,6 +137,51 @@ user presses Save, or thrown away when they press Cancel.
   re-run against a targeted mutation each and still kill it. Deployed clean to `sfnav-t2`; full jest
   suite green at 500/500 (498 carried over, plus the two new tests finding 1 and finding 2 each added;
   finding 3 added an assertion to an existing test rather than a new one).
+- [ ] **Sixth pass, Jonah's decision (2026-08-31) to disable the four writing controls while a write is
+  outstanding: paused at its own mandated Step 1.** The decision assumes every path that can issue a
+  write to the server funnels through Save, New layout, Rename layout and Delete layout. It does not.
+  `navigatorSection.html`/`.js` and `navigatorItem.html`/`.js` carry no `@api editing` and no reference
+  to `isEditing` anywhere — checked by grep across all four files, zero matches — so the section's "Add
+  items" button, its overflow menu (Rename section…/column count/Delete section), the item's overflow
+  menu (Rename…/Remove/Move to…), and `draggable="true"` on both the section card and the item anchor
+  render and operate exactly as `spec.md`'s `## Current state` describes the pre-slice codebase:
+  unconditionally, whatever `isEditing` is. `salesforceNavigator.js:251`'s own comment says threading
+  `@api editing` down is the job of "the later slices," and `devpath/edit-mode-gate/slices/
+  03-gate-the-section-header-controls.md`, `04-gate-the-item-menu.md` and `05-gate-the-drag-surfaces.md`
+  are exactly that work — none carries a `done` field, and this slice's own `touches:` frontmatter has
+  never listed `navigatorSection.*` or `navigatorItem.*`. The section list itself renders under
+  `hasItems` (`salesforceNavigator.html:119`), not under `isEditing`, and every one of `<c-navigator-
+  section>`'s events is wired in the parent unconditionally (`:219-234`) — nothing about reaching these
+  controls depends on the mode.
+  Each of those controls calls `applyLayout()` → `scheduleSave()` (`salesforceNavigator.js:1778-1780`,
+  `:1923`), whose only suppression is `if (this.isEditing) return;` (`:1942`) — a guard against writing
+  *while editing*, not a gate on reaching these controls at all. Made before edit mode is ever entered,
+  that guard does not fire: the 1000 ms debounce arms normally and, left alone, calls `save()` →
+  `persist()` → `createLayout`/`updateLayout` (`:1962`, `:2006-2104`) — a genuine write touching none of
+  the four controls, so a lockout scoped to them leaves this route open for the whole of its outstanding
+  window.
+  This is not only a gap in coverage; it reopens the exact "two rows for a rowless user" race this
+  slice's five fix passes have spent closing, through an entry point `creatingLayout` was never built to
+  see. A user with no stored row renames a section from its own overflow menu before ever clicking the
+  pencil — live today, since the menu is ungated — arming the debounce. They then enter edit mode:
+  `handleEditStart` (`:1147-1166`) calls `flushPendingSave()` (`:1972-1979`), which calls `this.save()`
+  directly, **not** through `commitLayoutNow`, so it never sets `creatingLayout`. If that flush's
+  `createLayout` round trip is still open when the user presses Save or performs a no-row rename — both
+  of which do go through `commitLayoutNow` — `commitLayoutNow`'s own in-flight check, `!this.layoutId &&
+  this.creatingLayout` (`:1868`), sees nothing in flight (the flush's create is invisible to that
+  field), takes the immediate-capture branch, and issues a second `createLayout` — two rows for a user
+  who owned none, the same failure findings 1, A and the sixth-gap box above all describe, reached
+  through a path none of them audited because it never touches `commitLayoutNow` on its first leg. Not
+  walked end-to-end against a running org or jest — this is a static trace, named precisely so a builder
+  who picks this box up can walk it rather than re-deriving it.
+  Per the task's own mandate this is a PAUSE, not a finding to patch inline: gating `navigatorSection`/
+  `navigatorItem` behind `isEditing` is slices 03-05's stated scope, not this slice's `touches:` list,
+  and reaching into those files here would be scope creep across a boundary the spec itself drew, not a
+  fix to this slice. No lockout code was written this pass. Disabling the four controls while a write is
+  outstanding is very likely still correct and worth doing once slices 03-05 land — it would close every
+  race among Save/New/Rename/Delete themselves — but "two layout operations cannot be issued inside one
+  server round trip" is not true in general yet, only true for that one subset of round trips, and a
+  lockout built now would look like it closed the class while leaving this route standing.
 
 ## Critique findings
 
