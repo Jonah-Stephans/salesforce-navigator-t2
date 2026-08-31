@@ -113,8 +113,14 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   }
 
   set editing(value) {
-    this.isEditingItem = value;
-    if (!value) {
+    // Coerced rather than stored as-is: this is an `@api` boundary, and LWC
+    // renders a bound expression that resolves `undefined` by omitting the
+    // attribute — the same thing it does for a literal `false` — so an
+    // uncoerced `undefined` here would leave `draggable={editing}` bound to
+    // `undefined` too, which LWC also renders as an absent `draggable`
+    // attribute, and a real `<a href>` is natively draggable without it.
+    this.isEditingItem = value === true;
+    if (!this.isEditingItem) {
       this.isRenaming = false;
     }
   }

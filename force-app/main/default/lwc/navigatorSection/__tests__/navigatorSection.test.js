@@ -890,6 +890,32 @@ describe("c-navigator-section", () => {
       expect(card.getAttribute("tabindex")).toBe("-1");
     });
 
+    it('coerces an explicit undefined `editing` to draggable="false" rather than failing open', () => {
+      // `createSection`'s default parameter can't reach this case — a
+      // caller-supplied `editing: undefined` falls through to its own
+      // `= false` default, which is exactly the uncoerced value this pins
+      // against. Bind `editing` to an expression that resolves `undefined`
+      // and LWC drops the attribute from the template entirely, so this
+      // component receives the value `undefined` across the `@api`
+      // boundary, not the string `"false"`. An uncoerced setter then leaves
+      // `draggable={editing}` bound to `undefined` too, which LWC also
+      // renders as an absent attribute — and this card carries no native
+      // draggable default of its own the way an `<a href>` does, but the
+      // setter must not depend on that; see the `navigatorItem` sibling of
+      // this test, where the native default does fail open.
+      const element = createElement("c-navigator-section", {
+        is: NavigatorSection
+      });
+      element.section = resolvedSection();
+      element.editing = undefined;
+      document.body.appendChild(element);
+
+      const card = cardOf(element);
+      expect(card.hasAttribute("draggable")).toBe(true);
+      expect(card.getAttribute("draggable")).toBe("false");
+      expect(card.draggable).toBe(false);
+    });
+
     it("does not grab the card on Space out of edit mode, and lets the key through", () => {
       const element = createSection();
       const grab = jest.fn();
@@ -906,7 +932,11 @@ describe("c-navigator-section", () => {
     });
 
     it("tells its parent when its own card is picked up and dropped on", () => {
-      const element = createSection();
+      // In edit mode: criterion 4 requires the pointer-drag mechanism to
+      // work exactly as it does today, and `over.defaultPrevented` is what
+      // makes the browser fire `drop` at all — the card has to advertise
+      // itself as a drop target for its own reorder to work.
+      const element = createSection(undefined, { editing: true });
       const start = jest.fn();
       const drop = jest.fn();
       element.addEventListener("sectiondragstart", start);
@@ -927,6 +957,26 @@ describe("c-navigator-section", () => {
       expect(start.mock.calls[0][0].detail).toEqual({ index: 0 });
       expect(over.defaultPrevented).toBe(true);
       expect(drop.mock.calls[0][0].detail).toEqual({ index: 0 });
+    });
+
+    it("does not advertise itself as a drop target out of edit mode", () => {
+      // Unlike a drag *source* — where the design deliberately trusts the
+      // browser to refuse a drag on `draggable="false"` rather than adding
+      // a second guard — a drop *target* has no such attribute to lean on.
+      // `dragover` is native default-prevented or it isn't; nothing about
+      // this card's own markup stops a foreign drag (a file, a link, a text
+      // selection) from being offered a "move" cursor here unless the
+      // handler itself declines. `editing` defaults to false, so this is
+      // the out-of-the-box state.
+      const element = createSection();
+
+      const over = new CustomEvent("dragover", {
+        bubbles: true,
+        cancelable: true
+      });
+      cardOf(element).dispatchEvent(over);
+
+      expect(over.defaultPrevented).toBe(false);
     });
 
     it("grabs, moves, drops and cancels its own card from the keyboard", () => {

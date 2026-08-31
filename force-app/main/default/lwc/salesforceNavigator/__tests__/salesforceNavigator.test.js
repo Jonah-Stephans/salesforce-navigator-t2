@@ -1548,6 +1548,14 @@ describe("c-salesforce-navigator", () => {
         false,
         false
       ]);
+      // The section axis's counterpart of this test asserts the live region
+      // on both halves of criterion 2 — no grab and no announcement. This
+      // one only checked the flags: a gate that suppressed the grab but
+      // still announced would have passed it.
+      expect(
+        querySections(element)[0].shadowRoot.querySelector("[aria-live]")
+          .textContent
+      ).toBe("");
       await settleAutosave();
       expect(createLayout).not.toHaveBeenCalled();
       expect(updateLayout).not.toHaveBeenCalled();
@@ -1987,11 +1995,21 @@ describe("c-salesforce-navigator", () => {
       });
 
       it("writes nothing when a section card is dropped back on itself", async () => {
-        // The order is the same either way, so the order alone proves
-        // nothing: what the short-circuit prevents is a write — a save of a
-        // layout identical to the stored one, on a gesture that changed
-        // nothing.
-        const element = await navigatorWithSections();
+        // Mounted out of edit mode, deliberately not through
+        // `navigatorWithSections`. In edit mode, `saveEdits`'s
+        // `hasUnsavedCanvasChanges` guard finds a byte-identical canvas and
+        // swallows the write on its own, regardless of whether the
+        // short-circuit below fired — the same shape trap 273 names. Out of
+        // edit mode the debounce isn't suppressed and carries no content
+        // check of its own, so `settleAutosave` is what actually pins the
+        // short-circuit: delete `if (from === to) { return; }` from
+        // `handleSectionDrop` and this reddens, because the redundant
+        // `applyLayout` it would otherwise call arms the debounce on a
+        // layout identical to the stored one.
+        getLayouts.mockResolvedValue([TWO_SECTIONS]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
 
         cardAt(element, 1).dispatchEvent(
           new CustomEvent("dragstart", { bubbles: true, cancelable: true })
@@ -2002,10 +2020,7 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
-        // As above: pressing Save is what makes "writes nothing" a claim
-        // about the short-circuit rather than about the debounce being
-        // suppressed while editing regardless.
-        await saveEdits(element);
+        await settleAutosave();
         expect(updateLayout).not.toHaveBeenCalled();
         expect(createLayout).not.toHaveBeenCalled();
       });

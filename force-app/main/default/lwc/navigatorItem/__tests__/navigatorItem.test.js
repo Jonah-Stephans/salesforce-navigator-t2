@@ -317,6 +317,25 @@ describe("c-navigator-item", () => {
       expect(anchorOf(element).draggable).toBe(false);
     });
 
+    it('coerces an explicit undefined `editing` to draggable="false" rather than failing open', async () => {
+      // The setter stores whatever it is handed across the `@api` boundary.
+      // Bind `editing` to an expression that resolves `undefined` and LWC
+      // drops the attribute from the template entirely — it never reaches
+      // this component as the string `"false"`, it arrives as the value
+      // `undefined`. An uncoerced setter then leaves `draggable={editing}`
+      // bound to `undefined`, which LWC also renders as an absent attribute
+      // — and a real `<a href>` is natively draggable, so `anchor.draggable`
+      // reads `true`, the opposite of what an absent binding should mean
+      // for a gate whose default is "not draggable".
+      const element = await settled(
+        createNavigatorItem({ index: 2, editing: undefined })
+      );
+
+      expect(anchorOf(element).hasAttribute("draggable")).toBe(true);
+      expect(anchorOf(element).getAttribute("draggable")).toBe("false");
+      expect(anchorOf(element).draggable).toBe(false);
+    });
+
     it("re-emits dragstart as a CustomEvent carrying its own index", async () => {
       // The parent must never see inside this component. A native dragstart
       // is composed, so it crosses the shadow boundary — but it arrives

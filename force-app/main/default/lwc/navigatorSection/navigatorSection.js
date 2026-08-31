@@ -141,8 +141,14 @@ export default class NavigatorSection extends LightningElement {
   }
 
   set editing(value) {
-    this.isEditingSection = value;
-    if (!value) {
+    // Coerced rather than stored as-is: this is an `@api` boundary, and LWC
+    // renders a bound expression that resolves `undefined` by omitting the
+    // attribute — the same thing it does for a literal `false` — so an
+    // uncoerced `undefined` here would leave `draggable={editing}` bound to
+    // `undefined` too, which LWC also renders as an absent `draggable`
+    // attribute rather than the explicit `"false"` the design requires.
+    this.isEditingSection = value === true;
+    if (!this.isEditingSection) {
       this.isRenaming = false;
       // A keyboard grab on one of this section's items is this section's
       // own transient state — `grabbedItemIndex` and its neighbours below —
@@ -825,6 +831,14 @@ export default class NavigatorSection extends LightningElement {
   }
 
   handleCardDragOver(event) {
+    // Out of edit mode this card is not a drop target at all. Without this
+    // guard the card would still call `preventDefault()` and advertise a
+    // "move" cursor for *any* drag passing over it — a file, a link, a text
+    // selection, none of them the Navigator's own — which is a drag surface
+    // by O1's own definition even though it writes and lights nothing.
+    if (!this.editing) {
+      return;
+    }
     // Without this the browser fires no drop at all.
     event.preventDefault();
     if (event.dataTransfer) {
