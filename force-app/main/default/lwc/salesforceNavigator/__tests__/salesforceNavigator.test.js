@@ -641,6 +641,10 @@ describe("c-salesforce-navigator", () => {
           ".rstk-nav-section__add"
         )
       ).toBeNull();
+      // Stronger still: actually attempt the change the still-ungated item
+      // menu allows, so `scheduleSave`'s own `hasLayoutLoadError` early
+      // return stays pinned rather than only the controls being absent.
+      await renameFirstItem(element, 0, "Renamed");
       await settleAutosave();
 
       expect(createLayout).not.toHaveBeenCalled();
@@ -763,6 +767,10 @@ describe("c-salesforce-navigator", () => {
           ".rstk-nav-section__add"
         )
       ).toBeNull();
+      // Stronger still: actually attempt the change the still-ungated item
+      // menu allows, so `scheduleSave`'s own `hasLayoutLoadError` early
+      // return stays pinned rather than only the controls being absent.
+      await renameFirstItem(element, 0, "Renamed");
       await settleAutosave();
 
       expect(createLayout).not.toHaveBeenCalled();
@@ -3201,17 +3209,20 @@ describe("c-salesforce-navigator", () => {
       { name: "Support", columns: 2, items: [{ id: "standard-ActionHub" }] }
     ]);
 
-    // "Add items" and its picker are Tier 1 controls and only render in edit
-    // mode; every test in this describe reaches for one or the other (or, for
-    // the item-removal tests, is unaffected by edit mode either way, since
-    // an item's own menu is not gated by this slice), so entering edit mode
-    // is folded into the one helper every test already calls through.
+    // Mounts only — it does not enter edit mode. Folding `enterEditMode` in
+    // here once shadowed `handleItemRemove`'s payload-equality guard: every
+    // "writes nothing" assertion in this describe was satisfied by
+    // `scheduleSave`'s `isEditing` early return rather than by the guard
+    // under test, because a removal that names no item on screen was always
+    // driven from inside edit mode. Tests that reach for "Add items", the
+    // section's own overflow menu, or Save call `enterEditMode` themselves;
+    // the item-removal tests that only drive an item's own menu do not need
+    // to, since that menu is not gated by this slice.
     async function navigatorOn(layout, navItems = THREE) {
       getLayouts.mockResolvedValue(layout ? [layout] : []);
       const element = createNavigator();
       getNavItems.emit({ navItems });
       await flush();
-      await enterEditMode(element);
       return element;
     }
 
@@ -3313,6 +3324,7 @@ describe("c-salesforce-navigator", () => {
 
     it("writes the removal, and a reload shows the item still gone", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
 
       selectItemMenuItem(element, 1, 0, "remove");
       await flush();
@@ -3364,6 +3376,7 @@ describe("c-salesforce-navigator", () => {
       expect(itemLabelsBySection(element)).toEqual([
         ["Accounts", "Action Plans"]
       ]);
+      await enterEditMode(element);
 
       selectItemMenuItem(element, 0, 0, "remove");
       await flush();
@@ -3383,6 +3396,7 @@ describe("c-salesforce-navigator", () => {
           { name: "Selling", columns: 3, items: [{ id: "Account" }] }
         ])
       );
+      await enterEditMode(element);
 
       selectItemMenuItem(element, 0, 0, "remove");
       await flush();
@@ -3396,8 +3410,36 @@ describe("c-salesforce-navigator", () => {
       expect(addButtonOf(element, 0)).not.toBeNull();
     });
 
+    it("says only that the section is empty once Save leaves it that way out of edit mode", async () => {
+      // The display-only counterpart to the test above. The Add items button
+      // this message used to name unconditionally is itself gated behind edit
+      // mode (this slice's own subject), so out of edit mode the sentence
+      // must not send the user after a control that is not on screen. Save,
+      // not Cancel: Cancel would restore the removed item along with
+      // everything else the session touched, and the section would not be
+      // empty to look at any more.
+      const element = await navigatorOn(
+        storedLayout([
+          { name: "Selling", columns: 3, items: [{ id: "Account" }] }
+        ])
+      );
+      await enterEditMode(element);
+      selectItemMenuItem(element, 0, 0, "remove");
+      await flush();
+      await saveEdits(element);
+
+      const empty = querySections(element)[0].shadowRoot.querySelector(
+        ".rstk-nav-section__empty"
+      );
+      expect(empty).not.toBeNull();
+      expect(empty.textContent).toContain("no items");
+      expect(empty.textContent).not.toContain("Add items");
+      expect(addButtonOf(element, 0)).toBeNull();
+    });
+
     it("opens a picker from the section header listing every reachable tab not in the layout", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
 
       const picker = await openPicker(element, 0);
 
@@ -3418,6 +3460,7 @@ describe("c-salesforce-navigator", () => {
         ]),
         [ACCOUNT_ITEM, ACTION_HUB_ITEM]
       );
+      await enterEditMode(element);
 
       const picker = await openPicker(element, 0);
 
@@ -3436,6 +3479,7 @@ describe("c-salesforce-navigator", () => {
       );
       // The rename is on screen, so the layout really does carry one.
       expect(itemLabelsBySection(element)).toEqual([["Clients"]]);
+      await enterEditMode(element);
 
       const picker = await openPicker(element, 0);
 
@@ -3446,6 +3490,7 @@ describe("c-salesforce-navigator", () => {
       const element = await navigatorOn(
         storedLayout([{ name: "Selling", columns: 3, items: [] }])
       );
+      await enterEditMode(element);
       const picker = await openPicker(element, 0);
       expect(pickerLabels(picker)).toHaveLength(3);
 
@@ -3461,6 +3506,7 @@ describe("c-salesforce-navigator", () => {
 
     it("adds the chosen item to the section the picker was opened from", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 1);
 
       pickerEntries(picker)[0].click();
@@ -3476,6 +3522,7 @@ describe("c-salesforce-navigator", () => {
       // A parent that always added to section 0 would pass every assertion
       // driven from section 0 — slice 05's row 13 on this axis.
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 0);
 
       pickerEntries(picker)[0].click();
@@ -3489,6 +3536,7 @@ describe("c-salesforce-navigator", () => {
 
     it("writes the addition, and a reload shows the item still there", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 1);
 
       pickerEntries(picker)[0].click();
@@ -3514,6 +3562,7 @@ describe("c-salesforce-navigator", () => {
 
     it("announces the addition, naming the item and the section it landed in", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 1);
 
       pickerEntries(picker)[0].click();
@@ -3525,6 +3574,7 @@ describe("c-salesforce-navigator", () => {
     it("offers an item removed earlier back, and adds it to where it is asked for", async () => {
       // The round trip the criterion names, driven as one gesture chain.
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       selectItemMenuItem(element, 0, 0, "remove");
       await flush();
       expect(itemLabelsBySection(element)).toEqual([[], ["Action Plans"]]);
@@ -3545,6 +3595,7 @@ describe("c-salesforce-navigator", () => {
 
     it("offers a deleted section's items back rather than discarding them", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
 
       selectSectionMenuItem(element, 1, "delete");
       await flush();
@@ -3559,6 +3610,7 @@ describe("c-salesforce-navigator", () => {
 
     it("adds a deleted section's item back into a surviving section", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       selectSectionMenuItem(element, 1, "delete");
       await flush();
 
@@ -3583,6 +3635,7 @@ describe("c-salesforce-navigator", () => {
       // here, so a write would be a `createLayout` — the exact gesture that
       // generates a row for a user who never customised anything.
       const element = await navigatorOn(undefined);
+      await enterEditMode(element);
 
       const picker = await openPicker(element, 0);
       await settleAutosave();
@@ -3594,6 +3647,7 @@ describe("c-salesforce-navigator", () => {
 
     it("writes nothing when the picker is cancelled", async () => {
       const element = await navigatorOn(undefined);
+      await enterEditMode(element);
       const picker = await openPicker(element, 0);
 
       picker.shadowRoot
@@ -3658,6 +3712,7 @@ describe("c-salesforce-navigator", () => {
           }
         ])
       );
+      await enterEditMode(element);
       const before = itemLabelsBySection(element);
 
       const picker = await openPicker(element, 0);
@@ -3683,6 +3738,7 @@ describe("c-salesforce-navigator", () => {
       // is the only write path in the file not driven by a template event, and
       // therefore the only one that can fire after disconnect.
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 0);
 
       // Leaving edit mode first (silently — nothing has changed yet) so the
@@ -3709,6 +3765,7 @@ describe("c-salesforce-navigator", () => {
 
     it("adds nothing and writes nothing when Escape closes the picker", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const before = itemLabelsBySection(element);
       const picker = await openPicker(element, 0);
 
@@ -3741,6 +3798,7 @@ describe("c-salesforce-navigator", () => {
           }
         ])
       );
+      await enterEditMode(element);
 
       const picker = await openPicker(element, 0);
 
@@ -3755,6 +3813,7 @@ describe("c-salesforce-navigator", () => {
       // dropping it. Section 1, not 0, so "names the section" is
       // distinguishable from "names the first one".
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 1);
 
       expect(configOf(picker).label).toBe("Add items to Support");
@@ -3767,6 +3826,7 @@ describe("c-salesforce-navigator", () => {
       // trap and Escape are the platform's rather than ours. A div dressed up
       // as a dialog would pass every click-driven assertion above.
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 0);
 
       expect(

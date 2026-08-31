@@ -196,6 +196,22 @@ describe("c-navigator-section", () => {
     ).not.toBeNull();
   });
 
+  it("says only that the section is empty out of edit mode, since there is no button to point at", () => {
+    // `emptyMessage` used to name the Add items button unconditionally, but
+    // that button is Tier 1 customisation and is gated out of the DOM out of
+    // edit mode — so the sentence was telling a display-only user to press a
+    // control that does not exist. `createSection`'s default is
+    // `editing: false`, the state this component renders in most of the
+    // time, so this is the empty state most users actually see.
+    const element = createSection(resolvedSection({ itemIds: [] }));
+
+    const empty = element.shadowRoot.querySelector(".rstk-nav-section__empty");
+    expect(empty).not.toBeNull();
+    expect(empty.textContent).toContain("no items");
+    expect(empty.textContent).not.toContain("Add items");
+    expect(addButtonOf(element)).toBeNull();
+  });
+
   it.each([1, 2, 3, 4, 5, 6])(
     "puts the cols-%i class on the grid so the items lay out in that many columns",
     (columns) => {

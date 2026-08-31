@@ -121,7 +121,9 @@ export default class NavigatorSection extends LightningElement {
    * this section's column count and deleting it — are all reachable only
    * while this holds true; out of edit mode neither renders at all
    * (`lwc:if`, not a CSS class), so neither the tab order nor a screen
-   * reader can reach them.
+   * reader can reach them. `emptyMessage` also reads this: it names the Add
+   * items button only while editing, since out of edit mode that button is
+   * one of the things this flag hides.
    *
    * A setter rather than a bare field for one reason: an in-progress rename
    * is this component's own transient state, entered only through the
@@ -363,11 +365,20 @@ export default class NavigatorSection extends LightningElement {
   }
 
   /**
-   * What an emptied section says. Both halves of the criterion — that the
-   * section is empty, and the way out of it — and the way out is named with
-   * the button's own wording rather than a second copy of it.
+   * What an emptied section says.
+   *
+   * In edit mode, both halves of the criterion — that the section is empty,
+   * and the way out of it — and the way out is named with the button's own
+   * wording rather than a second copy of it. Out of edit mode there is no way
+   * out to name: the Add items button this sentence used to point at is
+   * itself gated behind edit mode, so pointing at it here would tell the user
+   * to press a control that is not on screen. Display mode says only that the
+   * section is empty, which is all that stays true.
    */
   get emptyMessage() {
+    if (!this.editing) {
+      return "This section has no items.";
+    }
     return `This section has no items. Use ${ADD_ITEMS} to put tabs you can reach into it.`;
   }
 

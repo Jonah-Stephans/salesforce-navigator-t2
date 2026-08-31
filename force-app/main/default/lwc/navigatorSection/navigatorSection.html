@@ -132,10 +132,13 @@
     </ul>
 
     <!-- A user who removes every item from a section must not be left looking
-         at a blank card wondering whether they have broken something. The
-         message says both halves: that the section is empty, and the way out
-         of it — which is the Add items button in this card's own header, named
-         so the sentence points at something the user can see. -->
+         at a blank card wondering whether they have broken something. In edit
+         mode the message says both halves: that the section is empty, and the
+         way out of it — which is the Add items button in this card's own
+         header, named so the sentence points at something the user can see.
+         Out of edit mode that button is not on screen (it is Tier 1
+         customisation, gated above), so `emptyMessage` drops the second half
+         rather than point at a control the user cannot reach. -->
     <template lwc:if={isEmpty}>
       <p class="rstk-nav-section__empty">{emptyMessage}</p>
     </template>
