@@ -470,6 +470,19 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
 
   /** Returns whether the key was consumed as part of the drag pattern. */
   handleDragKeydown(event) {
+    // Out of edit mode this item is not a drag source at all — `draggable`
+    // is bound to `editing` in the template, which the browser respects for
+    // a pointer drag, but `onkeydown` fires whether or not the element is
+    // draggable. Without this the Space key would still grab the item from
+    // the keyboard even though a mouse user has no equivalent gesture
+    // available, which is exactly the asymmetry `lwc-accessible-interactions.md`
+    // exists to catch. Returning `false` here — rather than swallowing the
+    // key — leaves the rest of `handleKeydown` free to do its own job (the
+    // no-href Enter fallback) undisturbed.
+    if (!this.editing) {
+      return false;
+    }
+
     const key = event.key;
 
     if (key === " " || key === "Spacebar") {

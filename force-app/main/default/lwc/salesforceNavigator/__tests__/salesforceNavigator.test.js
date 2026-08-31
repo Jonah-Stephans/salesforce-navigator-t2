@@ -1435,10 +1435,17 @@ describe("c-salesforce-navigator", () => {
     const THREE = [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM];
     const STORED_IDS = THREE.map((item) => item.developerName);
 
+    // Enters edit mode as part of mounting: pointer dragging and the
+    // keyboard grab-move-drop-cancel path are both gated behind it as of
+    // slice 05, and every test in this describe drives one gesture or the
+    // other. `enterEditMode` also arms `saveEdits` as the one route left to
+    // persist a change made here — `scheduleSave`'s own debounce is
+    // suppressed while editing, per `## Design`.
     async function navigatorWithThree() {
       const element = createNavigator();
       getNavItems.emit({ navItems: THREE });
       await flush();
+      await enterEditMode(element);
       return element;
     }
 
@@ -1526,6 +1533,26 @@ describe("c-salesforce-navigator", () => {
       return navigatorWithThree();
     }
 
+    it("does not grab an item on Space out of edit mode, and writes nothing", async () => {
+      // The composed counterpart of navigatorItem's own unit test: mounted
+      // without `enterEditMode`, so this is the state every user starts in.
+      const element = createNavigator();
+      getNavItems.emit({ navItems: THREE });
+      await flush();
+
+      press(anchorAt(element, 0), " ");
+      await flush();
+
+      expect(queryItems(element).map((item) => item.grabbed)).toEqual([
+        false,
+        false,
+        false
+      ]);
+      await settleAutosave();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
     it("moves a dragged item to its new position and writes that order", async () => {
       const element = await navigatorWithThree();
 
@@ -1537,7 +1564,7 @@ describe("c-salesforce-navigator", () => {
         "Accounts"
       ]);
 
-      await settleAutosave();
+      await saveEdits(element);
       expect(savedItemIds(createLayout)).toEqual([
         "standard-ActionHub",
         "Contact",
@@ -1555,13 +1582,13 @@ describe("c-salesforce-navigator", () => {
         // the model's own `reorder`.
         const dragged = await freshNavigator();
         await dragItem(dragged, from, to);
-        await settleAutosave();
+        await saveEdits(dragged);
         const byMouse = savedItemIds(createLayout);
         document.body.removeChild(dragged);
 
         const typed = await freshNavigator();
         await walkItem(typed, from, to - from);
-        await settleAutosave();
+        await saveEdits(typed);
         const byKeyboard = savedItemIds(createLayout);
         document.body.removeChild(typed);
 
@@ -1578,7 +1605,7 @@ describe("c-salesforce-navigator", () => {
       // a reload is, since nothing else survives.
       const element = await navigatorWithThree();
       await dragItem(element, 2, 0);
-      await settleAutosave();
+      await saveEdits(element);
       const written = createLayout.mock.calls[0][0].layoutJson;
       document.body.removeChild(element);
       jest.clearAllMocks();
@@ -1610,7 +1637,7 @@ describe("c-salesforce-navigator", () => {
       // that renders.
       const element = await navigatorWithThree();
       await walkItem(element, 2, -2);
-      await settleAutosave();
+      await saveEdits(element);
       const written = createLayout.mock.calls[0][0].layoutJson;
       document.body.removeChild(element);
       jest.clearAllMocks();
@@ -1656,8 +1683,16 @@ describe("c-salesforce-navigator", () => {
         "Action Plans",
         "Contacts"
       ]);
-      await settleAutosave();
-      expect(savedItemIds(createLayout)).toEqual(STORED_IDS);
+      // A cancelled drag that lands back on the order the session started
+      // with is byte-identical to the entry snapshot, so Save — explicit
+      // now, rather than a debounce that would have fired regardless — has
+      // nothing to write. Before explicit save this asserted that the
+      // eventual autosave persisted the reverted order; the equivalent claim
+      // now is the stronger one available under the new model: a cancelled
+      // drag leaves no write behind at all, not even a redundant one.
+      await saveEdits(element);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
     });
 
     it("keeps a dropped move, so a second Space is not a cancel", async () => {
@@ -1672,7 +1707,7 @@ describe("c-salesforce-navigator", () => {
         "Contacts",
         "Accounts"
       ]);
-      await settleAutosave();
+      await saveEdits(element);
       expect(savedItemIds(createLayout)).toEqual([
         "standard-ActionHub",
         "Contact",
@@ -1727,11 +1762,18 @@ describe("c-salesforce-navigator", () => {
         })
       };
 
+      // Enters edit mode as part of mounting: section pointer dragging and
+      // the section keyboard grab-move-drop-cancel path are both gated
+      // behind it as of slice 05, and every test below drives the card as a
+      // draggable or keyboard-grabbable thing. `saveEdits`, not
+      // `settleAutosave`, is therefore the route these tests use to persist
+      // a change — `scheduleSave`'s debounce is suppressed while editing.
       async function navigatorWithSections() {
         getLayouts.mockResolvedValue([TWO_SECTIONS]);
         const element = createNavigator();
         getNavItems.emit({ navItems: THREE });
         await flush();
+        await enterEditMode(element);
         return element;
       }
 
@@ -1747,6 +1789,28 @@ describe("c-salesforce-navigator", () => {
         );
       }
 
+      it("does not grab a section card on Space out of edit mode, and writes nothing", async () => {
+        // Mounted without `enterEditMode`, so this is the state every user
+        // starts in — the composed counterpart of navigatorSection's own
+        // unit test.
+        getLayouts.mockResolvedValue([TWO_SECTIONS]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        expect(
+          element.shadowRoot.querySelector("[aria-live]").textContent
+        ).toBe("");
+        await settleAutosave();
+        expect(updateLayout).not.toHaveBeenCalled();
+      });
+
       it("reorders the sections when a section card is dragged onto another", async () => {
         const element = await navigatorWithSections();
 
@@ -1759,7 +1823,7 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["Third", "First", "Second"]);
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedSectionNames()).toEqual(["Third", "First", "Second"]);
       });
 
@@ -1772,7 +1836,7 @@ describe("c-salesforce-navigator", () => {
           new CustomEvent("drop", { bubbles: true, cancelable: true })
         );
         await flush();
-        await settleAutosave();
+        await saveEdits(element);
         const written = updateLayout.mock.calls[0][0].layoutJson;
         document.body.removeChild(element);
         jest.clearAllMocks();
@@ -1805,7 +1869,7 @@ describe("c-salesforce-navigator", () => {
           new KeyboardEvent("keydown", { key: " ", cancelable: true })
         );
         await flush();
-        await settleAutosave();
+        await saveEdits(element);
 
         const written = updateLayout.mock.calls[0][0].layoutJson;
         document.body.removeChild(element);
@@ -1853,8 +1917,14 @@ describe("c-salesforce-navigator", () => {
         expect(
           element.shadowRoot.querySelector("[aria-live]").textContent
         ).toMatch(/cancelled/i);
-        await settleAutosave();
-        expect(savedSectionNames()).toEqual(["First", "Second", "Third"]);
+        // A cancelled section drag that lands back on the entry order is
+        // byte-identical to the edit-session snapshot, so Save has nothing
+        // to write — the stronger, and now available, form of the claim
+        // this asserted before explicit save: that a cancelled drag does not
+        // leave a stale write behind, up to and including a redundant one.
+        await saveEdits(element);
+        expect(createLayout).not.toHaveBeenCalled();
+        expect(updateLayout).not.toHaveBeenCalled();
       });
 
       it("reorders the sections when a dragged card is dropped on another card's item", async () => {
@@ -1879,7 +1949,7 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["Third", "First", "Second"]);
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedSectionNames()).toEqual(["Third", "First", "Second"]);
       });
 
@@ -1906,8 +1976,14 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
-        await settleAutosave();
+        // Pressing Save is what makes this discriminating rather than
+        // vacuous: `scheduleSave`'s debounce is suppressed while editing
+        // regardless of what the abandoned drag left behind, so a
+        // `settleAutosave` here would pass whether or not the abandon logic
+        // actually cleared the stale drag state.
+        await saveEdits(element);
         expect(updateLayout).not.toHaveBeenCalled();
+        expect(createLayout).not.toHaveBeenCalled();
       });
 
       it("writes nothing when a section card is dropped back on itself", async () => {
@@ -1926,8 +2002,12 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
-        await settleAutosave();
+        // As above: pressing Save is what makes "writes nothing" a claim
+        // about the short-circuit rather than about the debounce being
+        // suppressed while editing regardless.
+        await saveEdits(element);
         expect(updateLayout).not.toHaveBeenCalled();
+        expect(createLayout).not.toHaveBeenCalled();
       });
 
       it("re-announces a repeated arrow press on a card rather than writing nothing", async () => {
@@ -2069,7 +2149,7 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["Second", "First", "Third"]);
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedSectionNames()).toEqual(["Second", "First", "Third"]);
       });
 
@@ -2287,6 +2367,7 @@ describe("c-salesforce-navigator", () => {
         // same rendered index into the same stored layout. Fixed at the same
         // seam, so it is pinned here.
         const element = await navigatorWithAWithdrawnTab();
+        await enterEditMode(element);
 
         press(itemsIn(element, 0)[0].shadowRoot.querySelector("a"), " ");
         await flush();
@@ -2300,7 +2381,7 @@ describe("c-salesforce-navigator", () => {
           []
         ]);
 
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedIds(updateLayout, 0)).toEqual([
           "Account",
           "Contact",
@@ -3123,6 +3204,7 @@ describe("c-salesforce-navigator", () => {
         navItems: [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM]
       });
       await flush();
+      await enterEditMode(element);
 
       const section = querySections(element)[0];
       queryItems(element)[2]
@@ -3189,6 +3271,7 @@ describe("c-salesforce-navigator", () => {
         navItems: [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM]
       });
       await flush();
+      await enterEditMode(element);
 
       const section = querySections(element)[0];
       queryItems(element)[0]

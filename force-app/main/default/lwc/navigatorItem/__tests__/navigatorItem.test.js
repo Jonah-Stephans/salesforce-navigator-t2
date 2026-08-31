@@ -293,10 +293,28 @@ describe("c-navigator-item", () => {
   });
 
   describe("as a drag source", () => {
-    it("makes the anchor itself draggable, so the clickable link is the drag source", async () => {
+    it("makes the anchor itself draggable in edit mode, so the clickable link is the drag source", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 2, editing: true })
+      );
+
+      // The value, not merely the presence: `draggable` is bound rather than
+      // static now, so the attribute is on the anchor either way — only its
+      // value says whether a drag can start.
+      expect(anchorOf(element).getAttribute("draggable")).toBe("true");
+      expect(anchorOf(element).draggable).toBe(true);
+    });
+
+    it('reports draggable="false" out of edit mode, rather than removing the attribute', async () => {
+      // The one place `lwc:if` absence is deliberately not used: a browser
+      // and an assistive technology both need to be told this element is not
+      // draggable, not merely left to infer it from the attribute's absence.
+      // `editing` defaults to false, so this is the out-of-the-box state.
       const element = await settled(createNavigatorItem({ index: 2 }));
 
-      expect(anchorOf(element).draggable).toBe(true);
+      expect(anchorOf(element).hasAttribute("draggable")).toBe(true);
+      expect(anchorOf(element).getAttribute("draggable")).toBe("false");
+      expect(anchorOf(element).draggable).toBe(false);
     });
 
     it("re-emits dragstart as a CustomEvent carrying its own index", async () => {
@@ -387,8 +405,13 @@ describe("c-navigator-item", () => {
   });
 
   describe("as a keyboard drag source", () => {
+    // Every gesture below needs `editing: true` now: `handleDragKeydown`
+    // returns early, unconsumed, when the item is not in edit mode — see
+    // "out of edit mode" below for the gate itself.
     it("grabs on Space, and swallows the key so the page does not scroll", async () => {
-      const element = await settled(createNavigatorItem({ index: 2 }));
+      const element = await settled(
+        createNavigatorItem({ index: 2, editing: true })
+      );
       const handler = jest.fn();
       element.addEventListener("itemgrab", handler);
 
@@ -401,7 +424,7 @@ describe("c-navigator-item", () => {
 
     it("drops on the second Space, rather than grabbing again", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 2, grabbed: true })
+        createNavigatorItem({ index: 2, grabbed: true, editing: true })
       );
       const grab = jest.fn();
       const drop = jest.fn();
@@ -421,7 +444,7 @@ describe("c-navigator-item", () => {
       ["ArrowRight", 1]
     ])("moves one place on %s while grabbed", async (key, delta) => {
       const element = await settled(
-        createNavigatorItem({ index: 1, grabbed: true })
+        createNavigatorItem({ index: 1, grabbed: true, editing: true })
       );
       const handler = jest.fn();
       element.addEventListener("itemkeymove", handler);
@@ -452,7 +475,7 @@ describe("c-navigator-item", () => {
 
     it("cancels on Escape while grabbed", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 1, grabbed: true })
+        createNavigatorItem({ index: 1, grabbed: true, editing: true })
       );
       const handler = jest.fn();
       element.addEventListener("itemkeycancel", handler);
@@ -466,16 +489,36 @@ describe("c-navigator-item", () => {
 
     it("holds focus against Tab while grabbed, and releases it when not", async () => {
       const grabbed = await settled(
-        createNavigatorItem({ index: 0, grabbed: true })
+        createNavigatorItem({ index: 0, grabbed: true, editing: true })
       );
       const tabWhileGrabbed = keydown("Tab");
       anchorOf(grabbed).dispatchEvent(tabWhileGrabbed);
       expect(tabWhileGrabbed.defaultPrevented).toBe(true);
 
-      const free = await settled(createNavigatorItem({ index: 0 }));
+      const free = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
       const tabWhileFree = keydown("Tab");
       anchorOf(free).dispatchEvent(tabWhileFree);
       expect(tabWhileFree.defaultPrevented).toBe(false);
+    });
+
+    it("does not grab on Space out of edit mode, and lets the key through", async () => {
+      // `editing` defaults to false. Gating `draggable` in the template is
+      // not enough on its own: `onkeydown` still fires on a non-draggable
+      // element, so the grab has to be refused here too, in JS, or Space
+      // would still pick the item up for a keyboard user with no pointer
+      // equivalent — the asymmetry `lwc-accessible-interactions.md` exists
+      // to catch.
+      const element = await settled(createNavigatorItem({ index: 2 }));
+      const handler = jest.fn();
+      element.addEventListener("itemgrab", handler);
+
+      const event = keydown(" ");
+      anchorOf(element).dispatchEvent(event);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
     });
 
     it("does not navigate on a click or an Enter while grabbed", async () => {
@@ -641,8 +684,15 @@ describe("c-navigator-item", () => {
       "uses neither aria-grabbed nor aria-dropeffect when grabbed is %s",
       async (grabbed) => {
         // Both are deprecated in ARIA 1.1+ and Salesforce's own reference
-        // implementation of this pattern uses neither.
-        const element = await settled(createNavigatorItem({ index: 0 }));
+        // implementation of this pattern uses neither. Mounted in edit mode
+        // because that is the one state where the anchor is genuinely a drag
+        // source regardless of `grabbed` — the fact the sanity check below
+        // pins. Out of edit mode `draggable` is still present but "false",
+        // which `toContain("draggable")` alone could not have told apart —
+        // asserting the value, not merely the attribute's presence.
+        const element = await settled(
+          createNavigatorItem({ index: 0, editing: true })
+        );
         element.grabbed = grabbed;
         await settled(element);
 
@@ -652,9 +702,10 @@ describe("c-navigator-item", () => {
 
         expect(attributes).not.toContain("aria-grabbed");
         expect(attributes).not.toContain("aria-dropeffect");
-        // The assertion is only worth anything if it is looking at real
-        // attributes at all.
-        expect(attributes).toContain("draggable");
+        // The assertion is only worth anything if it is looking at a real,
+        // genuinely-draggable anchor — regardless of `grabbed` — and not
+        // merely an attribute name that would be present either way.
+        expect(anchorOf(element).getAttribute("draggable")).toBe("true");
       }
     );
 
@@ -950,7 +1001,12 @@ describe("c-navigator-item", () => {
       // and a menu move between them, so an arrow that crossed would be the
       // defect, not the feature.
       const element = await settled(
-        createNavigatorItem({ index: 1, moveTargets: TARGETS, grabbed: true })
+        createNavigatorItem({
+          index: 1,
+          moveTargets: TARGETS,
+          grabbed: true,
+          editing: true
+        })
       );
       const crossed = jest.fn();
       const within = jest.fn();

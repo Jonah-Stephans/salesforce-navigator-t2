@@ -445,6 +445,27 @@ describe("c-navigator-section", () => {
         "Selling"
       );
     });
+
+    it("clears an in-flight keyboard grab on one of its items when edit mode ends", async () => {
+      // Criterion 6. A stale `grabbedItemIndex` left behind by the mode
+      // ending would leave `keepFocusOnGrabbedItem` in `renderedCallback`
+      // chasing an item that can no longer be dragged at all — `editing`
+      // says so — and would leave that item still rendering as grabbed (its
+      // `rstk-nav-item_grabbed` class, its drag instructions) with no live
+      // gesture behind either.
+      const element = createThree();
+      element.editing = true;
+      await Promise.resolve();
+
+      fire(itemsOf(element)[1], "itemgrab", { index: 1 });
+      await Promise.resolve();
+      expect(itemsOf(element)[1].grabbed).toBe(true);
+
+      element.editing = false;
+      await Promise.resolve();
+
+      expect(itemsOf(element).some((item) => item.grabbed)).toBe(false);
+    });
   });
 
   describe("reordering its items", () => {
@@ -843,11 +864,45 @@ describe("c-navigator-section", () => {
       return element.shadowRoot.querySelector("article");
     }
 
-    it("makes the section card itself draggable and focusable", () => {
-      const card = cardOf(createSection());
+    it("makes the section card itself draggable and focusable in edit mode", () => {
+      const card = cardOf(createSection(undefined, { editing: true }));
 
+      // The value, not merely the presence: `draggable` is bound rather than
+      // static now, so the attribute is on the card either way — only its
+      // value says whether a drag can start.
+      expect(card.getAttribute("draggable")).toBe("true");
       expect(card.draggable).toBe(true);
       expect(card.getAttribute("tabindex")).toBe("0");
+    });
+
+    it("is not draggable and not a tab stop out of edit mode", () => {
+      // The one place `lwc:if` absence is deliberately not used for
+      // `draggable`: a browser and an assistive technology both need to be
+      // told this card is not draggable, not merely left to infer it from
+      // the attribute's absence. `tabindex` is a getter for the same reason
+      // — a card that cannot be grabbed should not be a tab stop, so a
+      // keyboard user moving through the panel stops only on links.
+      const card = cardOf(createSection());
+
+      expect(card.hasAttribute("draggable")).toBe(true);
+      expect(card.getAttribute("draggable")).toBe("false");
+      expect(card.draggable).toBe(false);
+      expect(card.getAttribute("tabindex")).toBe("-1");
+    });
+
+    it("does not grab the card on Space out of edit mode, and lets the key through", () => {
+      const element = createSection();
+      const grab = jest.fn();
+      element.addEventListener("sectiongrab", grab);
+
+      const event = new KeyboardEvent("keydown", {
+        key: " ",
+        cancelable: true
+      });
+      cardOf(element).dispatchEvent(event);
+
+      expect(grab).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
     });
 
     it("tells its parent when its own card is picked up and dropped on", () => {
@@ -875,7 +930,7 @@ describe("c-navigator-section", () => {
     });
 
     it("grabs, moves, drops and cancels its own card from the keyboard", () => {
-      const element = createSection();
+      const element = createSection(undefined, { editing: true });
       const grab = jest.fn();
       const move = jest.fn();
       const drop = jest.fn();

@@ -36,9 +36,18 @@
   border-radius: var(--slds-g-radius-border-1, 0.125rem);
   background-color: var(--slds-g-color-surface-container-1, #ffffff);
   text-decoration: none;
-  /* Permanently draggable — there is no edit mode, because HTML5
-     drag-and-drop already separates a click from a drag. The cursor is the
-     only affordance saying so. */
+  /* Draggable only in edit mode as of the edit-mode-gate spec — `draggable`
+     is now bound to `editing` in the template rather than the static "true"
+     this comment used to describe. The reasoning it used to record is still
+     correct as far as it goes: HTML5 drag-and-drop separates a click from a
+     drag, so gating `draggable` cannot break the link, whatever `editing`
+     is — a `click` only fires when no drag occurred, and `handleClick` is
+     untouched by this. What changed is a question that reasoning never
+     asked: permanent affordances are visual clutter on a page whose primary
+     purpose is navigation, not customisation, and gating this attribute
+     (and the keyboard grab in navigatorItem.js) is the fix for that, not for
+     anything about clicking. The cursor below is the only affordance saying
+     so, same as before. */
   cursor: grab;
   /* Now that a column bounds this pill's width, a label longer than that
      column must clip at the pill's own edge rather than spill past its

@@ -5,8 +5,8 @@
        is never read as picking up the whole card. -->
   <article
     class={cardClass}
-    draggable="true"
-    tabindex="0"
+    draggable={editing}
+    tabindex={cardTabIndex}
     aria-label={cardLabel}
     aria-describedby={instructionsId}
     ondragstart={handleCardDragStart}

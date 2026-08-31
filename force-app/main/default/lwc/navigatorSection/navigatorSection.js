@@ -144,6 +144,19 @@ export default class NavigatorSection extends LightningElement {
     this.isEditingSection = value;
     if (!value) {
       this.isRenaming = false;
+      // A keyboard grab on one of this section's items is this section's
+      // own transient state — `grabbedItemIndex` and its neighbours below —
+      // and nothing else clears it when edit mode ends out from under it.
+      // Left in place, the item would keep rendering as `grabbed` (its
+      // `isGrabbed` class, its drag instructions) even though it can no
+      // longer be dragged at all once `editing` is false, and
+      // `keepFocusOnGrabbedItem` in `renderedCallback` would keep chasing a
+      // card that is no longer part of any live gesture. Silent, the same as
+      // `releaseGrabForDepartingItem`: the transition out of edit mode is
+      // already announced by the parent, so a second, contradictory
+      // announcement about the grab itself would only confuse the sentence
+      // the user is already hearing.
+      this.releaseGrab();
     }
   }
 
@@ -288,6 +301,16 @@ export default class NavigatorSection extends LightningElement {
     return this.grabbed
       ? `rstk-nav-section-drag-${this.sectionIndex}`
       : undefined;
+  }
+
+  /**
+   * A getter rather than the static `"0"` this card used to carry, because a
+   * card that cannot be grabbed should not be a tab stop. Left focusable out
+   * of edit mode would add one empty stop per section to every keyboard
+   * user's journey through a panel whose whole purpose is fast navigation.
+   */
+  get cardTabIndex() {
+    return this.editing ? "0" : "-1";
   }
 
   /**
@@ -837,6 +860,16 @@ export default class NavigatorSection extends LightningElement {
   }
 
   handleCardKeydown(event) {
+    // Out of edit mode this card is not a drag source at all — `draggable`
+    // is bound to `editing` in the template, which the browser respects for
+    // a pointer drag, but `onkeydown` fires whether or not the element is
+    // draggable. Without this the Space key would still grab the card from
+    // the keyboard, which is exactly the asymmetry
+    // `lwc-accessible-interactions.md` exists to catch.
+    if (!this.editing) {
+      return;
+    }
+
     // Keydown bubbles, and an item sits inside this card. Without this guard
     // Space on an item would grab both the item and the whole section.
     // `currentTarget` is this card; `target` is retargeted to the item's host
