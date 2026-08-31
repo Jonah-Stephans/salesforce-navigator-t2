@@ -2664,7 +2664,13 @@ describe("c-salesforce-navigator", () => {
       });
 
       it("drops the item at the position it was dropped at, not at the end", async () => {
+        // In edit mode, unlike its "on the card rather than on an item"
+        // sibling below: the landing spot here is another item's own anchor,
+        // and as of this slice's fix pass that anchor's `dragover`/`drop` are
+        // gated on `editing` the same way the card's own drop target is, so
+        // out of edit mode this drop no longer reaches anything to position.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
         const dragged = itemsIn(element, 0)[1].shadowRoot.querySelector("a");
         const landing = itemsIn(element, 1)[0].shadowRoot.querySelector("a");
 

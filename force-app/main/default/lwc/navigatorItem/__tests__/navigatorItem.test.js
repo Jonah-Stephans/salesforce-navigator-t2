@@ -336,6 +336,50 @@ describe("c-navigator-item", () => {
       expect(anchorOf(element).draggable).toBe(false);
     });
 
+    it("carries the grab-cursor class only in edit mode", async () => {
+      // The cursor used to sit unconditionally on `.rstk-nav-item`; it now
+      // lives on this class instead, so a link that reports
+      // draggable="false" does not also invite a drag with its cursor —
+      // exactly the visual clutter the Intent names, and it misleads
+      // besides. `editing` defaults to false, so this starts in the
+      // out-of-the-box state.
+      const element = await settled(createNavigatorItem({ index: 2 }));
+
+      expect(
+        anchorOf(element).classList.contains("rstk-nav-item_editing")
+      ).toBe(false);
+
+      element.editing = true;
+      await Promise.resolve();
+
+      expect(
+        anchorOf(element).classList.contains("rstk-nav-item_editing")
+      ).toBe(true);
+    });
+
+    it("keeps the grab cursor off the base rule, so it cannot leak out of edit mode", () => {
+      // jsdom applies no stylesheet, so this cannot be proven by computed
+      // style — see `lwc-jest-ceilings.md`. What can be proven is the
+      // shipped CSS text itself: `cursor` has to live on the
+      // `editing`-conditional class rather than on `.rstk-nav-item`, or
+      // every anchor would show the grab cursor regardless of the class
+      // above. `^` anchors the base-rule match to the start of a line,
+      // because `.rstk-nav-item__row .rstk-nav-item {` further up this file
+      // also contains the substring `.rstk-nav-item {` and would otherwise
+      // match instead of the real base rule.
+      const css = readFileSync(
+        join(__dirname, "..", "navigatorItem.css"),
+        "utf8"
+      );
+      const baseRule = css.match(/^\.rstk-nav-item\s*\{[^}]*\}/m);
+      const editingRule = css.match(/\.rstk-nav-item_editing\s*\{[^}]*\}/);
+
+      expect(baseRule).not.toBeNull();
+      expect(baseRule[0]).not.toMatch(/cursor\s*:/);
+      expect(editingRule).not.toBeNull();
+      expect(editingRule[0]).toContain("cursor: grab");
+    });
+
     it("re-emits dragstart as a CustomEvent carrying its own index", async () => {
       // The parent must never see inside this component. A native dragstart
       // is composed, so it crosses the shadow boundary — but it arrives
@@ -367,8 +411,13 @@ describe("c-navigator-item", () => {
 
     it("accepts a drop by cancelling dragover, which is what makes it a drop target", async () => {
       // Without preventDefault() on dragover the browser never fires drop at
-      // all, so this is the whole mechanism rather than a detail.
-      const element = await settled(createNavigatorItem({ index: 1 }));
+      // all, so this is the whole mechanism rather than a detail. This is an
+      // in-edit-mode concern — out of edit mode dragover is not cancelled at
+      // all; see "does not advertise itself as a drop target out of edit
+      // mode" below.
+      const element = await settled(
+        createNavigatorItem({ index: 1, editing: true })
+      );
       const handler = jest.fn();
       element.addEventListener("itemdragover", handler);
 
@@ -384,7 +433,10 @@ describe("c-navigator-item", () => {
       // getData() returns "" during dragover in every browser by the HTML
       // spec's protected mode, so the authoritative drag state is kept in JS
       // and the payload here is the *destination*, which this item knows.
-      const element = await settled(createNavigatorItem({ index: 3 }));
+      // In edit mode, for the same reason as the dragover test above.
+      const element = await settled(
+        createNavigatorItem({ index: 3, editing: true })
+      );
       const handler = jest.fn();
       element.addEventListener("itemdrop", handler);
 
@@ -393,6 +445,51 @@ describe("c-navigator-item", () => {
 
       expect(event.defaultPrevented).toBe(true);
       expect(handler.mock.calls[0][0].detail).toEqual({ index: 3 });
+    });
+
+    it("does not advertise itself as a drop target out of edit mode", async () => {
+      // Unlike a drag *source* — where the design deliberately trusts the
+      // browser to refuse a drag on `draggable="false"` rather than adding a
+      // second guard — a drop *target* has no such attribute to lean on.
+      // `dragover` is native default-prevented or it isn't; nothing about
+      // this anchor's own markup stops a foreign drag (a file, a link, a
+      // text selection) from being offered a "move" cursor here unless the
+      // handler itself declines. `editing` defaults to false, so this is the
+      // out-of-the-box state. This is the item's half of the same gate
+      // `navigatorSection.test.js` pins for the card — the item covers most
+      // of a card's own surface, so it carries more of this than the card
+      // does.
+      const element = await settled(createNavigatorItem({ index: 1 }));
+
+      const event = dragEvent("dragover");
+      anchorOf(element).dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    it("does not dispatch a drop out of edit mode either", async () => {
+      // The card's own `handleCardDrop` is safely left ungated, because a
+      // real browser never fires `drop` at all once the preceding
+      // `dragover` went uncancelled — it fires `dragleave` instead — so an
+      // ungated handler there is dead code the browser itself never reaches.
+      // That reasoning cannot be *proven* here: jsdom dispatches exactly the
+      // event a test hands it and enforces none of the browser's own
+      // dragover/drop sequencing, so a synthetic `drop` dispatched straight
+      // at this anchor would still reach an ungated handler and still
+      // dispatch `itemdrop`, out of edit mode, indistinguishable here from a
+      // real one. `handleDrop` is gated directly instead of resting on an
+      // inference this suite cannot check, and this is the pin that proves
+      // it — it dispatches the `drop` event directly, the same way the
+      // "re-emits a drop..." test above does, and gets a different result.
+      const element = await settled(createNavigatorItem({ index: 1 }));
+      const handler = jest.fn();
+      element.addEventListener("itemdrop", handler);
+
+      const event = dragEvent("drop");
+      anchorOf(element).dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(handler).not.toHaveBeenCalled();
     });
 
     it("announces the end of a drag so a drag that dropped on nothing clears state", async () => {

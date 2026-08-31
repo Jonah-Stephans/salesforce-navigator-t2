@@ -36,25 +36,30 @@
   border-radius: var(--slds-g-radius-border-1, 0.125rem);
   background-color: var(--slds-g-color-surface-container-1, #ffffff);
   text-decoration: none;
-  /* Draggable only in edit mode as of the edit-mode-gate spec — `draggable`
-     is now bound to `editing` in the template rather than the static "true"
-     this comment used to describe. The reasoning it used to record is still
-     correct as far as it goes: HTML5 drag-and-drop separates a click from a
-     drag, so gating `draggable` cannot break the link, whatever `editing`
-     is — a `click` only fires when no drag occurred, and `handleClick` is
-     untouched by this. What changed is a question that reasoning never
-     asked: permanent affordances are visual clutter on a page whose primary
-     purpose is navigation, not customisation, and gating this attribute
-     (and the keyboard grab in navigatorItem.js) is the fix for that, not for
-     anything about clicking. The cursor below is the only affordance saying
-     so, same as before. */
-  cursor: grab;
   /* Now that a column bounds this pill's width, a label longer than that
      column must clip at the pill's own edge rather than spill past its
      border or over the overflow menu beside it. The label span carries its
      own overflow:hidden and the ellipsis (via slds-truncate); this is the
      outer belt to the inner suspenders. */
   overflow: hidden;
+}
+
+/* Draggable only in edit mode as of the edit-mode-gate spec — `draggable`
+   is bound to `editing` in the template rather than the static "true" this
+   comment used to describe. The reasoning it used to record is still
+   correct as far as it goes: HTML5 drag-and-drop separates a click from a
+   drag, so gating `draggable` cannot break the link, whatever `editing`
+   is — a `click` only fires when no drag occurred, and `handleClick` is
+   untouched by this. What changed is a question that reasoning never
+   asked: permanent affordances are visual clutter on a page whose primary
+   purpose is navigation, not customisation, and gating this attribute (and
+   the keyboard grab in navigatorItem.js) is the fix for that, not for
+   anything about clicking. The cursor moves with it: it used to sit
+   unconditionally on `.rstk-nav-item` above, and now lives here instead, on
+   the `editing`-conditional class `anchorClass` adds — so nothing about
+   this element still advertises a drag out of edit mode, cursor included. */
+.rstk-nav-item_editing {
+  cursor: grab;
 }
 
 .rstk-nav-item:hover {

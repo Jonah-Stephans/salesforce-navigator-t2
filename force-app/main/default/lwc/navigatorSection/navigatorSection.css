@@ -5,8 +5,21 @@
   border-radius: var(--slds-g-radius-border-2, 0.25rem);
   background-color: var(--slds-g-color-surface-container-1, #ffffff);
   box-shadow: var(--slds-g-shadow-1, 0 2px 2px 0 #e5e5e5);
-  /* The card is permanently draggable, and permanently focusable so a
-     keyboard user can reach the same gesture. */
+}
+
+/* Draggable and focusable only in edit mode as of the edit-mode-gate spec —
+   this comment used to say the card was permanently both. `draggable` is
+   now bound to `editing` in the template (`navigatorSection.html`) rather
+   than a static "true", and `tabindex` is a getter (`cardTabIndex` in
+   navigatorSection.js) returning "0" in edit mode and "-1" out of it, so a
+   card that cannot be grabbed is no longer a keyboard tab stop either. The
+   grab cursor moves the same way: it used to sit unconditionally on
+   `.rstk-nav-section` above, and now lives here instead, on the
+   `editing`-conditional class `cardClass` adds — the same reason
+   `navigatorItem.css` gates its own cursor, and for the same fix: a
+   permanent affordance is visual clutter on a page whose primary purpose is
+   navigation, not customisation. */
+.rstk-nav-section_editing {
   cursor: grab;
 }
 

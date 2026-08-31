@@ -916,6 +916,47 @@ describe("c-navigator-section", () => {
       expect(card.draggable).toBe(false);
     });
 
+    it("carries the grab-cursor class only in edit mode", async () => {
+      // The cursor used to sit unconditionally on `.rstk-nav-section`; it
+      // now lives on this class instead, so a card that reports
+      // draggable="false" does not also invite a drag with its cursor —
+      // exactly the visual clutter the Intent names, and it misleads
+      // besides. `editing` defaults to false, so this starts in the
+      // out-of-the-box state.
+      const element = createSection();
+
+      expect(
+        cardOf(element).classList.contains("rstk-nav-section_editing")
+      ).toBe(false);
+
+      element.editing = true;
+      await Promise.resolve();
+
+      expect(
+        cardOf(element).classList.contains("rstk-nav-section_editing")
+      ).toBe(true);
+    });
+
+    it("keeps the grab cursor off the base rule, so it cannot leak out of edit mode", () => {
+      // jsdom applies no stylesheet, so this cannot be proven by computed
+      // style — see `lwc-jest-ceilings.md`. What can be proven is the
+      // shipped CSS text itself: `cursor` has to live on the
+      // `editing`-conditional class rather than on `.rstk-nav-section`, or
+      // every card would show the grab cursor regardless of the class
+      // above.
+      const css = readFileSync(
+        join(__dirname, "..", "navigatorSection.css"),
+        "utf8"
+      );
+      const baseRule = css.match(/^\.rstk-nav-section\s*\{[^}]*\}/m);
+      const editingRule = css.match(/\.rstk-nav-section_editing\s*\{[^}]*\}/);
+
+      expect(baseRule).not.toBeNull();
+      expect(baseRule[0]).not.toMatch(/cursor\s*:/);
+      expect(editingRule).not.toBeNull();
+      expect(editingRule[0]).toContain("cursor: grab");
+    });
+
     it("does not grab the card on Space out of edit mode, and lets the key through", () => {
       const element = createSection();
       const grab = jest.fn();

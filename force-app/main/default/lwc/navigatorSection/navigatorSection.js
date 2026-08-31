@@ -251,6 +251,12 @@ export default class NavigatorSection extends LightningElement {
    */
   get cardClass() {
     const classes = ["rstk-nav-section"];
+    // The grab cursor lives on this class rather than on the base rule —
+    // see `navigatorSection.css` — so it is on-screen only while a drag
+    // could actually start, not permanently.
+    if (this.editing) {
+      classes.push("rstk-nav-section_editing");
+    }
     if (this.grabbed) {
       classes.push("rstk-nav-section_grabbed");
     }

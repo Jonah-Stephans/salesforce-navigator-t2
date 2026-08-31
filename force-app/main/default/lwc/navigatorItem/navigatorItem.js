@@ -216,9 +216,17 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
    * SLDS 2 global hooks.
    */
   get anchorClass() {
-    return this.grabbed
-      ? "rstk-nav-item rstk-nav-item_grabbed"
-      : "rstk-nav-item";
+    const classes = ["rstk-nav-item"];
+    // The grab cursor lives on this class rather than on the base rule —
+    // see `navigatorItem.css` — so it is on-screen only while a drag could
+    // actually start, not permanently.
+    if (this.editing) {
+      classes.push("rstk-nav-item_editing");
+    }
+    if (this.grabbed) {
+      classes.push("rstk-nav-item_grabbed");
+    }
+    return classes.join(" ");
   }
 
   /** The instruction node's id exists only while the item is grabbed. */
@@ -428,6 +436,17 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   }
 
   handleDragOver(event) {
+    // Out of edit mode this anchor is not a drop target at all. Without this
+    // guard the anchor would still call `preventDefault()` and advertise a
+    // "move" cursor for *any* drag passing over it — a file, a link, a text
+    // selection, none of them the Navigator's own — which is a drag surface
+    // by O1's own definition even though it writes and lights nothing. This
+    // is the item's half of the same gate `navigatorSection.js`'s
+    // `handleCardDragOver` carries for the card, and it covers more surface:
+    // an item covers most of a card's own area.
+    if (!this.editing) {
+      return;
+    }
     // Without preventDefault() here the browser never fires `drop` at all.
     // This is the whole mechanism that makes an item a drop target, not a
     // detail of it.
@@ -440,6 +459,21 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   }
 
   handleDrop(event) {
+    // Gated deliberately, not merely for symmetry with the guard above.
+    // `navigatorSection.js`'s `handleCardDrop` is left ungated because a
+    // real browser never fires `drop` at all once the preceding `dragover`
+    // went uncancelled — it fires `dragleave` instead — so an ungated
+    // handler there is dead code the browser itself never reaches. That
+    // reasoning cannot be proven for this anchor the same way: jsdom
+    // dispatches exactly the event a test hands it and enforces none of the
+    // browser's own dragover/drop sequencing, so a synthetic `drop` fired
+    // straight at this anchor would still reach an ungated handler and still
+    // dispatch `itemdrop` out of edit mode, indistinguishable from a real
+    // one to anything this suite can run. Gating the handler directly closes
+    // that gap instead of resting on an inference this suite cannot check.
+    if (!this.editing) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     this.dispatch("itemdrop", { index: this.index });
