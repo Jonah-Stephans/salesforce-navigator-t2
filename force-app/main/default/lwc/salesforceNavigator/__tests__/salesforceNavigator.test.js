@@ -2700,13 +2700,17 @@ describe("c-salesforce-navigator", () => {
     ]);
 
     // Enters edit mode as part of mounting: an item's own rename is gated
-    // behind it as of slice 04, and every test in this describe drives that
+    // behind it as of slice 04, and most tests in this describe drive that
     // menu at some point — this is the behavioural suite for the rename
     // itself (wording, payload shape, reload, clearing), not the debounce
-    // mechanism, so there is no reason for any of them to stay out of edit
+    // mechanism, so there is no reason for most of them to stay out of edit
     // mode. Navigation and the payload each item renders are unaffected by
     // `isEditing` either way, so the handful of tests here that never touch
-    // the menu are not disturbed by mounting this way.
+    // the menu — the navigation/rename-target test, the org-tab-relabel
+    // test, and the no-other-layout test — are not disturbed by mounting
+    // this way either; the redelivery test is the one exception and mounts
+    // inline instead, out of edit mode, because its subject is the debounce
+    // itself.
     async function navigatorOn(layout, navItems = THREE) {
       getLayouts.mockResolvedValue(layout ? [layout] : []);
       const element = createNavigator();
@@ -2950,7 +2954,20 @@ describe("c-salesforce-navigator", () => {
     it("picks up a change to the org's own tab label, with no write at all", async () => {
       // The payload stores no labels, so this costs nothing: the item is
       // resolved against the live tab source on every render.
-      const element = await navigatorOn(RENAMED);
+      //
+      // Stays out of edit mode, unlike its neighbours in this describe, and
+      // is mounted inline rather than through this describe's `navigatorOn`
+      // (which enters edit mode as part of mounting): the hazard this test
+      // pins is a wire redelivery arming the debounce, which is a claim about
+      // `scheduleSave` itself, not about the now-gated menu. Asserting this
+      // in edit mode would be satisfied by `scheduleSave`'s own `isEditing`
+      // guard whether or not the redelivery guard exists — the same
+      // vacuous-pass shape trap 273 warns about — so the negative assertion
+      // has to be made where autosave is actually live.
+      getLayouts.mockResolvedValue([RENAMED]);
+      const element = createNavigator();
+      getNavItems.emit({ navItems: THREE });
+      await flush();
       expect(renderedLabel(element, 0, 1)).toBe("Contacts");
 
       getNavItems.emit({
@@ -2967,7 +2984,7 @@ describe("c-salesforce-navigator", () => {
       // And the renamed item is not disturbed by the relabelling of another.
       expect(renderedLabel(element, 0, 0)).toBe("Clients");
 
-      await saveEdits(element);
+      await settleAutosave();
       expect(updateLayout).not.toHaveBeenCalled();
       expect(createLayout).not.toHaveBeenCalled();
     });
@@ -4322,10 +4339,13 @@ describe("c-salesforce-navigator", () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
 
-      // A section-level change is gated behind edit mode as of this slice;
-      // an item rename is not (items are slice 04's to gate), and is used
-      // here as an equally-good stand-in for "some canvas mutation" — the
-      // debounce/race behaviour under test does not care which act armed it.
+      // An item rename is gated behind edit mode as of this slice, same as a
+      // section-level change. `renameFirstItem` dispatches the `itemrename`
+      // event directly on the item element rather than opening its (now
+      // gated) menu, which is what still lets it stand in here — out of
+      // edit mode, where this test stays throughout — for "some canvas
+      // mutation"; the debounce/race behaviour under test does not care
+      // which act armed it.
       await renameFirstItem(element, 0, "Renamed");
       // Switched inside the debounce window, before the save has fired.
       await switchToLayout(element, THIRD_ID);
@@ -5602,10 +5622,15 @@ describe("c-salesforce-navigator", () => {
       // a change it has no business reverting.
       const element = await storedNavigator();
 
-      // A section-level change is gated behind edit mode as of this slice;
-      // an item rename is not (items are slice 04's to gate), so it stands in
-      // here for "a canvas change made before edit mode was entered" — the
-      // draft-boundary behaviour under test does not care which act made it.
+      // An item rename is gated behind edit mode as of this slice, same as a
+      // section-level change. `renameFirstItem` dispatches the `itemrename`
+      // event directly on the item element rather than opening its (now
+      // gated) menu, so the call below still stands in for "a canvas change
+      // made before edit mode was entered" even though no user path reaches
+      // the menu itself out here — the draft-boundary behaviour under test
+      // does not care which act made it. The second call, once edit mode has
+      // been entered, dispatches the identical event but is then a faithful
+      // stand-in for what that menu would send for real.
       await renameFirstItem(element, 0, "Renamed before edit");
       expect(updateLayout).not.toHaveBeenCalled();
 
