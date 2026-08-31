@@ -113,6 +113,37 @@ export default class NavigatorSection extends LightningElement {
    */
   @api itemDragActive = false;
 
+  /**
+   * Whether the whole Navigator is in edit mode, set by the parent — the
+   * same `@api` down / `CustomEvent` up route `grabbed` and `itemDragActive`
+   * already use, rather than a new state-sharing mechanism. The "Add items"
+   * button and this card's overflow menu — and therefore renaming, changing
+   * this section's column count and deleting it — are all reachable only
+   * while this holds true; out of edit mode neither renders at all
+   * (`lwc:if`, not a CSS class), so neither the tab order nor a screen
+   * reader can reach them.
+   *
+   * A setter rather than a bare field for one reason: an in-progress rename
+   * is this component's own transient state, entered only through the
+   * overflow menu this flag gates. If the parent leaves edit mode mid-rename,
+   * the menu that could reopen it is gone, but nothing else would close a
+   * rename input left open from before — so leaving edit mode ends any
+   * in-progress rename along with it.
+   */
+  @api
+  get editing() {
+    return this.isEditingSection;
+  }
+
+  set editing(value) {
+    this.isEditingSection = value;
+    if (!value) {
+      this.isRenaming = false;
+    }
+  }
+
+  isEditingSection = false;
+
   isRenaming = false;
   draftName = "";
 

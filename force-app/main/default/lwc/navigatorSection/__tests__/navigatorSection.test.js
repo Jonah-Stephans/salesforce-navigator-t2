@@ -43,11 +43,12 @@ function resolvedSection({ name = "Selling", columns = 3, itemIds } = {}) {
   )[0];
 }
 
-function createSection(section) {
+function createSection(section, { editing = false } = {}) {
   const element = createElement("c-navigator-section", {
     is: NavigatorSection
   });
   element.section = section || resolvedSection();
+  element.editing = editing;
   document.body.appendChild(element);
   return element;
 }
@@ -152,6 +153,12 @@ function selectMenuItem(element, value) {
   );
 }
 
+// Shared with the "adding and removing items" describe block below and with
+// the edit-mode gate tests: both need to find the same hand-rolled button.
+function addButtonOf(element) {
+  return element.shadowRoot.querySelector(".rstk-nav-section__add");
+}
+
 describe("c-navigator-section", () => {
   afterEach(() => {
     while (document.body.firstChild) {
@@ -239,7 +246,7 @@ describe("c-navigator-section", () => {
   // tests for the ones that can actually fail on that.
 
   it("offers exactly one column choice per supported count, and no others", () => {
-    const element = createSection();
+    const element = createSection(undefined, { editing: true });
 
     const values = Array.from(
       element.shadowRoot.querySelectorAll("lightning-menu-item")
@@ -258,7 +265,9 @@ describe("c-navigator-section", () => {
   });
 
   it("asks its parent to set the column count when a column choice is made", () => {
-    const element = createSection(resolvedSection({ columns: 2 }));
+    const element = createSection(resolvedSection({ columns: 2 }), {
+      editing: true
+    });
     const handler = jest.fn();
     element.addEventListener("sectioncolumns", handler);
 
@@ -278,7 +287,7 @@ describe("c-navigator-section", () => {
       },
       TABS
     );
-    const element = createSection(twoSections[1]);
+    const element = createSection(twoSections[1], { editing: true });
     const handler = jest.fn();
     element.addEventListener("sectiondelete", handler);
 
@@ -291,7 +300,7 @@ describe("c-navigator-section", () => {
   });
 
   it("renames the section on commit, carrying the typed name", async () => {
-    const element = createSection();
+    const element = createSection(undefined, { editing: true });
     const handler = jest.fn();
     element.addEventListener("sectionrename", handler);
 
@@ -318,7 +327,7 @@ describe("c-navigator-section", () => {
     // Every change dispatched upstream would be a rename per keystroke. The
     // autosave would coalesce the writes, but the section header would
     // re-render on every character and the caret would jump.
-    const element = createSection();
+    const element = createSection(undefined, { editing: true });
     const handler = jest.fn();
     element.addEventListener("sectionrename", handler);
 
@@ -333,7 +342,7 @@ describe("c-navigator-section", () => {
   });
 
   it("keeps the name it had when a rename is abandoned with Escape", async () => {
-    const element = createSection();
+    const element = createSection(undefined, { editing: true });
     const handler = jest.fn();
     element.addEventListener("sectionrename", handler);
 
@@ -352,6 +361,74 @@ describe("c-navigator-section", () => {
     expect(handler).not.toHaveBeenCalled();
     expect(element.shadowRoot.querySelector("lightning-input")).toBeNull();
     expect(element.shadowRoot.querySelector("h2").textContent).toBe("Selling");
+  });
+
+  describe("the edit-mode gate on this card's header controls", () => {
+    // `## Design`'s "Controls are absent from the DOM, not hidden": jsdom
+    // applies no stylesheet, so "renders no customisation control" is
+    // provable only as absence from the DOM, never as a hidden-but-present
+    // element — the same reasoning `isRenaming` already demonstrates for the
+    // rename anchor.
+    it("renders no Add items button and no overflow menu out of edit mode", () => {
+      const element = createSection(undefined, { editing: false });
+
+      expect(addButtonOf(element)).toBeNull();
+      expect(menuOf(element)).toBeNull();
+    });
+
+    it("renders the Add items button and the full overflow menu — rename, every column count and delete — in edit mode", () => {
+      const element = createSection(undefined, { editing: true });
+
+      expect(addButtonOf(element)).not.toBeNull();
+      const values = Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).map((item) => item.value);
+      expect(values).toEqual([
+        "rename",
+        "columns-1",
+        "columns-2",
+        "columns-3",
+        "columns-4",
+        "columns-5",
+        "columns-6",
+        "delete"
+      ]);
+    });
+
+    it("removes an already-rendered Add items button and overflow menu the moment edit mode ends", async () => {
+      // Mounted once, then flipped — not two separate mounts — so this proves
+      // the *transition* removes the controls, which a fresh mount at
+      // `editing: false` cannot distinguish from "never rendered them".
+      const element = createSection(undefined, { editing: true });
+      expect(addButtonOf(element)).not.toBeNull();
+      expect(menuOf(element)).not.toBeNull();
+
+      element.editing = false;
+      await Promise.resolve();
+
+      expect(addButtonOf(element)).toBeNull();
+      expect(menuOf(element)).toBeNull();
+    });
+
+    it("cancels an in-progress rename when edit mode ends, so no rename input is left showing with no menu to close it", async () => {
+      // The overflow menu is the only route into `isRenaming`. Once it is
+      // gone, nothing else on this card would ever put the heading back — so
+      // the flag that hides the menu has to close the rename along with it.
+      const element = createSection(undefined, { editing: true });
+      selectMenuItem(element, "rename");
+      await Promise.resolve();
+      expect(
+        element.shadowRoot.querySelector("lightning-input")
+      ).not.toBeNull();
+
+      element.editing = false;
+      await Promise.resolve();
+
+      expect(element.shadowRoot.querySelector("lightning-input")).toBeNull();
+      expect(element.shadowRoot.querySelector("h2").textContent).toBe(
+        "Selling"
+      );
+    });
   });
 
   describe("reordering its items", () => {
@@ -1112,7 +1189,7 @@ describe("c-navigator-section", () => {
   });
 
   it("refuses to rename a section to nothing at all", async () => {
-    const element = createSection();
+    const element = createSection(undefined, { editing: true });
     const handler = jest.fn();
     element.addEventListener("sectionrename", handler);
 
@@ -1129,10 +1206,6 @@ describe("c-navigator-section", () => {
   });
 
   describe("adding and removing items", () => {
-    function addButtonOf(element) {
-      return element.shadowRoot.querySelector(".rstk-nav-section__add");
-    }
-
     // What a screen reader computes for a <button>: the whole of its rendered
     // content, assistive-text spans included, with whitespace collapsed the
     // way the accessible name computation collapses it.
@@ -1151,8 +1224,8 @@ describe("c-navigator-section", () => {
       return copy.textContent.replace(/\s+/g, " ").trim();
     }
 
-    it("offers an Add items button in its header, where a user can find it", () => {
-      const element = createSection();
+    it("offers an Add items button in its header, where a user can find it, in edit mode", () => {
+      const element = createSection(undefined, { editing: true });
 
       const button = addButtonOf(element);
       expect(button).not.toBeNull();
@@ -1165,7 +1238,9 @@ describe("c-navigator-section", () => {
       // tooltip and nothing else — every card in the layout would then be
       // announced as the identical "Add items". An assistive-text span inside
       // the button is content, so it contributes to the name.
-      const element = createSection(resolvedSection({ name: "Support" }));
+      const element = createSection(resolvedSection({ name: "Support" }), {
+        editing: true
+      });
 
       expect(accessibleNameOf(addButtonOf(element))).toBe(
         "Add items to Support"
@@ -1178,7 +1253,9 @@ describe("c-navigator-section", () => {
       // with write access can fill. A button announced as "Add items to" with
       // nothing after it names no target at all, so the assistive text takes
       // the same generic fallback the card label does.
-      const element = createSection(resolvedSection({ name: "   " }));
+      const element = createSection(resolvedSection({ name: "   " }), {
+        editing: true
+      });
 
       expect(accessibleNameOf(addButtonOf(element))).toBe(
         "Add items to Unnamed section"
@@ -1190,7 +1267,9 @@ describe("c-navigator-section", () => {
       // button that printed it again would say it twice in a row and roughly
       // double the header's intrinsic width, so the section name is carried
       // by assistive text rather than by visible text.
-      const element = createSection(resolvedSection({ name: "Support" }));
+      const element = createSection(resolvedSection({ name: "Support" }), {
+        editing: true
+      });
       const button = addButtonOf(element);
 
       expect(visibleTextOf(button)).toBe("Add items");
@@ -1236,7 +1315,7 @@ describe("c-navigator-section", () => {
     });
 
     it("asks the parent to open the picker for its own section", () => {
-      const element = createSection();
+      const element = createSection(undefined, { editing: true });
       const handler = jest.fn();
       element.addEventListener("sectionadditems", handler);
 
@@ -1258,7 +1337,7 @@ describe("c-navigator-section", () => {
         },
         TABS
       )[1];
-      const element = createSection(resolved);
+      const element = createSection(resolved, { editing: true });
       const handler = jest.fn();
       element.addEventListener("sectionadditems", handler);
 
@@ -1271,7 +1350,9 @@ describe("c-navigator-section", () => {
       // Not a blank card, and not a bare "nothing here" either — the message
       // has to name the way out, which is the button in this card's own
       // header.
-      const element = createSection(resolvedSection({ itemIds: [] }));
+      const element = createSection(resolvedSection({ itemIds: [] }), {
+        editing: true
+      });
 
       const empty = element.shadowRoot.querySelector(
         ".rstk-nav-section__empty"

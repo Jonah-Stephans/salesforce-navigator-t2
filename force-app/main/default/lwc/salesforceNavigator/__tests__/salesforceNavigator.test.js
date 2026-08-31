@@ -191,10 +191,32 @@ function selectSectionMenuItem(element, sectionIndex, value) {
     .dispatchEvent(new CustomEvent("select", { detail: { value } }));
 }
 
-/** One change in a burst: made, rendered, and 100ms of the debounce spent. */
-async function burstChange(element, columns) {
-  selectSectionMenuItem(element, 0, `columns-${columns}`);
+/**
+ * A still-ungated Tier 1 act — item rename is slice 04's to gate, not this
+ * one's — used as the mutation vehicle wherever a test's actual subject is
+ * the save chain's debounce/coalescing/id-handling behaviour rather than any
+ * particular section-level control. Chosen over item removal because, like
+ * `columns-N`, it can be repeated on the same target with a fresh distinct
+ * value each time.
+ */
+async function renameFirstItem(element, sectionIndex, value) {
+  const item =
+    querySections(element)[sectionIndex].shadowRoot.querySelector(
+      "c-navigator-item"
+    );
+  item.shadowRoot
+    .querySelector("lightning-button-menu")
+    .dispatchEvent(new CustomEvent("select", { detail: { value: "rename" } }));
   await flush();
+  const input = item.shadowRoot.querySelector("lightning-input");
+  input.dispatchEvent(new CustomEvent("change", { detail: { value } }));
+  input.dispatchEvent(new CustomEvent("commit"));
+  await flush();
+}
+
+/** One rename in a burst: made, rendered, and 100ms of the debounce spent. */
+async function burstItemRename(element, value) {
+  await renameFirstItem(element, 0, value);
   jest.advanceTimersByTime(100);
 }
 
@@ -606,8 +628,19 @@ describe("c-salesforce-navigator", () => {
       // But nothing may be written: a create here would displace the layout
       // we failed to read — so there is no way into the mode that could write.
       expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).toBeNull();
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      // Stronger than attempting a change and checking nothing saved: there
+      // is no control left to attempt one with at all, section-level or
+      // otherwise.
+      expect(
+        querySections(element)[0].shadowRoot.querySelector(
+          "lightning-button-menu"
+        )
+      ).toBeNull();
+      expect(
+        querySections(element)[0].shadowRoot.querySelector(
+          ".rstk-nav-section__add"
+        )
+      ).toBeNull();
       await settleAutosave();
 
       expect(createLayout).not.toHaveBeenCalled();
@@ -717,8 +750,19 @@ describe("c-salesforce-navigator", () => {
 
       // And no write, because every write this component makes passes
       // `makeActive: true` and would deactivate the row it cannot read.
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      // Stronger than attempting a change and checking nothing saved: there
+      // is no control left to attempt one with at all, section-level or
+      // otherwise.
+      expect(
+        querySections(element)[0].shadowRoot.querySelector(
+          "lightning-button-menu"
+        )
+      ).toBeNull();
+      expect(
+        querySections(element)[0].shadowRoot.querySelector(
+          ".rstk-nav-section__add"
+        )
+      ).toBeNull();
       await settleAutosave();
 
       expect(createLayout).not.toHaveBeenCalled();
@@ -766,6 +810,7 @@ describe("c-salesforce-navigator", () => {
     it("renames the section the user renamed, and saves the new name", async () => {
       const element = await navigatorWithTabs();
 
+      await enterEditMode(element);
       selectSectionMenuItem(element, 0, "rename");
       await flush();
       const section = querySections(element)[0];
@@ -780,7 +825,7 @@ describe("c-salesforce-navigator", () => {
         querySections(element)[0].shadowRoot.querySelector("h2").textContent
       ).toBe("Daily work");
 
-      await settleAutosave();
+      await saveEdits(element);
       expect(lastSavedLayout(createLayout).sections[0].name).toBe("Daily work");
     });
 
@@ -807,8 +852,33 @@ describe("c-salesforce-navigator", () => {
     it.each([1, 2, 3, 4, 5, 6])(
       "renders the section in %i columns once the user chooses that count, and stores it",
       async (columns) => {
+        // A no-op edit-mode Save writes nothing at all (see "writes no
+        // layout record for a user who opened edit mode, changed nothing and
+        // pressed Save" below), so the layout has to start at a column count
+        // other than the one being chosen this iteration, or the pass
+        // landing on the seeded default of 3 would have nothing to save.
+        const startColumns =
+          columns === MIN_COLUMNS ? MAX_COLUMNS : MIN_COLUMNS;
+        getLayouts.mockResolvedValue([
+          {
+            layoutId: EXISTING_LAYOUT_ID,
+            name: "My Navigator",
+            isActive: true,
+            layoutJson: JSON.stringify({
+              schemaVersion: SCHEMA_VERSION,
+              sections: [
+                {
+                  name: "All Items",
+                  columns: startColumns,
+                  items: [{ id: "Account" }, { id: "Contact" }]
+                }
+              ]
+            })
+          }
+        ]);
         const element = await navigatorWithTabs();
 
+        await enterEditMode(element);
         selectSectionMenuItem(element, 0, `columns-${columns}`);
         await flush();
 
@@ -837,8 +907,11 @@ describe("c-salesforce-navigator", () => {
           .filter((name) => /^rstk-nav-section_span-\d+$/.test(name));
         expect(appliedSpans).toEqual([`rstk-nav-section_span-${columns}`]);
 
-        await settleAutosave();
-        expect(lastSavedLayout(createLayout).sections[0].columns).toBe(columns);
+        await saveEdits(element);
+        // `updateLayout`, not `createLayout`: the fixture now starts from an
+        // existing stored layout so every iteration has something to change
+        // away from — see the comment above.
+        expect(lastSavedLayout(updateLayout).sections[0].columns).toBe(columns);
       }
     );
   });
@@ -1175,8 +1248,7 @@ describe("c-salesforce-navigator", () => {
     it("saves nothing at all until the debounce elapses", async () => {
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed once");
       jest.advanceTimersByTime(AUTOSAVE_DELAY_MS - 1);
       await flush();
 
@@ -1189,18 +1261,20 @@ describe("c-salesforce-navigator", () => {
       // Five changes 100ms apart — well inside one debounce window, and
       // written out rather than looped because each has to be awaited and
       // `no-await-in-loop` is on.
-      await burstChange(element, 2);
-      await burstChange(element, 3);
-      await burstChange(element, 4);
-      await burstChange(element, 5);
-      await burstChange(element, 6);
+      await burstItemRename(element, "Renamed 2");
+      await burstItemRename(element, "Renamed 3");
+      await burstItemRename(element, "Renamed 4");
+      await burstItemRename(element, "Renamed 5");
+      await burstItemRename(element, "Renamed 6");
       await settleAutosave();
 
       expect(createLayout).toHaveBeenCalledTimes(1);
       expect(updateLayout).not.toHaveBeenCalled();
       // One save, and it is the *last* change — a debounce that fired on the
-      // leading edge would save 2 columns and lose the other four changes.
-      expect(lastSavedLayout(createLayout).sections[0].columns).toBe(6);
+      // leading edge would save "Renamed 2" and lose the other four changes.
+      expect(lastSavedLayout(createLayout).sections[0].items[0].rename).toBe(
+        "Renamed 6"
+      );
     });
 
     it("updates the record the first change created rather than creating a second one", async () => {
@@ -1210,19 +1284,19 @@ describe("c-salesforce-navigator", () => {
       // overwriting whichever layout the server picked.
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-2");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed 2");
       await settleAutosave();
       expect(createLayout).toHaveBeenCalledTimes(1);
 
-      selectSectionMenuItem(element, 0, "columns-3");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed 3");
       await settleAutosave();
 
       expect(createLayout).toHaveBeenCalledTimes(1);
       expect(updateLayout).toHaveBeenCalledTimes(1);
       expect(updateLayout.mock.calls[0][0].layoutId).toBe(CREATED_LAYOUT_ID);
-      expect(lastSavedLayout(updateLayout).sections[0].columns).toBe(3);
+      expect(lastSavedLayout(updateLayout).sections[0].items[0].rename).toBe(
+        "Renamed 3"
+      );
     });
 
     it("updates the layout it loaded, by that layout's own id, and never creates", async () => {
@@ -1233,14 +1307,15 @@ describe("c-salesforce-navigator", () => {
           isActive: true,
           layoutJson: JSON.stringify({
             schemaVersion: SCHEMA_VERSION,
-            sections: [{ name: "Daily work", columns: 2, items: [] }]
+            sections: [
+              { name: "Daily work", columns: 2, items: [{ id: "Account" }] }
+            ]
           })
         }
       ]);
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed");
       await settleAutosave();
 
       expect(createLayout).not.toHaveBeenCalled();
@@ -1251,11 +1326,9 @@ describe("c-salesforce-navigator", () => {
     it("never asks the controller to update a null id", async () => {
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-2");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed 2");
       await settleAutosave();
-      selectSectionMenuItem(element, 0, "columns-3");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed 3");
       await settleAutosave();
 
       for (const call of updateLayout.mock.calls) {
@@ -1285,13 +1358,14 @@ describe("c-salesforce-navigator", () => {
     it("flushes a pending save when the component goes away, rather than dropping it", async () => {
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed");
       document.body.removeChild(element);
       await flush();
 
       expect(createLayout).toHaveBeenCalledTimes(1);
-      expect(lastSavedLayout(createLayout).sections[0].columns).toBe(4);
+      expect(lastSavedLayout(createLayout).sections[0].items[0].rename).toBe(
+        "Renamed"
+      );
     });
 
     it("keeps the user's change on screen, and its id, when the save is refused", async () => {
@@ -1302,12 +1376,12 @@ describe("c-salesforce-navigator", () => {
       });
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed");
       await settleAutosave();
 
-      const grid = querySections(element)[0].shadowRoot.querySelector("ul");
-      expect(grid.className).toContain("cols-4");
+      const item =
+        querySections(element)[0].shadowRoot.querySelector("c-navigator-item");
+      expect(item.label).toBe("Renamed");
       expect(
         element.shadowRoot.querySelector('[role="alert"]').textContent
       ).toContain("does not belong to you");
@@ -3068,9 +3142,10 @@ describe("c-salesforce-navigator", () => {
       getNavItems.emit({ navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM] });
       await flush();
 
+      await enterEditMode(element);
       selectSectionMenuItem(element, 0, "columns-5");
       await flush();
-      await settleAutosave();
+      await saveEdits(element);
 
       expect(lastSavedLayout(updateLayout).sections[0].items).toEqual([
         { id: "Account" },
@@ -3126,11 +3201,17 @@ describe("c-salesforce-navigator", () => {
       { name: "Support", columns: 2, items: [{ id: "standard-ActionHub" }] }
     ]);
 
+    // "Add items" and its picker are Tier 1 controls and only render in edit
+    // mode; every test in this describe reaches for one or the other (or, for
+    // the item-removal tests, is unaffected by edit mode either way, since
+    // an item's own menu is not gated by this slice), so entering edit mode
+    // is folded into the one helper every test already calls through.
     async function navigatorOn(layout, navItems = THREE) {
       getLayouts.mockResolvedValue(layout ? [layout] : []);
       const element = createNavigator();
       getNavItems.emit({ navItems });
       await flush();
+      await enterEditMode(element);
       return element;
     }
 
@@ -3235,7 +3316,7 @@ describe("c-salesforce-navigator", () => {
 
       selectItemMenuItem(element, 1, 0, "remove");
       await flush();
-      await settleAutosave();
+      await saveEdits(element);
 
       expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([]);
 
@@ -3286,7 +3367,7 @@ describe("c-salesforce-navigator", () => {
 
       selectItemMenuItem(element, 0, 0, "remove");
       await flush();
-      await settleAutosave();
+      await saveEdits(element);
 
       // `Contact` is unreachable and must survive untouched, in place.
       expect(lastSavedLayout(updateLayout).sections[0].items).toEqual([
@@ -3412,7 +3493,7 @@ describe("c-salesforce-navigator", () => {
 
       pickerEntries(picker)[0].click();
       await flush();
-      await settleAutosave();
+      await saveEdits(element);
 
       expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([
         { id: "standard-ActionHub" },
@@ -3484,7 +3565,7 @@ describe("c-salesforce-navigator", () => {
       const picker = await openPicker(element, 0);
       pickerEntries(picker)[0].click();
       await flush();
-      await settleAutosave();
+      await saveEdits(element);
 
       expect(itemLabelsBySection(element)).toEqual([
         ["Accounts", "Action Plans"]
@@ -3603,6 +3684,14 @@ describe("c-salesforce-navigator", () => {
       // therefore the only one that can fire after disconnect.
       const element = await navigatorOn(TWO_SECTIONS);
       const picker = await openPicker(element, 0);
+
+      // Leaving edit mode first (silently — nothing has changed yet) so the
+      // disconnect below happens out of edit mode. `scheduleSave` already
+      // returns early while editing, for a reason unrelated to this test's
+      // subject; if editing stayed on, `jest.getTimerCount()` would read 0
+      // for that reason regardless of whether the disconnected-instance guard
+      // below fired at all, proving nothing.
+      await cancelEdits(element);
 
       document.body.removeChild(element);
       expect(jest.getTimerCount()).toBe(0);
@@ -4102,14 +4191,17 @@ describe("c-salesforce-navigator", () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
 
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      // A section-level change is gated behind edit mode as of this slice;
+      // an item rename is not (items are slice 04's to gate), and is used
+      // here as an equally-good stand-in for "some canvas mutation" — the
+      // debounce/race behaviour under test does not care which act armed it.
+      await renameFirstItem(element, 0, "Renamed");
       // Switched inside the debounce window, before the save has fired.
       await switchToLayout(element, THIRD_ID);
 
-      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
-        6
-      );
+      expect(
+        JSON.parse(store.payloadOf(SECOND_ID)).sections[0].items[0].rename
+      ).toBe("Renamed");
       expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
       expect(store.activeName()).toBe("Admin");
     });
@@ -4135,17 +4227,16 @@ describe("c-salesforce-navigator", () => {
 
       // Still looking at Support, because the switch has not landed.
       expect(sectionNames(element)).toEqual(["Support"]);
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed");
       jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
       await flush();
 
       releaseSwitch();
       await settleAutosave();
 
-      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
-        6
-      );
+      expect(
+        JSON.parse(store.payloadOf(SECOND_ID)).sections[0].items[0].rename
+      ).toBe("Renamed");
       expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
       expect(store.activeName()).toBe("Admin");
       expect(sectionNames(element)).toEqual(["Admin"]);
@@ -4172,8 +4263,7 @@ describe("c-salesforce-navigator", () => {
 
       // Still looking at Support, because the switch has not landed.
       expect(sectionNames(element)).toEqual(["Support"]);
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed");
 
       // The switch lands first. Microtasks, then timers.
       releaseSwitch();
@@ -4185,9 +4275,9 @@ describe("c-salesforce-navigator", () => {
       await flush();
       await flush();
 
-      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
-        6
-      );
+      expect(
+        JSON.parse(store.payloadOf(SECOND_ID)).sections[0].items[0].rename
+      ).toBe("Renamed");
       expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
       expect(store.activeName()).toBe("Admin");
     });
@@ -4203,8 +4293,7 @@ describe("c-salesforce-navigator", () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
 
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed on Support");
 
       // Switched inside the debounce window, before the save has fired.
       selectLayoutMenu(element, `layout:${THIRD_ID}`);
@@ -4214,16 +4303,17 @@ describe("c-salesforce-navigator", () => {
       expect(sectionNames(element)).toEqual(["Admin"]);
 
       // A second change, still inside the first one's window.
-      selectSectionMenuItem(element, 0, "columns-2");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed on Admin");
       jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
       await flush();
       await flush();
 
-      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
-        6
-      );
-      expect(JSON.parse(store.payloadOf(THIRD_ID)).sections[0].columns).toBe(2);
+      expect(
+        JSON.parse(store.payloadOf(SECOND_ID)).sections[0].items[0].rename
+      ).toBe("Renamed on Support");
+      expect(
+        JSON.parse(store.payloadOf(THIRD_ID)).sections[0].items[0].rename
+      ).toBe("Renamed on Admin");
     });
 
     /**
@@ -5381,22 +5471,28 @@ describe("c-salesforce-navigator", () => {
       // a change it has no business reverting.
       const element = await storedNavigator();
 
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      // A section-level change is gated behind edit mode as of this slice;
+      // an item rename is not (items are slice 04's to gate), so it stands in
+      // here for "a canvas change made before edit mode was entered" — the
+      // draft-boundary behaviour under test does not care which act made it.
+      await renameFirstItem(element, 0, "Renamed before edit");
       expect(updateLayout).not.toHaveBeenCalled();
 
       await enterEditMode(element);
       await flush();
 
       expect(updateLayout).toHaveBeenCalledTimes(1);
-      expect(lastSavedLayout(updateLayout).sections[0].columns).toBe(4);
+      expect(lastSavedLayout(updateLayout).sections[0].items[0].rename).toBe(
+        "Renamed before edit"
+      );
 
       // And Cancel goes back to that, not past it.
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed during edit");
       await cancelEdits(element);
 
-      expect(renderedColumns(element, 0)).toBe(4);
+      const item =
+        querySections(element)[0].shadowRoot.querySelector("c-navigator-item");
+      expect(item.label).toBe("Renamed before edit");
       expect(updateLayout).toHaveBeenCalledTimes(1);
     });
 
