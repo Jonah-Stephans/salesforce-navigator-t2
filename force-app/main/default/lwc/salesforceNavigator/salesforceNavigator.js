@@ -407,6 +407,19 @@ export default class SalesforceNavigator extends LightningElement {
    * reads it (to wait) and writes it (for its own create) — see it for how
    * the wait is used to fold a second write onto the row the first one is
    * creating. `createNewLayout` only writes it, tagged `distinct: true`.
+   *
+   * **Both writers clear their own entry, and only their own.** An
+   * overridden write that falls through past a `distinct` create (the case
+   * just above) overwrites this field with its own entry while the
+   * `distinct` create is still in flight — two creates are then
+   * outstanding for one slot. Each writer's clear checks the field still
+   * holds the object *that write* put there (`this.creatingLayout ===
+   * mine`) before setting it back to `undefined`, so whichever create
+   * settles first can only ever clear its own entry, never the other
+   * writer's still-open one. Without that check, the first to settle wipes
+   * the second's entry out from under it, and the next immediate write
+   * sees no create in flight and makes a row of its own instead of
+   * waiting — closed by the fix to slice 01's finding 1.
    */
   creatingLayout;
 
@@ -797,12 +810,21 @@ export default class SalesforceNavigator extends LightningElement {
       });
     this.saveChain = created;
     if (wasRowless) {
-      this.creatingLayout = {
+      // Cleared only if this call's own entry is still the one in the
+      // field — see `creatingLayout`. An overridden write that falls
+      // through past this `distinct` create (`renameCurrentLayout`'s
+      // no-row branch, racing this one) overwrites the field with its own
+      // entry before this create resolves; clearing unconditionally here
+      // would wipe that write's still-open entry out from under it.
+      const mine = {
         promise: created.then(() => {
-          this.creatingLayout = undefined;
+          if (this.creatingLayout === mine) {
+            this.creatingLayout = undefined;
+          }
         }),
         distinct: true
       };
+      this.creatingLayout = mine;
     }
   }
 
@@ -1849,19 +1871,23 @@ export default class SalesforceNavigator extends LightningElement {
         return inFlight.promise.then(() => {
           // Re-resolves an override against `this.editSnapshot` fresh
           // rather than replaying the value handed in before the wait.
-          // **Unreachable with effect today, and kept deliberately, the same
-          // standing as the two guards in `## Deviations` this slice already
-          // keeps on that basis.** The only thing that ever moves
-          // `editSnapshot.json` mid-session is `resnapshotEdit`, and every
-          // caller of it is now either `distinct` (skips this branch
-          // entirely for an override, above) or requires a `layoutId` this
-          // branch's own guard already rules out. So `this.editSnapshot.json`
-          // and `layoutJson` always agree here now — confirmed by mutation,
-          // collapsing this to `resolvedOverride = layoutJson` leaves the
-          // full suite green. It stays because the fact it depends on
-          // (every `resnapshotEdit` caller being accounted for above) lives
-          // in other methods, and the cost of a future one going uncounted
-          // is a Tier 2 write silently addressed to a superseded snapshot.
+          // **Live, not dead — a prior pass claimed this could not
+          // discriminate because "the only thing that ever moves
+          // `editSnapshot.json` mid-session is `resnapshotEdit`," and that
+          // enumeration was wrong.** Two other things move it: re-entering
+          // edit mode re-takes the snapshot on every entry
+          // (`handleEditStart`'s `captureEditSnapshot()`), and for a user
+          // whose `storedLayout` is `undefined` the snapshot is built from
+          // `this.items`, which the tab wire can redeliver on an LDS cache
+          // refresh — an ordinary event for a UI API adapter, per the
+          // comment on `wiredNavItems` above. A second no-row rename that
+          // waits on the first's still-open create can clear that wait
+          // after a Cancel, a wire redelivery and a re-entry have moved
+          // the snapshot out from under it; replaying the value captured
+          // when the wait started would then write a superseded canvas.
+          // Re-reading `this.editSnapshot` here is what keeps the write
+          // addressed to the entry snapshot as it stands *now*, not as it
+          // stood when this call was made.
           const resolvedOverride =
             layoutJson !== undefined && this.editSnapshot
               ? this.editSnapshot.json
@@ -1878,12 +1904,18 @@ export default class SalesforceNavigator extends LightningElement {
     const isCreate = !this.pendingSave.layoutId;
     const result = this.save();
     if (isCreate) {
-      this.creatingLayout = {
+      // Same ownership check as `createNewLayout`'s writer — see
+      // `creatingLayout` — so this create's resolution cannot clear a
+      // different write's still-open entry out from under it.
+      const mine = {
         promise: result.then(() => {
-          this.creatingLayout = undefined;
+          if (this.creatingLayout === mine) {
+            this.creatingLayout = undefined;
+          }
         })
       };
-      return this.creatingLayout.promise;
+      this.creatingLayout = mine;
+      return mine.promise;
     }
     return result;
   }
