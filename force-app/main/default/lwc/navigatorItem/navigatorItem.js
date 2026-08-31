@@ -88,6 +88,39 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
    */
   @api moveTargets = [];
 
+  /**
+   * Whether the whole Navigator is in edit mode, set by this item's section —
+   * the same `@api` down / `CustomEvent` up route `index`, `grabbed` and
+   * `moveTargets` already use, rather than a new state-sharing mechanism. The
+   * per-item overflow menu — and therefore renaming, removing and moving this
+   * item to another section — is reachable only while this holds true; out of
+   * edit mode it does not render at all (`lwc:if`, not a CSS class), so
+   * neither the tab order nor a screen reader can reach it. Nothing else about
+   * this item changes: the anchor, its drag attributes and `handleClick` are
+   * untouched by this flag, which is what keeps the link working in both
+   * states.
+   *
+   * A setter rather than a bare field for the same reason `navigatorSection`'s
+   * `editing` is one: an in-progress rename is this item's own transient
+   * state, entered only through the now-gated menu. If edit mode ends
+   * mid-rename, the menu that could reopen or abandon it is gone, so nothing
+   * else on this item would close a rename input left open — ending edit mode
+   * ends any in-progress rename along with it.
+   */
+  @api
+  get editing() {
+    return this.isEditingItem;
+  }
+
+  set editing(value) {
+    this.isEditingItem = value;
+    if (!value) {
+      this.isRenaming = false;
+    }
+  }
+
+  isEditingItem = false;
+
   // Defaults to a real, non-empty href so the anchor is always a genuine
   // link — in tab order, exposing a link role, and supporting native
   // middle-click / "open in new tab" — from first render, before

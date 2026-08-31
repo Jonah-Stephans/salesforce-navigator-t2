@@ -192,25 +192,34 @@ function selectSectionMenuItem(element, sectionIndex, value) {
 }
 
 /**
- * A still-ungated Tier 1 act — item rename is slice 04's to gate, not this
- * one's — used as the mutation vehicle wherever a test's actual subject is
- * the save chain's debounce/coalescing/id-handling behaviour rather than any
- * particular section-level control. Chosen over item removal because, like
- * `columns-N`, it can be repeated on the same target with a fresh distinct
- * value each time.
+ * A change to the layout, used as the mutation vehicle wherever a test's
+ * actual subject is the save chain's debounce/coalescing/id-handling
+ * behaviour rather than any particular control. Chosen over item removal
+ * because, like `columns-N`, it can be repeated on the same target with a
+ * fresh distinct value each time.
+ *
+ * Item rename is gated behind edit mode as of slice 04, and `scheduleSave`
+ * itself returns early while editing — so a test of the *debounce* has to
+ * run out of edit mode, which is exactly where the item's own menu no longer
+ * renders at all. This dispatches the `itemrename` the menu would have
+ * dispatched directly on the item element instead of opening that (now
+ * edit-mode-only) menu, which is what lets these tests keep running out of
+ * edit mode. It works unchanged whether or not the fixture can even *reach*
+ * edit mode — the two `hasLayoutLoadError` fixtures below have no edit
+ * affordance at all — because it never touches the item's own rendered UI,
+ * only the event the parent's listeners already respond to regardless of
+ * what produced it. Doing this keeps these tests pinning the debounce as the
+ * backstop `## Design` calls it — against a *future* ungated write — rather
+ * than as a route a user can still reach today.
  */
 async function renameFirstItem(element, sectionIndex, value) {
   const item =
     querySections(element)[sectionIndex].shadowRoot.querySelector(
       "c-navigator-item"
     );
-  item.shadowRoot
-    .querySelector("lightning-button-menu")
-    .dispatchEvent(new CustomEvent("select", { detail: { value: "rename" } }));
-  await flush();
-  const input = item.shadowRoot.querySelector("lightning-input");
-  input.dispatchEvent(new CustomEvent("change", { detail: { value } }));
-  input.dispatchEvent(new CustomEvent("commit"));
+  item.dispatchEvent(
+    new CustomEvent("itemrename", { detail: { index: 0, rename: value } })
+  );
   await flush();
 }
 
@@ -641,9 +650,20 @@ describe("c-salesforce-navigator", () => {
           ".rstk-nav-section__add"
         )
       ).toBeNull();
-      // Stronger still: actually attempt the change the still-ungated item
-      // menu allows, so `scheduleSave`'s own `hasLayoutLoadError` early
-      // return stays pinned rather than only the controls being absent.
+      // The item's own overflow menu is gated the same way as of slice 04,
+      // and for the same reason: `canEdit` false means no way into the mode
+      // that could write, at every level of the canvas.
+      expect(
+        querySections(element)[0]
+          .shadowRoot.querySelector("c-navigator-item")
+          .shadowRoot.querySelector("lightning-button-menu")
+      ).toBeNull();
+      // Stronger still: actually attempt the change the item's own gated menu
+      // would have made, so `scheduleSave`'s own `hasLayoutLoadError` early
+      // return stays pinned by a real mutation rather than only by the
+      // controls being absent. `renameFirstItem` dispatches the event
+      // directly on the item, so it reaches this guard whether or not edit
+      // mode is reachable at all.
       await renameFirstItem(element, 0, "Renamed");
       await settleAutosave();
 
@@ -767,9 +787,20 @@ describe("c-salesforce-navigator", () => {
           ".rstk-nav-section__add"
         )
       ).toBeNull();
-      // Stronger still: actually attempt the change the still-ungated item
-      // menu allows, so `scheduleSave`'s own `hasLayoutLoadError` early
-      // return stays pinned rather than only the controls being absent.
+      // The item's own overflow menu is gated the same way as of slice 04,
+      // and for the same reason: `canEdit` false means no way into the mode
+      // that could write, at every level of the canvas.
+      expect(
+        querySections(element)[0]
+          .shadowRoot.querySelector("c-navigator-item")
+          .shadowRoot.querySelector("lightning-button-menu")
+      ).toBeNull();
+      // Stronger still: actually attempt the change the item's own gated menu
+      // would have made, so `scheduleSave`'s own `hasLayoutLoadError` early
+      // return stays pinned by a real mutation rather than only by the
+      // controls being absent. `renameFirstItem` dispatches the event
+      // directly on the item, so it reaches this guard whether or not edit
+      // mode is reachable at all.
       await renameFirstItem(element, 0, "Renamed");
       await settleAutosave();
 
@@ -2214,6 +2245,7 @@ describe("c-salesforce-navigator", () => {
 
       it("moves the item the user picked, not the one sharing its stored position", async () => {
         const element = await navigatorWithAWithdrawnTab();
+        await enterEditMode(element);
         expect(itemLabelsBySection(element)).toEqual([
           ["Action Plans", "Contacts"],
           []
@@ -2227,7 +2259,7 @@ describe("c-salesforce-navigator", () => {
           ["Action Plans"]
         ]);
 
-        await settleAutosave();
+        await saveEdits(element);
         // `Account` is still first in `Selling`, so restoring access still
         // restores it in its original position.
         expect(savedIds(updateLayout, 0)).toEqual(["Account", "Contact"]);
@@ -2282,6 +2314,7 @@ describe("c-salesforce-navigator", () => {
         // section's vanish-detection sees the item leave its list and cannot,
         // on its own, tell "moved away" from "withdrawn".
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         press(itemsIn(element, 0)[1].shadowRoot.querySelector("a"), " ");
         await flush();
@@ -2332,6 +2365,7 @@ describe("c-salesforce-navigator", () => {
         const element = createNavigator();
         getNavItems.emit({ navItems: THREE });
         await flush();
+        await enterEditMode(element);
 
         // Hold the last of the three.
         press(itemsIn(element, 0)[2].shadowRoot.querySelector("a"), " ");
@@ -2391,6 +2425,7 @@ describe("c-salesforce-navigator", () => {
         const element = createNavigator();
         getNavItems.emit({ navItems: THREE });
         await flush();
+        await enterEditMode(element);
 
         await chooseDestination(element, 0, 0, "Support");
 
@@ -2399,12 +2434,13 @@ describe("c-salesforce-navigator", () => {
           ["Contacts", "Accounts"]
         ]);
 
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedIds(updateLayout, 1)).toEqual(["Contact", "Account"]);
       });
 
       it("offers every other section on an item's menu, and never the item's own", async () => {
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         expect(menuEntries(element, 0, 0).map((entry) => entry.label)).toEqual([
           "Support"
@@ -2418,6 +2454,7 @@ describe("c-salesforce-navigator", () => {
         // The whole cross-section route without a mouse anywhere in it: a
         // menu, chosen by its label, on an item that is a plain link.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         await chooseDestination(element, 0, 1, "Support");
 
@@ -2426,7 +2463,7 @@ describe("c-salesforce-navigator", () => {
           ["Contacts", "Action Plans"]
         ]);
 
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedIds(updateLayout, 0)).toEqual(["Account"]);
         expect(savedIds(updateLayout, 1)).toEqual([
           "Contact",
@@ -2440,6 +2477,7 @@ describe("c-salesforce-navigator", () => {
         // string: a component that reported a constant index would be
         // invisible without a move that starts somewhere else.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         await chooseDestination(element, 1, 0, "Selling");
 
@@ -2453,8 +2491,9 @@ describe("c-salesforce-navigator", () => {
         // A remount on the payload that was actually written is what a reload
         // is, since nothing else survives one.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
         await chooseDestination(element, 0, 1, "Support");
-        await settleAutosave();
+        await saveEdits(element);
 
         const written = updateLayout.mock.calls[0][0].layoutJson;
         document.body.removeChild(element);
@@ -2475,6 +2514,7 @@ describe("c-salesforce-navigator", () => {
 
       it("announces the move to a screen reader, naming the section it went to", async () => {
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         await chooseDestination(element, 0, 1, "Support");
 
@@ -2488,6 +2528,7 @@ describe("c-salesforce-navigator", () => {
         // The rename is the user's own wording and has nothing to do with
         // where the item sits, so crossing a boundary must not drop it.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         await chooseDestination(element, 0, 0, "Support");
 
@@ -2495,7 +2536,7 @@ describe("c-salesforce-navigator", () => {
           ["Action Plans"],
           ["Contacts", "Clients"]
         ]);
-        await settleAutosave();
+        await saveEdits(element);
         expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([
           { id: "Contact" },
           { id: "Account", rename: "Clients" }
@@ -2511,6 +2552,7 @@ describe("c-salesforce-navigator", () => {
         const element = createNavigator();
         getNavItems.emit({ navItems: THREE });
         await flush();
+        await enterEditMode(element);
 
         expect(sectionNames(element)).toEqual(["All Items"]);
         queryItems(element).forEach((item) => {
@@ -2657,11 +2699,20 @@ describe("c-salesforce-navigator", () => {
       }
     ]);
 
+    // Enters edit mode as part of mounting: an item's own rename is gated
+    // behind it as of slice 04, and every test in this describe drives that
+    // menu at some point — this is the behavioural suite for the rename
+    // itself (wording, payload shape, reload, clearing), not the debounce
+    // mechanism, so there is no reason for any of them to stay out of edit
+    // mode. Navigation and the payload each item renders are unaffected by
+    // `isEditing` either way, so the handful of tests here that never touch
+    // the menu are not disturbed by mounting this way.
     async function navigatorOn(layout, navItems = THREE) {
       getLayouts.mockResolvedValue(layout ? [layout] : []);
       const element = createNavigator();
       getNavItems.emit({ navItems });
       await flush();
+      await enterEditMode(element);
       return element;
     }
 
@@ -2774,7 +2825,7 @@ describe("c-salesforce-navigator", () => {
       const element = await navigatorOn(RENAMED);
 
       await renameTo(element, 0, 1, "People");
-      await settleAutosave();
+      await saveEdits(element);
 
       expect(savedItems(updateLayout)).toEqual([
         { id: "Account", rename: "Clients" },
@@ -2795,7 +2846,7 @@ describe("c-salesforce-navigator", () => {
       // owner-filtered, so a fresh login reads back this same row.
       const element = await navigatorOn(RENAMED);
       await renameTo(element, 0, 1, "People");
-      await settleAutosave();
+      await saveEdits(element);
 
       const written = updateLayout.mock.calls[0][0].layoutJson;
       document.body.removeChild(element);
@@ -2815,7 +2866,7 @@ describe("c-salesforce-navigator", () => {
       await renameTo(element, 0, 0, "");
 
       expect(renderedLabel(element, 0, 0)).toBe("Accounts");
-      await settleAutosave();
+      await saveEdits(element);
       // Cleared is the key's absence, not an empty string sitting in the
       // payload — asserted as an exact key set, because `toEqual` alone would
       // not tell `{id}` from `{id, rename: ""}` if the value were undefined.
@@ -2826,7 +2877,7 @@ describe("c-salesforce-navigator", () => {
     it("keeps the cleared item under its Salesforce label after a reload", async () => {
       const element = await navigatorOn(RENAMED);
       await renameTo(element, 0, 0, "");
-      await settleAutosave();
+      await saveEdits(element);
 
       const written = updateLayout.mock.calls[0][0].layoutJson;
       document.body.removeChild(element);
@@ -2847,9 +2898,26 @@ describe("c-salesforce-navigator", () => {
       // that stores nothing must not be what creates a layout row for a user
       // who has only ever looked, which slice 03 has a criterion against. Nor
       // is there anything to announce: "Accounts renamed to Accounts."
-      const element = await navigatorOn(undefined, [ACCOUNT_ITEM]);
+      //
+      // Runs out of edit mode, unlike every other test in this describe: the
+      // guard under test sits upstream of `scheduleSave`, comparing the
+      // canvas before and after. In edit mode, Save's own "nothing to write"
+      // check (`hasUnsavedCanvasChanges`) would report the same "nothing
+      // written" outcome whether or not that upstream guard exists — a no-op
+      // rename leaves the serialised layout identical either way, so Save
+      // would refuse to write regardless — which is exactly the vacuous-pass
+      // shape trap 273 warns about. Dispatching `itemrename` directly on the
+      // item, the way `renameFirstItem` does, is what keeps this test out of
+      // edit mode without going through the now-gated menu.
+      getLayouts.mockResolvedValue([]);
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM] });
+      await flush();
 
-      await renameTo(element, 0, 0, "");
+      itemAt(element, 0, 0).dispatchEvent(
+        new CustomEvent("itemrename", { detail: { index: 0, rename: "" } })
+      );
+      await flush();
       await settleAutosave();
 
       expect(createLayout).not.toHaveBeenCalled();
@@ -2874,7 +2942,7 @@ describe("c-salesforce-navigator", () => {
       await renameTo(element, 0, 0, "Accounts");
 
       expect(renderedLabel(element, 0, 0)).toBe("Accounts");
-      await settleAutosave();
+      await saveEdits(element);
       expect(savedItems(updateLayout)[0]).toEqual({ id: "Account" });
       expect(Object.keys(savedItems(updateLayout)[0])).toEqual(["id"]);
     });
@@ -2899,7 +2967,7 @@ describe("c-salesforce-navigator", () => {
       // And the renamed item is not disturbed by the relabelling of another.
       expect(renderedLabel(element, 0, 0)).toBe("Clients");
 
-      await settleAutosave();
+      await saveEdits(element);
       expect(updateLayout).not.toHaveBeenCalled();
       expect(createLayout).not.toHaveBeenCalled();
     });
@@ -2944,7 +3012,7 @@ describe("c-salesforce-navigator", () => {
         "Plans",
         "Contacts"
       ]);
-      await settleAutosave();
+      await saveEdits(element);
       expect(savedItems(updateLayout)).toEqual([
         { id: "Account" },
         { id: "standard-ActionHub", rename: "Plans" },
@@ -2965,7 +3033,7 @@ describe("c-salesforce-navigator", () => {
       await renameTo(element, 1, 0, "People");
 
       expect(itemLabelsBySection(element)).toEqual([["Accounts"], ["People"]]);
-      await settleAutosave();
+      await saveEdits(element);
       expect(savedItems(updateLayout, 0)).toEqual([{ id: "Account" }]);
       expect(savedItems(updateLayout, 1)).toEqual([
         { id: "Contact", rename: "People" }
@@ -3215,9 +3283,9 @@ describe("c-salesforce-navigator", () => {
     // `scheduleSave`'s `isEditing` early return rather than by the guard
     // under test, because a removal that names no item on screen was always
     // driven from inside edit mode. Tests that reach for "Add items", the
-    // section's own overflow menu, or Save call `enterEditMode` themselves;
-    // the item-removal tests that only drive an item's own menu do not need
-    // to, since that menu is not gated by this slice.
+    // section's own overflow menu, Save, or — as of slice 04 — the item's
+    // own overflow menu, call `enterEditMode` themselves.
+
     async function navigatorOn(layout, navItems = THREE) {
       getLayouts.mockResolvedValue(layout ? [layout] : []);
       const element = createNavigator();
@@ -3300,6 +3368,7 @@ describe("c-salesforce-navigator", () => {
 
     it("takes an item out of the layout when Remove is chosen from its menu", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       // The entry has to be findable, not merely respondable-to — slice 06's
       // row 16 is the reason this assertion is here and not implied.
       expect(itemMenuEntries(element, 0, 0)).toContainEqual([
@@ -3315,6 +3384,7 @@ describe("c-salesforce-navigator", () => {
 
     it("removes the item the user chose, out of the second section as readily as the first", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
 
       selectItemMenuItem(element, 1, 0, "remove");
       await flush();
@@ -3345,6 +3415,7 @@ describe("c-salesforce-navigator", () => {
 
     it("announces the removal, naming the item and the section it left", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
 
       selectItemMenuItem(element, 1, 0, "remove");
       await flush();

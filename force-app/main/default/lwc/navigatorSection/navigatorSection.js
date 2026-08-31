@@ -123,7 +123,10 @@ export default class NavigatorSection extends LightningElement {
    * (`lwc:if`, not a CSS class), so neither the tab order nor a screen
    * reader can reach them. `emptyMessage` also reads this: it names the Add
    * items button only while editing, since out of edit mode that button is
-   * one of the things this flag hides.
+   * one of the things this flag hides. Passed straight through to each
+   * `c-navigator-item` (`navigatorSection.html`'s `editing={editing}`) so its
+   * own overflow menu — Rename…, Remove, Move to… — is gated the same way,
+   * one level further down the same route.
    *
    * A setter rather than a bare field for one reason: an in-progress rename
    * is this component's own transient state, entered only through the

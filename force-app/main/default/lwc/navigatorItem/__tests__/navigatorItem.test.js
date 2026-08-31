@@ -772,6 +772,99 @@ describe("c-navigator-item", () => {
     });
   });
 
+  /**
+   * `## Design`'s "Controls are absent from the DOM, not hidden": jsdom
+   * applies no stylesheet, so "renders no overflow menu" is provable only as
+   * absence from the DOM, never as a hidden-but-present element — the same
+   * reasoning the existing `isRenaming` test already demonstrates for the
+   * rename anchor, and the same the sibling `navigatorSection` gate already
+   * applies to its own header controls. `editing` is driven directly here,
+   * with the item mounted on its own, rather than through a section or the
+   * page — the same test entry point `## Design` names for both children.
+   */
+  describe("the edit-mode gate on this item's overflow menu", () => {
+    const TARGETS = [{ value: "1", label: "Selling" }];
+
+    function menuOf(element) {
+      return element.shadowRoot.querySelector("lightning-button-menu");
+    }
+
+    it("renders no overflow menu out of edit mode, so renaming, removing and moving it to another section are all unreachable", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: false, moveTargets: TARGETS })
+      );
+
+      expect(menuOf(element)).toBeNull();
+    });
+
+    it("renders the full overflow menu — Rename…, Remove and every destination — in edit mode", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
+      );
+
+      const values = Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).map((item) => item.value);
+      expect(values).toEqual(["rename", "remove", "move-to-1"]);
+      expect(menuOf(element)).not.toBeNull();
+    });
+
+    it("removes an already-rendered menu the moment edit mode ends", async () => {
+      // Mounted once, then flipped — not two separate mounts — so this proves
+      // the *transition* removes the menu, which a fresh mount at
+      // `editing: false` cannot distinguish from "never rendered it".
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
+      expect(menuOf(element)).not.toBeNull();
+
+      element.editing = false;
+      await settled(element);
+
+      expect(menuOf(element)).toBeNull();
+    });
+
+    it("cancels an in-progress rename when edit mode ends, so no rename input is left showing with no menu to close it", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
+      menuOf(element).dispatchEvent(
+        new CustomEvent("select", { detail: { value: "rename" } })
+      );
+      await Promise.resolve();
+      expect(
+        element.shadowRoot.querySelector("lightning-input")
+      ).not.toBeNull();
+
+      element.editing = false;
+      await Promise.resolve();
+
+      expect(element.shadowRoot.querySelector("lightning-input")).toBeNull();
+      expect(anchorOf(element).textContent.trim()).toBe("Our Site");
+    });
+
+    it("still renders the link, clickable and navigable to the right place, out of edit mode", async () => {
+      // Criterion 4, pinned in the same fixture as the gate itself: the menu's
+      // absence must not be a side effect of the anchor's absence too.
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: false })
+      );
+
+      expect(menuOf(element)).toBeNull();
+      const anchor = anchorOf(element);
+      expect(anchor).not.toBeNull();
+      expect(anchor.getAttribute("href")).toBe("/lightning/o/Account/home");
+
+      anchor.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true })
+      );
+
+      expect(getNavigateCalledWith().pageReference).toEqual(
+        STORED_PAGE_REFERENCE
+      );
+    });
+  });
+
   describe("the Move to… menu", () => {
     // Arrow keys deliberately do not cross a section boundary — that is the
     // pattern, not an omission — so this menu is the cross-section mechanism,
@@ -805,7 +898,7 @@ describe("c-navigator-item", () => {
 
     it("lists every destination it was given, under the label that section has", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
 
       expect(destinationsOf(element).map((item) => item.label)).toEqual([
@@ -821,7 +914,7 @@ describe("c-navigator-item", () => {
       // menu withheld here would make renaming unreachable for exactly the
       // user who has never customised anything.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: [] })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: [] })
       );
 
       expect(destinationsOf(element)).toEqual([]);
@@ -833,7 +926,7 @@ describe("c-navigator-item", () => {
 
     it("reports the chosen destination upward, with its own position", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 2, moveTargets: TARGETS })
+        createNavigatorItem({ index: 2, editing: true, moveTargets: TARGETS })
       );
       const handler = jest.fn();
       element.addEventListener("itemmoveto", handler);
@@ -879,7 +972,7 @@ describe("c-navigator-item", () => {
       // what is pinned is that the route is that component and not a div with
       // a click handler, which is the choice the keyboard criterion rests on.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
 
       expect(menuOf(element)).not.toBeNull();
@@ -893,7 +986,7 @@ describe("c-navigator-item", () => {
       // announced only as "Show menu" leaves a screen reader user with a
       // column of identical buttons.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
 
       expect(menuOf(element).alternativeText).toContain("Our Site");
@@ -943,7 +1036,7 @@ describe("c-navigator-item", () => {
       // is the rename — a menu gated on having a destination would put this
       // out of reach of every user who has never made a section.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: [] })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: [] })
       );
 
       const values = Array.from(
@@ -956,6 +1049,7 @@ describe("c-navigator-item", () => {
       const element = await settled(
         createNavigatorItem({
           index: 0,
+          editing: true,
           label: "Clients",
           moveTargets: TARGETS
         })
@@ -991,7 +1085,7 @@ describe("c-navigator-item", () => {
 
       try {
         const element = await settled(
-          createNavigatorItem({ index: 0, moveTargets: TARGETS })
+          createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
         );
 
         await startRenaming(element);
@@ -1004,7 +1098,7 @@ describe("c-navigator-item", () => {
 
     it("reports the wording upward with its own position, on commit", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 2, moveTargets: TARGETS })
+        createNavigatorItem({ index: 2, editing: true, moveTargets: TARGETS })
       );
       const handler = jest.fn();
       element.addEventListener("itemrename", handler);
@@ -1024,7 +1118,7 @@ describe("c-navigator-item", () => {
 
     it("puts the item back under its anchor once the rename is committed", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
 
       const input = await startRenaming(element);
@@ -1040,7 +1134,7 @@ describe("c-navigator-item", () => {
       // A rename per keystroke would re-render the row under the caret and put
       // half-typed wording into the layout the autosave is about to write.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
       const handler = jest.fn();
       element.addEventListener("itemrename", handler);
@@ -1054,7 +1148,7 @@ describe("c-navigator-item", () => {
 
     it("keeps the wording it had when a rename is abandoned with Escape", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
       const handler = jest.fn();
       element.addEventListener("itemrename", handler);
@@ -1077,6 +1171,7 @@ describe("c-navigator-item", () => {
         const element = await settled(
           createNavigatorItem({
             index: 1,
+            editing: true,
             label: "Clients",
             moveTargets: TARGETS
           })
@@ -1102,7 +1197,7 @@ describe("c-navigator-item", () => {
       // platform label into the payload so a later org relabelling stopped
       // reaching it.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
       const handler = jest.fn();
       element.addEventListener("itemrename", handler);
@@ -1126,6 +1221,7 @@ describe("c-navigator-item", () => {
       const element = await settled(
         createNavigatorItem({
           index: 1,
+          editing: true,
           label: "Clients",
           moveTargets: TARGETS
         })
@@ -1155,7 +1251,7 @@ describe("c-navigator-item", () => {
       // over a template that left the anchor sitting there for a real user to
       // Tab onto and Space.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
       const grabbed = jest.fn();
       element.addEventListener("itemgrab", grabbed);
@@ -1205,7 +1301,9 @@ describe("c-navigator-item", () => {
       // fires the menu's own `select` event, and a menu with nothing in it
       // emits that just as happily as a full one — so the entry could be
       // deleted outright with the suite green.
-      const element = await settled(createNavigatorItem({ index: 0 }));
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
 
       expect(menuEntries(element)).toContainEqual(["remove", "Remove"]);
     });
@@ -1216,14 +1314,16 @@ describe("c-navigator-item", () => {
       // has never customised anything — every user, on first open. Same
       // reasoning as slice 06's always-present menu.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: [] })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: [] })
       );
 
       expect(menuEntries(element)).toContainEqual(["remove", "Remove"]);
     });
 
     it("asks for its own removal, carrying its own position", async () => {
-      const element = await settled(createNavigatorItem({ index: 2 }));
+      const element = await settled(
+        createNavigatorItem({ index: 2, editing: true })
+      );
       const removed = jest.fn();
       element.addEventListener("itemremove", removed);
 
@@ -1236,7 +1336,9 @@ describe("c-navigator-item", () => {
     it("reports its own position and not a constant", async () => {
       // An item that reported `index: 0` would be indistinguishable from one
       // that reported itself in every fixture built at position 0.
-      const element = await settled(createNavigatorItem({ index: 4 }));
+      const element = await settled(
+        createNavigatorItem({ index: 4, editing: true })
+      );
       const removed = jest.fn();
       element.addEventListener("itemremove", removed);
 
@@ -1247,7 +1349,7 @@ describe("c-navigator-item", () => {
 
     it("does not confuse Remove with Rename or with a destination", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
       const removed = jest.fn();
       const moved = jest.fn();
@@ -1268,7 +1370,9 @@ describe("c-navigator-item", () => {
       // an unabandoned edit would arrive as an `itemrename` on a position
       // that by then names a different item. Abandoning first is what makes
       // the existing `isRenaming` guard swallow it.
-      const element = await settled(createNavigatorItem({ index: 0 }));
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
       selectMenuItem(element, "rename");
       await Promise.resolve();
       const input = element.shadowRoot.querySelector("lightning-input");
