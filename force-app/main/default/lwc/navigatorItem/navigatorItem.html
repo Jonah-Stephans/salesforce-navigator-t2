@@ -126,8 +126,11 @@
        not something a screen reader reads. Kept to four words on purpose —
        it is spoken on every focus, and a bare org shows around 174 items.
        It deliberately does not repeat the label; `aria-label` on the anchor
-       already carries that. -->
-  <template lwc:else>
+       already carries that. Rendered only in edit mode, as of this spec's
+       third fix pass — see `hintId` in navigatorItem.js — since out of edit
+       mode Space does nothing and this sentence would be false, not merely
+       early. -->
+  <template lwc:elseif={editing}>
     <span id={hintId} class="slds-assistive-text rstk-nav-item__hint">
       Press Space to move.
     </span>

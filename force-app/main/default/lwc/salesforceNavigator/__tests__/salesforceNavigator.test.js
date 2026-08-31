@@ -2362,7 +2362,15 @@ describe("c-salesforce-navigator", () => {
       });
 
       it("drags the item the user picked up, not the one sharing its stored position", async () => {
+        // Mounted in edit mode as of this spec's third fix pass: the drop
+        // lands on the destination card's own `<article>`
+        // (`handleCardDrop`), which is now gated on `editing` — the fourth
+        // of the family's four `dragover`/`drop` handlers to carry that
+        // guard. This test's own subject, resolving the dragged item by
+        // identity rather than by its rendered position, is an in-edit-mode
+        // concern regardless.
         const element = await navigatorWithAWithdrawnTab();
+        await enterEditMode(element);
         const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
 
         dragged.dispatchEvent(dragEvent("dragstart"));
@@ -2686,7 +2694,13 @@ describe("c-salesforce-navigator", () => {
       });
 
       it("puts the item at the end when it is dropped on the card rather than on an item", async () => {
+        // Mounted in edit mode as of this spec's third fix pass:
+        // `handleCardDrop` is now gated on `editing`, matching the item's
+        // own `handleDrop` and `handleDragOver`, and the card's own
+        // `handleCardDragOver` — the fourth of the family's four
+        // `dragover`/`drop` handlers to carry that guard.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
         const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
 
         dragged.dispatchEvent(dragEvent("dragstart"));
@@ -2699,6 +2713,38 @@ describe("c-salesforce-navigator", () => {
           ["Action Plans"],
           ["Contacts", "Clients"]
         ]);
+      });
+
+      it("does not move an item across sections when dropped on another item out of edit mode, and writes nothing", async () => {
+        // Finding 1 of the third fix pass, pinned at the composed level
+        // rather than only on an isolated `c-navigator-item`. The prior
+        // pass's own composed-level probe found that gating only the item's
+        // `handleDrop` (and leaving `handleCardDrop` ungated) closed nothing
+        // here: with `handleDrop` returning before its `stopPropagation()`,
+        // a drop on this anchor still bubbled to the section's own
+        // `<article>` and was read there instead, at the end position
+        // rather than the dropped-on one, but still a write. Both gaps are
+        // closed now — `stopPropagation()` fires unconditionally in
+        // `handleDrop`, and `handleCardDrop` is gated the same way as the
+        // other three `dragover`/`drop` handlers in the family — so this
+        // gesture, run entirely out of edit mode, must move nothing and
+        // write nothing.
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[1].shadowRoot.querySelector("a");
+        const landing = itemsIn(element, 1)[0].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        landing.dispatchEvent(dragEvent("dragover"));
+        landing.dispatchEvent(dragEvent("drop"));
+        await flush();
+        await settleAutosave();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients", "Action Plans"],
+          ["Contacts"]
+        ]);
+        expect(updateLayout).not.toHaveBeenCalled();
+        expect(createLayout).not.toHaveBeenCalled();
       });
 
       it("writes nothing when an item is dropped back into the section it came from", async () => {

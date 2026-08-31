@@ -865,6 +865,23 @@ export default class NavigatorSection extends LightningElement {
   }
 
   handleCardDrop(event) {
+    // Out of edit mode this card is not a drop target at all — added on this
+    // spec's third fix pass, the fourth of the four `dragover`/`drop`
+    // handlers in this component family to carry the guard. Leaving it off
+    // was reasoned as safe because a real browser never fires `drop` at all
+    // once the preceding `dragover` went uncancelled; that reasoning was
+    // correct and did not, on its own, distinguish this handler from
+    // navigatorItem.js's `handleDrop`, which carries the identical guard for
+    // the identical reason: jsdom enforces none of the browser's own
+    // dragover/drop sequencing, so a synthetic `drop` dispatched straight at
+    // this card reached this handler regardless of `dragover`, and — via
+    // `handleDrop`'s own `stopPropagation()` previously firing only when
+    // editing — reached it even from a drop that landed on one of this
+    // card's own items first. Gated for consistency with the item's own
+    // guard, not because a distinct production gap was found here.
+    if (!this.editing) {
+      return;
+    }
     event.preventDefault();
     this.dragDepth = 0;
     // A drop on the card itself names no position within it, so none is

@@ -1020,6 +1020,31 @@ describe("c-navigator-section", () => {
       expect(over.defaultPrevented).toBe(false);
     });
 
+    it("does not accept a drop directly on the card out of edit mode either", () => {
+      // The item's own half of this gate is pinned in navigatorItem.test.js
+      // as "does not dispatch a drop out of edit mode either, and keeps the
+      // event off whatever is outside it"; this is the card's —
+      // `handleCardDrop` was gated on this spec's third fix pass, the
+      // fourth of the family's four `dragover`/`drop` handlers to carry the
+      // guard. Dispatched directly on the card's own `<article>` rather
+      // than bubbled up from an item, so this discriminates
+      // `handleCardDrop`'s own guard regardless of what an item's
+      // `stopPropagation()` does or does not let through. `editing`
+      // defaults to false.
+      const element = createSection();
+      const handler = jest.fn();
+      element.addEventListener("sectiondrop", handler);
+
+      const drop = new CustomEvent("drop", {
+        bubbles: true,
+        cancelable: true
+      });
+      cardOf(element).dispatchEvent(drop);
+
+      expect(drop.defaultPrevented).toBe(false);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
     it("grabs, moves, drops and cancels its own card from the keyboard", () => {
       const element = createSection(undefined, { editing: true });
       const grab = jest.fn();
@@ -1317,7 +1342,13 @@ describe("c-navigator-section", () => {
     });
 
     it("stops looking like a drop target once the drop has happened", async () => {
-      const element = createSection();
+      // Mounted in edit mode as of this spec's third fix pass: `handleCardDrop`
+      // is now gated on `editing`, the fourth of the family's four
+      // `dragover`/`drop` handlers to get that guard — see "does not
+      // advertise itself as a drop target out of edit mode" above for the
+      // out-of-mode half, which this test's own subject (the drop actually
+      // being accepted and clearing state) does not exercise.
+      const element = createSection(undefined, { editing: true });
       const card = cardOf(element);
       element.itemDragActive = true;
 

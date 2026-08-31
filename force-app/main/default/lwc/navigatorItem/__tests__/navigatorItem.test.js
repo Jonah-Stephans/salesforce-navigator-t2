@@ -467,29 +467,46 @@ describe("c-navigator-item", () => {
       expect(event.defaultPrevented).toBe(false);
     });
 
-    it("does not dispatch a drop out of edit mode either", async () => {
-      // The card's own `handleCardDrop` is safely left ungated, because a
-      // real browser never fires `drop` at all once the preceding
-      // `dragover` went uncancelled — it fires `dragleave` instead — so an
-      // ungated handler there is dead code the browser itself never reaches.
-      // That reasoning cannot be *proven* here: jsdom dispatches exactly the
-      // event a test hands it and enforces none of the browser's own
-      // dragover/drop sequencing, so a synthetic `drop` dispatched straight
-      // at this anchor would still reach an ungated handler and still
-      // dispatch `itemdrop`, out of edit mode, indistinguishable here from a
-      // real one. `handleDrop` is gated directly instead of resting on an
-      // inference this suite cannot check, and this is the pin that proves
-      // it — it dispatches the `drop` event directly, the same way the
-      // "re-emits a drop..." test above does, and gets a different result.
+    it("does not dispatch a drop out of edit mode either, and keeps the event off whatever is outside it", async () => {
+      // Corrected on the third fix pass: this comment used to say the
+      // card's own `handleCardDrop` was safely left ungated, because a real
+      // browser never fires `drop` at all once the preceding `dragover`
+      // went uncancelled. That reasoning was correct and did not
+      // distinguish the card from this anchor — a re-review ran the
+      // identical probe against the card and got the identical result, so
+      // `handleCardDrop` is gated the same way now too.
+      //
+      // What actually keeps a drop on this anchor from being read a second
+      // time by the card is `stopPropagation()` firing unconditionally,
+      // ahead of the `editing` check, rather than after it as this handler
+      // used to have it — a composed-level probe found that the old
+      // ordering let an out-of-edit-mode drop bubble straight past this
+      // anchor to the section's `<article>` and land there instead; see
+      // `salesforceNavigator.test.js`'s "does not move an item across
+      // sections when dropped on another item out of edit mode, and writes
+      // nothing" for that composed proof. This unit-level pin checks the
+      // same fact the cheapest way jsdom can show it: `event.cancelBubble`
+      // does not survive past the end of `dispatchEvent` in this
+      // environment even when `stopPropagation()` was genuinely called
+      // (verified independently, outside this suite), so the only real
+      // observable is whether a listener *outside* this component's own
+      // shadow tree ever sees the event — the same shape as the
+      // `stopPropagation`/no-`stopPropagation` sanity pair that motivated
+      // this pin's design.
       const element = await settled(createNavigatorItem({ index: 1 }));
       const handler = jest.fn();
       element.addEventListener("itemdrop", handler);
+      const escaped = jest.fn();
+      document.body.addEventListener("drop", escaped);
 
       const event = dragEvent("drop");
       anchorOf(element).dispatchEvent(event);
 
       expect(event.defaultPrevented).toBe(false);
       expect(handler).not.toHaveBeenCalled();
+      expect(escaped).not.toHaveBeenCalled();
+
+      document.body.removeEventListener("drop", escaped);
     });
 
     it("announces the end of a drag so a drag that dropped on nothing clears state", async () => {
@@ -698,7 +715,13 @@ describe("c-navigator-item", () => {
     });
 
     it("attaches the instruction text only while grabbed, never permanently", async () => {
-      const element = await settled(createNavigatorItem({ index: 0 }));
+      // Mounted in edit mode: the resting hint this test's own comment
+      // relies on (below) is gated on `editing` as of this spec's third fix
+      // pass, and this test's subject — the instructions node's own
+      // grabbed-only lifecycle — is independent of that gate.
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
 
       // The anchor is described at rest — by the four-word hint, tested
       // below — so the criterion is about *this* node: the instruction text
@@ -744,7 +767,14 @@ describe("c-navigator-item", () => {
       // grabbed — arrive too late to be the thing that teaches the gesture.
       // A terse, permanent hint is what closes that. Terse deliberately: it
       // is read on every focus, and a bare org shows ~174 items.
-      const element = await settled(createNavigatorItem({ index: 0 }));
+      //
+      // Mounted in edit mode: the hint is gated on `editing` as of this
+      // spec's third fix pass — see "does not tell a keyboard user to press
+      // a key that does nothing, out of edit mode" below for the out-of-mode
+      // half this test used to cover by omission.
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
 
       const hint = element.shadowRoot.querySelector(".rstk-nav-item__hint");
       expect(hint).not.toBeNull();
@@ -767,7 +797,13 @@ describe("c-navigator-item", () => {
       // The grabbed state must win outright. Two description nodes on one
       // anchor would have a screen reader read the teaser and the
       // instructions back to back on every arrow press.
-      const element = await settled(createNavigatorItem({ index: 0 }));
+      //
+      // Mounted in edit mode for the same reason as the hint test above: the
+      // hint at rest only renders while editing, and this test's own second
+      // half (grabbed released, hint expected back) needs it to.
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
 
       element.grabbed = true;
       await settled(element);
@@ -794,6 +830,24 @@ describe("c-navigator-item", () => {
       expect(anchorOf(element).getAttribute("aria-describedby")).toBe(
         hint.getAttribute("id")
       );
+    });
+
+    it("does not tell a keyboard user to press a key that does nothing, out of edit mode", async () => {
+      // Finding 2 of the third fix pass. The resting hint used to be gated
+      // on `{grabbed}` alone, so out of edit mode every anchor still carried
+      // `aria-describedby` pointing at "Press Space to move." — byte-
+      // identical to edit mode — while `handleDragKeydown` returned early
+      // and Space did nothing. `editing` defaults to false, so this is the
+      // out-of-the-box state a screen reader user meets on first focus.
+      const element = await settled(createNavigatorItem({ index: 0 }));
+
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-item__hint")
+      ).toBeNull();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-item__instructions")
+      ).toBeNull();
+      expect(anchorOf(element).hasAttribute("aria-describedby")).toBe(false);
     });
 
     it.each([false, true])(

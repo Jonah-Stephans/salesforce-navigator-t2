@@ -235,12 +235,24 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   }
 
   /**
-   * The resting hint's id, which is the mirror image: it exists only while
-   * the item is *not* grabbed. The two nodes are alternatives, never
-   * co-present, so that the anchor is never described by both at once.
+   * The resting hint's id, which is the mirror image of `instructionsId`: it
+   * exists only while the item is *not* grabbed **and** the Navigator is in
+   * edit mode. The two nodes are alternatives, never co-present, so that the
+   * anchor is never described by both at once.
+   *
+   * Gated on `editing` too as of this spec's third fix pass — out of edit
+   * mode `handleDragKeydown` returns `false` on its very first line, so
+   * Space does nothing here, and a hint reading "Press Space to move."
+   * would be telling a screen reader user to press a key that does nothing
+   * rather than merely one they cannot reach yet. `grabbed` alone already
+   * implies `editing` (a grab can only start in edit mode, and leaving edit
+   * mode releases any grab in flight — see the `editing` setter above), so
+   * this getter only needed to add the other half.
    */
   get hintId() {
-    return this.grabbed ? undefined : `rstk-nav-hint-${this.tabId}`;
+    return this.grabbed || !this.editing
+      ? undefined
+      : `rstk-nav-hint-${this.tabId}`;
   }
 
   /**
@@ -459,23 +471,34 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   }
 
   handleDrop(event) {
-    // Gated deliberately, not merely for symmetry with the guard above.
-    // `navigatorSection.js`'s `handleCardDrop` is left ungated because a
-    // real browser never fires `drop` at all once the preceding `dragover`
-    // went uncancelled — it fires `dragleave` instead — so an ungated
-    // handler there is dead code the browser itself never reaches. That
-    // reasoning cannot be proven for this anchor the same way: jsdom
-    // dispatches exactly the event a test hands it and enforces none of the
-    // browser's own dragover/drop sequencing, so a synthetic `drop` fired
-    // straight at this anchor would still reach an ungated handler and still
-    // dispatch `itemdrop` out of edit mode, indistinguishable from a real
-    // one to anything this suite can run. Gating the handler directly closes
-    // that gap instead of resting on an inference this suite cannot check.
+    // Corrected rather than deleted, on the third fix pass: this comment
+    // used to argue `navigatorSection.js`'s `handleCardDrop` was safe left
+    // ungated because a real browser never fires `drop` at all once the
+    // preceding `dragover` went uncancelled. That reasoning was correct as
+    // far as it went, and it did not distinguish the card from this anchor —
+    // a re-review ran the identical synthetic-`drop` probe against the card
+    // and got the identical result. `handleCardDrop` is gated the same way
+    // now, for the same reason this handler already was, and this anchor's
+    // own gate is no longer resting alone on an inference the card's
+    // ungated status used to lean on too.
+    //
+    // stopPropagation() below now fires unconditionally, ahead of the
+    // `editing` check, rather than after it. That ordering was the actual
+    // gap: with the guard returning before stopPropagation(), a drop out of
+    // edit mode still bubbled past this anchor to the section's own
+    // `<article>` and was read there instead — the composed-level probe that
+    // found it is `salesforceNavigator.test.js`'s "does not move an item
+    // across sections when dropped on another item out of edit mode, and
+    // writes nothing". Stopping the event here regardless of mode is the
+    // line that keeps a drop on this anchor from being read a second time by
+    // the card underneath it — the job it did unconditionally before any
+    // edit mode existed — and the `editing` check now decides only whether
+    // *this* handler treats the drop as its own.
+    event.stopPropagation();
     if (!this.editing) {
       return;
     }
     event.preventDefault();
-    event.stopPropagation();
     this.dispatch("itemdrop", { index: this.index });
   }
 

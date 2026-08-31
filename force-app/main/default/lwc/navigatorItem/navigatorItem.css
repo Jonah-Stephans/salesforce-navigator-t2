@@ -56,8 +56,16 @@
    the keyboard grab in navigatorItem.js) is the fix for that, not for
    anything about clicking. The cursor moves with it: it used to sit
    unconditionally on `.rstk-nav-item` above, and now lives here instead, on
-   the `editing`-conditional class `anchorClass` adds — so nothing about
-   this element still advertises a drag out of edit mode, cursor included. */
+   the `editing`-conditional class `anchorClass` adds — so nothing about this
+   element's on-screen appearance still advertises a drag out of edit mode,
+   cursor included.
+
+   Corrected on this spec's third fix pass: the sentence above used to claim
+   nothing about this element advertised a drag out of edit mode, full stop —
+   which was false while the resting hint in navigatorItem.html read "Press
+   Space to move." regardless of `editing`. That hint is now gated the same
+   way (`hintId` in navigatorItem.js), so the claim is scoped here to what
+   this stylesheet is actually responsible for: the visual channel. */
 .rstk-nav-item_editing {
   cursor: grab;
 }
