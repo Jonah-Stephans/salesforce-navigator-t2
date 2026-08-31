@@ -4475,6 +4475,96 @@ describe("c-salesforce-navigator", () => {
       ).toEqual(["Weekly review"]);
     });
 
+    /**
+     * Re-review, the finding above's own re-review. The test above proves the
+     * switcher's checked entry stays correct, and that is not the whole of
+     * the damage: `createNewLayout` calls `createLayout` directly off
+     * `saveChain` rather than through `commitLayoutNow`, so it never set
+     * `creatingLayout`, and a Save made inside its round trip was still
+     * captured with `layoutId: undefined` — a second row, with the server's
+     * active flag on it, while the switcher's checked entry (read from
+     * `this.layoutId`, guarded separately by `rememberSaved`) stayed right.
+     * Reading the store, not only the screen, is what catches it.
+     */
+    it("a Save that lands after New layout does not create a second row on the server", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      const releaseCreate = store.deferNextCreate();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+
+      // The abandoned draft, saved while New layout's create is still in
+      // flight.
+      await saveEdits(element);
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // One row, not two, and the server's own active flag agrees with it —
+      // not only the switcher's checked entry, which stayed right even on
+      // the unfixed code.
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(store.names()).toEqual(["Weekly review"]);
+      expect(store.activeName()).toBe("Weekly review");
+    });
+
+    /**
+     * The same hazard through the other pairing the finding names: a no-row
+     * rename, rather than Save, landing inside New layout's round trip.
+     */
+    it("a no-row rename that lands after New layout does not create a second row on the server", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      const releaseCreate = store.deferNextCreate();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+
+      // A no-row rename, issued while New layout's create is still in
+      // flight — the draft it would otherwise commit is the abandoned one.
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Renamed");
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(store.names()).toEqual(["Weekly review"]);
+      expect(store.activeName()).toBe("Weekly review");
+    });
+
     it("the chosen layout is still the active one after a reload", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);

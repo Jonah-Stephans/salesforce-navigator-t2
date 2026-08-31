@@ -372,17 +372,25 @@ export default class SalesforceNavigator extends LightningElement {
   saveChain = Promise.resolve();
 
   /**
-   * The most recent `commitLayoutNow` create still waiting on its round trip
-   * for a user who owns no row, or `undefined` once none is outstanding.
+   * The most recent create still waiting on its round trip for a user who
+   * owned no row when it started, or `undefined` once none is outstanding.
    *
    * `captureSaveTarget` reads `this.layoutId` synchronously, and for a user
-   * with no row that stays `undefined` until this create resolves and
-   * `rememberSaved` adopts the id it returns — so a second immediate write
-   * made inside that window would otherwise be captured with `layoutId:
-   * undefined` too, exactly as the first one was, and become a second
-   * `createLayout` rather than the update it should be. `commitLayoutNow` is
-   * the only reader and writer of this field; see it for how the wait is
-   * used to fold the second write onto the row the first one is creating.
+   * with no row that stays `undefined` until a create resolves and
+   * `rememberSaved` (or `createNewLayout`'s own success handler) adopts the
+   * id it returns — so a second immediate write made inside that window
+   * would otherwise be captured with `layoutId: undefined` too, exactly as
+   * the first one was, and become a second `createLayout` rather than the
+   * update it should be.
+   *
+   * **Three call sites touch this field, not two.** `commitLayoutNow` both
+   * reads it (to wait) and writes it (for its own create) — see it for how
+   * the wait is used to fold a second write onto the row the first one is
+   * creating. `createNewLayout` only writes it: "New layout" always makes
+   * its own, separate row regardless of who else is creating one, so it
+   * never needs to wait — it only has to be visible to a Save or a no-row
+   * rename that lands inside *its* round trip, or that write would still
+   * read `this.layoutId` as `undefined` and make a second row of its own.
    */
   creatingLayout;
 
@@ -741,7 +749,15 @@ export default class SalesforceNavigator extends LightningElement {
   createNewLayout(name) {
     this.flushPendingSave();
     const layoutJson = serializeLayout(buildSeededLayout(this.items));
-    this.saveChain = this.saveChain
+    // Whether this call's own create is the one `commitLayoutNow` needs to
+    // see. A user who already owns a row keeps `this.layoutId` truthy for
+    // the whole round trip below — it only changes at the very end, when the
+    // `.then` reassigns it to the *new* layout's id — so `commitLayoutNow`'s
+    // `!this.layoutId` check is already false for that user throughout, and
+    // `creatingLayout` would go unread. See `creatingLayout` for why this is
+    // a write-only use of the field here.
+    const wasRowless = !this.layoutId;
+    const created = this.saveChain
       .then(() => createLayout({ name, layoutJson, makeActive: true }))
       .then((saved) => {
         this.saveErrorMessage = undefined;
@@ -763,6 +779,12 @@ export default class SalesforceNavigator extends LightningElement {
           SAVE_ERROR_MESSAGE
         );
       });
+    this.saveChain = created;
+    if (wasRowless) {
+      this.creatingLayout = created.then(() => {
+        this.creatingLayout = undefined;
+      });
+    }
   }
 
   /**
@@ -1760,17 +1782,34 @@ export default class SalesforceNavigator extends LightningElement {
    * wait on it.
    *
    * **A create still in flight is made visible to the next call, here and
-   * nowhere else.** Both callers — Save and `renameCurrentLayout`'s no-row
-   * branch — reach the server through this one method, so this is the single
-   * place `rstk-dry-enforcement.md` asks the guard to live, rather than a
-   * copy at each call site. Without it, a second call made before the first
-   * create's round trip lands would read `this.layoutId` as still `undefined`
-   * — precisely as the first call did — and be captured as another create,
-   * leaving the user with two rows and the server's active flag on whichever
-   * one lands last. `creatingLayout` names that window: a call made inside it
-   * waits for the in-flight create and then calls itself again, so it
-   * captures *after* `this.layoutId` is known and lands as an update of the
-   * row the first call is creating, never as a second row.
+   * nowhere else.** All three of this file's immediate creates reach this
+   * one field: Save and `renameCurrentLayout`'s no-row branch both reach the
+   * server *through* this method, and `createNewLayout` — which creates its
+   * own, separate row directly off `saveChain` rather than through here —
+   * writes the same field for this method's benefit. One shared flag rather
+   * than a second one set at the third call site, per
+   * `rstk-dry-enforcement.md`. Without it, a second call made before the
+   * first create's round trip lands would read `this.layoutId` as still
+   * `undefined` — precisely as the first call did — and be captured as
+   * another create, leaving the user with two rows and the server's active
+   * flag on whichever one lands last. `creatingLayout` names that window: a
+   * call made inside it waits for the in-flight create and then calls itself
+   * again, so it captures *after* `this.layoutId` is known and lands as an
+   * update of the row the first call is creating, never as a second row.
+   *
+   * **An entry-snapshot override is re-resolved after the wait, not replayed
+   * from before it.** `renameCurrentLayout`'s no-row branch is the one caller
+   * that passes `layoutJson` rather than leaving it to default, and it means
+   * "the entry snapshot" — a fact that can move while this call is waiting,
+   * because `createNewLayout` landing during the wait calls `resnapshotEdit`
+   * and re-takes it. Replaying the value handed in before the wait would
+   * write the snapshot as it stood for a layout that is no longer the one
+   * this write is addressed to; reading `this.editSnapshot.json` fresh once
+   * the wait clears keeps the override meaning what it always meant — "what
+   * Cancel would currently restore" — rather than a moment the wait has
+   * already passed. A bare call (`Save`, `layoutJson` left `undefined`) is
+   * untouched by this: `undefined` recurses as `undefined`, and
+   * `captureSaveTarget`'s own default reads `this.layout` fresh regardless.
    */
   commitLayoutNow(layoutJson) {
     if (this.hasLayoutLoadError) {
@@ -1781,7 +1820,13 @@ export default class SalesforceNavigator extends LightningElement {
       this.saveTimer = undefined;
     }
     if (!this.layoutId && this.creatingLayout) {
-      return this.creatingLayout.then(() => this.commitLayoutNow(layoutJson));
+      return this.creatingLayout.then(() => {
+        const resolvedOverride =
+          layoutJson !== undefined && this.editSnapshot
+            ? this.editSnapshot.json
+            : layoutJson;
+        return this.commitLayoutNow(resolvedOverride);
+      });
     }
     this.pendingSave = this.captureSaveTarget(layoutJson);
     const isCreate = !this.pendingSave.layoutId;
