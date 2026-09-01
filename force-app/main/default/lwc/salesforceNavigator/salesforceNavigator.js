@@ -115,14 +115,42 @@ const RENAME_LAYOUT = "rename-layout";
 const DELETE_LAYOUT = "delete-layout";
 
 /**
- * Which of the menu's three dialogs is open, or none. It is one field rather
- * than three booleans so that two cannot be open at once, and it is
+ * Which of the menu's four dialogs is open, or none. It is one field rather
+ * than four booleans so that two cannot be open at once, and it is
  * transient UI state that never reaches the store — opening a dialog and
  * cancelling it writes nothing, which is this spec's oldest settled rule.
+ *
+ * **`PROMPT_DISCARD` joins the other three as of this slice.** It is the
+ * shared "you have unsaved work" confirmation behind all four places that can
+ * throw a Tier 1 draft away — Cancel, switching to a different saved layout,
+ * New layout and Delete layout — reusing this same field and the
+ * `openPrompt`/`closePrompt` idiom rather than adding a third dialog
+ * mechanism beside this one and the item picker's `LightningModal`. It is the
+ * same input-less shape `PROMPT_DELETE` already is.
  */
 const PROMPT_NEW = "new";
 const PROMPT_RENAME = "rename";
 const PROMPT_DELETE = "delete";
+const PROMPT_DISCARD = "discard";
+
+/**
+ * What `pendingDiscardAction.type` names once the discard prompt is open —
+ * which of the four call sites asked for it, and therefore what confirming
+ * actually does. New layout and Delete layout reuse `NEW_LAYOUT` and
+ * `DELETE_LAYOUT` above rather than a second pair of near-identical
+ * constants, so the action tag always names the same write it stands in for.
+ */
+const DISCARD_CANCEL = "cancel";
+const DISCARD_SWITCH = "switch";
+
+/**
+ * Told to the user before any of the four acts throws an unsaved Tier 1
+ * change away. One shared sentence rather than four: the fact worth stating
+ * is always the same one, and each call site's own control already says what
+ * happens once the change is gone.
+ */
+const DISCARD_PROMPT_MESSAGE =
+  "You have unsaved changes. Discard them and continue?";
 
 const SWITCH_ERROR_MESSAGE =
   "We could not switch layouts. The layout on screen is the one that is still active.";
@@ -271,10 +299,21 @@ export default class SalesforceNavigator extends LightningElement {
    */
   layouts = [];
 
-  // Which of the layout menu's three dialogs is open. Transient, and
+  // Which of the layout menu's four dialogs is open. Transient, and
   // deliberately nowhere near the store — see the PROMPT_* constants.
   layoutPrompt;
   draftLayoutName = "";
+
+  /**
+   * What confirming the discard prompt actually does — `{ type, ... }`, only
+   * set while `layoutPrompt === PROMPT_DISCARD`. `type` is one of
+   * `DISCARD_CANCEL`, `DISCARD_SWITCH`, `NEW_LAYOUT` or `DELETE_LAYOUT`;
+   * `DISCARD_SWITCH` also carries `layoutId`, and `NEW_LAYOUT` also carries
+   * the `name` the user had already typed before the prompt intervened.
+   * Cleared by `closePrompt()` along with everything else transient about a
+   * dialog, so it cannot outlive the prompt that set it.
+   */
+  pendingDiscardAction;
 
   /**
    * Whether the user is customising rather than navigating. One page-wide
@@ -685,6 +724,14 @@ export default class SalesforceNavigator extends LightningElement {
     return this.layoutPrompt === PROMPT_DELETE;
   }
 
+  get isConfirmingDiscard() {
+    return this.layoutPrompt === PROMPT_DISCARD;
+  }
+
+  get discardPromptMessage() {
+    return DISCARD_PROMPT_MESSAGE;
+  }
+
   get layoutPromptLabel() {
     return this.layoutPrompt === PROMPT_NEW
       ? "Name for the new layout"
@@ -748,7 +795,19 @@ export default class SalesforceNavigator extends LightningElement {
       return;
     }
     if (value.startsWith(LAYOUT_VALUE_PREFIX)) {
-      this.switchToLayout(value.slice(LAYOUT_VALUE_PREFIX.length));
+      const layoutId = value.slice(LAYOUT_VALUE_PREFIX.length);
+      // Tier 3 stays reachable whatever `isEditing` is — see above — but a
+      // switch made *while editing* silently overwrote an unsaved Tier 1
+      // draft before this slice: `switchToLayout`'s own `adoptFromStore`
+      // replaces `storedLayout` and re-takes the entry snapshot, which is
+      // exactly how a Cancel-worthy change disappears with no chance to keep
+      // it. Asking first, through the same discard prompt Cancel uses, is
+      // this slice's fourth call site for one shared confirmation.
+      if (this.isEditing && this.hasUnsavedCanvasChanges) {
+        this.openDiscardPrompt({ type: DISCARD_SWITCH, layoutId });
+        return;
+      }
+      this.switchToLayout(layoutId);
     }
   }
 
@@ -758,13 +817,49 @@ export default class SalesforceNavigator extends LightningElement {
     this.layoutPrompt = prompt;
   }
 
+  /**
+   * Opens the shared discard-confirmation prompt — reusing `openPrompt` and
+   * `PROMPT_DISCARD`'s input-less shape rather than a fifth dialog mechanism
+   * — and records what confirming it should do. See `pendingDiscardAction`.
+   */
+  openDiscardPrompt(action) {
+    this.pendingDiscardAction = action;
+    this.openPrompt(PROMPT_DISCARD, "");
+  }
+
   handleLayoutPromptCancel() {
     this.closePrompt();
+  }
+
+  /**
+   * Confirms the discard prompt: the unsaved Tier 1 draft is thrown away —
+   * whichever of the four call sites asked for that is what actually does
+   * the throwing away, by re-running the act that was interrupted to ask —
+   * and `pendingDiscardAction` is consumed so a stray second confirm click
+   * cannot replay it.
+   */
+  handleDiscardConfirm() {
+    const action = this.pendingDiscardAction;
+    this.pendingDiscardAction = undefined;
+    this.closePrompt();
+    if (!action) {
+      return;
+    }
+    if (action.type === DISCARD_CANCEL) {
+      this.cancelEditsNow();
+    } else if (action.type === DISCARD_SWITCH) {
+      this.switchToLayout(action.layoutId);
+    } else if (action.type === NEW_LAYOUT) {
+      this.createNewLayout(action.name);
+    } else if (action.type === DELETE_LAYOUT) {
+      this.deleteCurrentLayout();
+    }
   }
 
   closePrompt() {
     this.layoutPrompt = undefined;
     this.draftLayoutName = "";
+    this.pendingDiscardAction = undefined;
   }
 
   handleLayoutNameChange(event) {
@@ -779,7 +874,18 @@ export default class SalesforceNavigator extends LightningElement {
     this.closePrompt();
 
     if (prompt === PROMPT_NEW) {
-      this.createNewLayout(name || NEW_LAYOUT_NAME);
+      const layoutName = name || NEW_LAYOUT_NAME;
+      // New layout replaces the canvas wholesale with a freshly seeded one
+      // (`createNewLayout` writes `buildSeededLayout(this.items)`, not the
+      // draft) and then re-takes the entry snapshot — so an unsaved Tier 1
+      // change is simply gone, with nothing left to Cancel back to, unless
+      // this asks first. Third of this slice's four call sites for the one
+      // shared discard prompt.
+      if (this.hasUnsavedCanvasChanges) {
+        this.openDiscardPrompt({ type: NEW_LAYOUT, name: layoutName });
+        return;
+      }
+      this.createNewLayout(layoutName);
       return;
     }
     if (prompt === PROMPT_RENAME) {
@@ -795,6 +901,14 @@ export default class SalesforceNavigator extends LightningElement {
 
   handleLayoutDeleteConfirm() {
     this.closePrompt();
+    // Deleting the active layout adopts whatever the store says replaces it
+    // (`deleteCurrentLayout` -> `adoptFromStore` -> `resnapshotEdit`), which
+    // is the same "the draft is simply gone" hazard New layout has above —
+    // the fourth and last of this slice's four call sites.
+    if (this.hasUnsavedCanvasChanges) {
+      this.openDiscardPrompt({ type: DELETE_LAYOUT });
+      return;
+    }
     this.deleteCurrentLayout();
   }
 
@@ -1315,10 +1429,26 @@ export default class SalesforceNavigator extends LightningElement {
   }
 
   /**
-   * Throws the session's work away and leaves. Writes nothing, and un-writes
-   * nothing: a Tier 2 act committed during the session is not this to reach.
+   * Cancel, pressed. An untouched session closes silently — there is nothing
+   * a confirmation would be protecting. A session with unsaved canvas changes
+   * asks first, through the shared discard prompt: the first of this slice's
+   * four call sites for it.
    */
   handleEditCancel() {
+    if (this.hasUnsavedCanvasChanges) {
+      this.openDiscardPrompt({ type: DISCARD_CANCEL });
+      return;
+    }
+    this.cancelEditsNow();
+  }
+
+  /**
+   * Throws the session's work away and leaves. Writes nothing, and un-writes
+   * nothing: a Tier 2 act committed during the session is not this to reach.
+   * Run either directly by `handleEditCancel`, when there was nothing to ask
+   * about, or by `handleDiscardConfirm`, once the user has said yes.
+   */
+  cancelEditsNow() {
     // The same belt-and-braces as `disconnectedCallback`'s, and unreachable
     // for the same reason: nothing arms a timer while editing. Kept because it
     // is the difference between a Cancel that writes nothing and a Cancel that
@@ -1665,10 +1795,25 @@ export default class SalesforceNavigator extends LightningElement {
    * so the whole of "the user looked and changed their mind" reaches no
    * `applyLayout` at all. That is slice 03's criterion, which a picker that
    * applied unconditionally would break from a new direction.
+   *
+   * **The edit session is captured here too, not only the section index.**
+   * `NavigatorItemPicker` is a `LightningModal`, which outlives this
+   * component's own idea of "still editing" — it is mounted on
+   * `document.body` and this file asserts nothing about a real browser's
+   * modal/focus-trap guarantee that a user cannot act behind it. The button
+   * that opens it renders only under `editing`, but the *write* happens when
+   * the promise resolves, arbitrarily later, and `this.editSnapshot` at that
+   * moment is what tells "still this session" from every other case:
+   * `isEditing` alone cannot, because Cancel and Save both leave it `false`,
+   * a fresh entry leaves it `true` again with a *different* snapshot object,
+   * and a Tier 2 act mid-session (`resnapshotEdit`) replaces the canvas and
+   * re-takes the snapshot without ever leaving edit mode at all. See
+   * `addChosenItem`'s own guard.
    */
   handleSectionAddItems(event) {
     const sectionIndex = event.detail.index;
     const sectionName = this.sectionNameAt(sectionIndex);
+    const session = this.editSnapshot;
 
     NavigatorItemPicker.open({
       size: "small",
@@ -1679,16 +1824,32 @@ export default class SalesforceNavigator extends LightningElement {
       availableItems: availableTabs(this.layout, this.items),
       sectionName
     }).then((tabId) => {
-      this.addChosenItem(sectionIndex, tabId);
+      this.addChosenItem(sectionIndex, tabId, session);
     });
   }
 
-  /** The one call site for putting an item into a section. */
-  addChosenItem(sectionIndex, tabId) {
+  /**
+   * The one call site for putting an item into a section.
+   *
+   * **`session` must still be the live one.** A bare `!this.isEditing` check
+   * is not enough: it passes for a picker opened in a session that has since
+   * ended by Cancel and been followed by an unrelated re-entry, silently
+   * landing an old choice on a canvas the user never made it against. Every
+   * other case a bare check would get wrong — the mode having ended by Cancel
+   * or by Save, or a Tier 2 act mid-session replacing the canvas — falls out
+   * of the same one comparison, because each of them either leaves
+   * `isEditing` false or gives `editSnapshot` a new identity. No Tier 1
+   * mutation may reach `applyLayout` once the session that opened the picker
+   * is no longer the one on screen.
+   */
+  addChosenItem(sectionIndex, tabId, session) {
     // The picker outlives this component — see `isAttached`. A choice that
     // arrives after the user has left the tab must not schedule a save no
     // `disconnectedCallback` will ever flush.
     if (!this.isAttached) {
+      return;
+    }
+    if (!this.isEditing || this.editSnapshot !== session) {
       return;
     }
     if (!tabId) {

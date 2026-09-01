@@ -262,9 +262,48 @@ async function saveEdits(element) {
   await flush();
 }
 
+/**
+ * The confirm button on the shared discard-confirmation prompt, or `null`
+ * when it is not open. Shared with the dedicated tests of that prompt below,
+ * which look the same way for "Keep editing" by its own label.
+ */
+function discardConfirmButton(element) {
+  return (
+    Array.from(
+      element.shadowRoot.querySelectorAll(
+        ".rstk-nav-layout-prompt lightning-button"
+      )
+    ).find((button) => button.label === "Discard changes") || null
+  );
+}
+
+/** The decline half of the same prompt — stays editing, throws nothing away. */
+function keepEditingButton(element) {
+  return (
+    Array.from(
+      element.shadowRoot.querySelectorAll(
+        ".rstk-nav-layout-prompt lightning-button"
+      )
+    ).find((button) => button.label === "Keep editing") || null
+  );
+}
+
+/**
+ * Presses Cancel the way a user does. If the session is untouched this ends
+ * it on the spot; if there is an unsaved canvas change, the shared discard-
+ * confirmation prompt opens first, and this confirms it — `cancelEdits`
+ * always means "the user successfully cancelled", whichever route that took.
+ * The prompt's own asking-versus-declining behaviour has its own dedicated
+ * tests, which press the two buttons directly rather than through here.
+ */
 async function cancelEdits(element) {
   element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
   await flush();
+  const confirmDiscard = discardConfirmButton(element);
+  if (confirmDiscard) {
+    confirmDiscard.click();
+    await flush();
+  }
 }
 
 /** Presses New section, which only exists in edit mode. */
@@ -4001,6 +4040,66 @@ describe("c-salesforce-navigator", () => {
       expect(updateLayout).not.toHaveBeenCalled();
     });
 
+    /**
+     * Inherited from slice 01's critique: `handleSectionAddItems` gates the
+     * button on `editing`, but the write happens when the picker's promise
+     * *resolves* — arbitrarily later — and the original guard on
+     * `addChosenItem` checked only `isAttached`, not the mode. Walked exactly
+     * as the finding describes: enter edit mode, open the picker, press
+     * Cancel while it is still open (nothing else has changed, so it closes
+     * silently), then choose an entry from the still-open picker. Reachable
+     * in a real org only because `lightning/modal` is a real modal with its
+     * own backdrop and focus trap — a platform guarantee this suite cannot
+     * assert — but this mock, per the note on the import above, mounts the
+     * real picker component, so the choice really does still land here.
+     */
+    it("does not write when a chosen item resolves after Cancel has ended the session that opened the picker", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
+      const picker = await openPicker(element, 0);
+      const before = itemLabelsBySection(element);
+
+      await cancelEdits(element);
+
+      pickerEntries(picker)[0].dispatchEvent(new CustomEvent("click"));
+      await flush();
+
+      // Nothing changed on screen, and no debounce armed to write it later —
+      // the same two-part proof the disconnected-instance test above uses,
+      // since a stray timer is the hazard even when the eventual write does
+      // not land immediately.
+      expect(itemLabelsBySection(element)).toEqual(before);
+      expect(jest.getTimerCount()).toBe(0);
+      await settleAutosave();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The half of the same finding a bare `!this.isEditing` guard would still
+     * miss: Cancel ends the session the picker was opened in, but re-entering
+     * edit mode starts a *new* one, and `isEditing` reads `true` throughout —
+     * a mode check alone cannot tell the two apart. The stale picker's choice
+     * must not land on the session that replaced the one it was opened for.
+     */
+    it("does not let a stale picker's choice land on a different, later edit session", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
+      const picker = await openPicker(element, 0);
+
+      await cancelEdits(element);
+      await enterEditMode(element);
+      const before = itemLabelsBySection(element);
+
+      pickerEntries(picker)[0].dispatchEvent(new CustomEvent("click"));
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual(before);
+      await settleAutosave();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
     it("adds nothing and writes nothing when Escape closes the picker", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
       await enterEditMode(element);
@@ -4692,6 +4791,11 @@ describe("c-salesforce-navigator", () => {
       selectLayoutMenu(element, "delete-layout");
       await flush();
       promptButton(element, "Delete layout").click();
+      await flush();
+      // The canvas change made above means Delete layout's own confirm now
+      // opens the shared discard prompt instead of deleting on the spot —
+      // slice 02's widening of the same confirmation to this call site.
+      promptButton(element, "Discard changes").click();
       await settleAutosave();
 
       expect(updateLayout).not.toHaveBeenCalled();
@@ -4765,6 +4869,11 @@ describe("c-salesforce-navigator", () => {
       selectLayoutMenu(element, "delete-layout");
       await flush();
       promptButton(element, "Delete layout").click();
+      await flush();
+      // The canvas change above means this confirm opens the shared discard
+      // prompt rather than deleting on the spot — slice 02's widening of the
+      // same confirmation to this call site.
+      promptButton(element, "Discard changes").click();
       await flush();
 
       // Still looking at Support — the delete has not landed — and Save is
@@ -4861,6 +4970,11 @@ describe("c-salesforce-navigator", () => {
       );
       input.dispatchEvent(new CustomEvent("commit"));
       await flush();
+      // The canvas change above means committing the name opens the shared
+      // discard prompt rather than creating on the spot — slice 02's
+      // widening of the same confirmation to this call site.
+      discardConfirmButton(element).click();
+      await flush();
 
       // The abandoned draft, saved while New layout's create is still in
       // flight.
@@ -4908,6 +5022,11 @@ describe("c-salesforce-navigator", () => {
         new CustomEvent("change", { detail: { value: "Weekly review" } })
       );
       input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+      // The canvas change above means committing the name opens the shared
+      // discard prompt rather than creating on the spot — slice 02's
+      // widening of the same confirmation to this call site.
+      discardConfirmButton(element).click();
       await flush();
 
       // The abandoned draft, saved while New layout's create is still in
@@ -4969,6 +5088,11 @@ describe("c-salesforce-navigator", () => {
         new CustomEvent("change", { detail: { value: "Weekly review" } })
       );
       input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+      // The canvas change above means committing the name opens the shared
+      // discard prompt rather than creating on the spot — slice 02's
+      // widening of the same confirmation to this call site.
+      discardConfirmButton(element).click();
       await flush();
 
       // The attempt itself: Rename layout is disabled while New layout's own
@@ -5263,6 +5387,77 @@ describe("c-salesforce-navigator", () => {
       // Neither placement passed anything to the read: the call takes no
       // argument, so there is no seam at which a placement could scope it.
       expect(getLayouts).toHaveBeenCalledWith();
+    });
+
+    // ---------------------------------------------------------------
+    // Switching while editing, with an unsaved Tier 1 canvas change on
+    // screen: the same discard confirmation Cancel uses, at a second call
+    // site — `## Design`'s "Leaving edit mode with unsaved work" names this
+    // pair explicitly.
+    // ---------------------------------------------------------------
+
+    it("switches immediately, without asking, when editing with nothing unsaved", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await settleAutosave();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(store.activeName()).toBe("Admin");
+      expect(sectionNames(element)).toEqual(["Admin"]);
+    });
+
+    it("asks before discarding when switching layouts while editing with unsaved changes, and declining stays on the layout being edited", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await flush();
+
+      // Asked, not silently switched: still on Support, the change still on
+      // screen, and nothing sent to the server.
+      expect(
+        element.shadowRoot.querySelector('[role="alertdialog"]')
+      ).not.toBeNull();
+      expect(sectionNames(element)).toEqual(["Support"]);
+      expect(activateLayout).not.toHaveBeenCalled();
+
+      keepEditingButton(element).click();
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(sectionNames(element)).toEqual(["Support"]);
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(activateLayout).not.toHaveBeenCalled();
+      expect(store.activeName()).toBe("Support");
+    });
+
+    it("confirming the discard prompt on a layout switch throws the draft away and switches, by the same route Cancel uses", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await flush();
+      discardConfirmButton(element).click();
+      await settleAutosave();
+
+      expect(store.activeName()).toBe("Admin");
+      expect(sectionNames(element)).toEqual(["Admin"]);
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+      // Tier 3 does not itself decide whether the mode is left; this switch
+      // does not, so the action row still shows Save.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
     });
 
     // ---------------------------------------------------------------
@@ -5941,6 +6136,222 @@ describe("c-salesforce-navigator", () => {
 
       expect(updateLayout).not.toHaveBeenCalled();
       expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    // ---------------------------------------------------------------
+    // Confirming before discarding unsaved work. Cancel, switching layouts,
+    // New layout and Delete layout all reach the same shared prompt — see
+    // `## Design`'s "Leaving edit mode with unsaved work" — asked exactly
+    // when a write would differ from the entry snapshot, string for string.
+    // ---------------------------------------------------------------
+
+    it("closes edit mode without asking when Cancel is pressed on an untouched session", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON)).toBeNull();
+    });
+
+    it("asks before discarding when Cancel is pressed with unsaved canvas changes, and declining leaves the user editing with them intact", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+      await addSection(element);
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+
+      element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
+      await flush();
+
+      // Asked, not silently discarded: still editing, the change still on
+      // screen, and — reusing the same inline-prompt idiom the naming and
+      // delete confirmations already use, per criterion 6 — the same
+      // `.rstk-nav-layout-prompt` container and `alertdialog` role the
+      // delete confirmation renders with.
+      const dialog = element.shadowRoot.querySelector(
+        ".rstk-nav-layout-prompt[role='alertdialog']"
+      );
+      expect(dialog).not.toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+
+      keepEditingButton(element).click();
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("confirming the discard prompt on Cancel throws the unsaved changes away and leaves edit mode", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+      await addSection(element);
+
+      element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
+      await flush();
+      discardConfirmButton(element).click();
+      await flush();
+
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).toBeNull();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Criterion 5: whether there is anything to lose is exact string equality
+     * on the canonical payload, not a dirty flag that could disagree with it.
+     * A change made and then undone back to precisely the entry snapshot's
+     * own value has nothing left for a write to differ about, so Cancel
+     * closes exactly as it does on a session nothing ever touched.
+     */
+    it("closes without asking when a change is undone back to exactly its entry value", async () => {
+      const element = await storedNavigator();
+      expect(renderedColumns(element, 0)).toBe(2);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      selectSectionMenuItem(element, 0, "columns-2");
+      await flush();
+      expect(renderedColumns(element, 0)).toBe(2);
+
+      element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+    });
+
+    it("asks before discarding when New layout is chosen with unsaved canvas changes, and declining leaves the draft in place", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = element.shadowRoot.querySelector(
+        ".rstk-nav-layout-prompt__input"
+      );
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+
+      // The naming prompt's own commit does not create on the spot: there is
+      // a draft to lose, so the shared discard prompt intervenes first.
+      expect(discardConfirmButton(element)).not.toBeNull();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+
+      keepEditingButton(element).click();
+      await flush();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(layoutMenu(element).label).toBe("My Navigator");
+    });
+
+    it("confirming the discard prompt on New layout throws the draft away and creates the named layout", async () => {
+      createLayout.mockResolvedValue({
+        layoutId: CREATED_LAYOUT_ID,
+        name: "Weekly review",
+        isActive: true
+      });
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+      discardConfirmButton(element).click();
+      await flush();
+      await flush();
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      // Addressed to New layout's own seed, never to the six-column draft
+      // that was thrown away — `createNewLayout` seeds from the live tab
+      // list, not from the discarded canvas.
+      expect(
+        JSON.parse(createLayout.mock.calls[0][0].layoutJson).sections[0].columns
+      ).toBe(3);
+      expect(layoutMenu(element).label).toBe("Weekly review");
+      expect(sectionNames(element)).toEqual(["All Items"]);
+    });
+
+    it("asks before discarding when Delete layout is confirmed with unsaved canvas changes, and declining leaves the draft in place", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Delete layout")
+        .click();
+      await flush();
+
+      // Delete layout's own confirmation does not delete on the spot: there
+      // is a draft to lose, so the shared discard prompt intervenes first.
+      expect(discardConfirmButton(element)).not.toBeNull();
+      expect(deleteLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+
+      keepEditingButton(element).click();
+      await flush();
+
+      expect(deleteLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+    });
+
+    it("confirming the discard prompt on Delete layout throws the draft away and deletes the layout", async () => {
+      deleteLayout.mockResolvedValue([]);
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Delete layout")
+        .click();
+      await flush();
+      discardConfirmButton(element).click();
+      await flush();
+      await flush();
+
+      expect(deleteLayout).toHaveBeenCalledWith({
+        layoutId: EXISTING_LAYOUT_ID
+      });
+      expect(updateLayout).not.toHaveBeenCalled();
+      // Back to the seeded arrangement, not to the discarded six-column draft.
+      expect(sectionNames(element)).toEqual(["All Items"]);
     });
 
     // ---------------------------------------------------------------
