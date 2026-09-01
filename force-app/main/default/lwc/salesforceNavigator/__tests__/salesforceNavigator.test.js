@@ -2786,6 +2786,46 @@ describe("c-salesforce-navigator", () => {
         expect(createLayout).not.toHaveBeenCalled();
       });
 
+      /**
+       * Critique finding on slice 05, third fix pass. The composed pin above
+       * only reddens when *both* `handleDrop`'s `stopPropagation()` reorder
+       * and `handleCardDrop`'s own `editing` guard are reverted — a drop
+       * landing on another *item*'s anchor is caught by either protection
+       * alone, so that gesture cannot isolate the card's own guard.
+       * Measured, not assumed: reverting `handleCardDrop`'s guard alone
+       * leaves the pin above green (the item's `stopPropagation()` still
+       * keeps the event off the card), and reverting only the
+       * `stopPropagation()` reorder also leaves it green (the card's own
+       * guard still catches the bubbled event). A drop landing on the
+       * destination section's own `<article>` instead of on one of its
+       * items never passes through an item's `handleDrop` at all, so
+       * `handleCardDrop`'s guard is the *sole* protection on that route —
+       * and slice 05's own fix pass moved both composed tests that used to
+       * drive it ("puts the item at the end when it is dropped on the card
+       * rather than on an item", "drags the item the user picked up, not
+       * the one sharing its stored position") behind `enterEditMode`,
+       * leaving this route with no write-side assertion out of edit mode at
+       * all. This closes that gap.
+       */
+      it("does not move an item across sections when dropped on the destination section's own card out of edit mode, and writes nothing", async () => {
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[1].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        querySections(element)[1]
+          .shadowRoot.querySelector("article")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+        await settleAutosave();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients", "Action Plans"],
+          ["Contacts"]
+        ]);
+        expect(updateLayout).not.toHaveBeenCalled();
+        expect(createLayout).not.toHaveBeenCalled();
+      });
+
       it("writes nothing when an item is dropped back into the section it came from", async () => {
         // Criterion 7. Asserted on the *write* rather than on the order,
         // because the order is identical either way — which is exactly why a
@@ -2891,13 +2931,20 @@ describe("c-salesforce-navigator", () => {
     // menu at some point — this is the behavioural suite for the rename
     // itself (wording, payload shape, reload, clearing), not the debounce
     // mechanism, so there is no reason for most of them to stay out of edit
-    // mode. Navigation and the payload each item renders are unaffected by
-    // `isEditing` either way, so the handful of tests here that never touch
-    // the menu — the navigation/rename-target test, the org-tab-relabel
-    // test, and the no-other-layout test — are not disturbed by mounting
-    // this way either; the redelivery test is the one exception and mounts
-    // inline instead, out of edit mode, because its subject is the debounce
-    // itself.
+    // mode. **Four of the fifteen tests here never touch the menu at all,
+    // not three.** The navigation/rename-target test ("shows the user's own
+    // wording and still navigates to exactly the same tab") and the
+    // no-other-layout test ("leaves the org's tab label alone for anyone
+    // without this layout") are unaffected by `isEditing` either way —
+    // navigation and the payload each item renders do not care what mode
+    // mounted them — so both stay on this shared helper rather than get
+    // their own mount. The other two mount inline instead, deliberately out
+    // of edit mode, because each one's own subject is `scheduleSave`'s
+    // behaviour, which this helper's edit-mode entry would make the
+    // assertion vacuous for (see each test's own comment): the empty-box
+    // case — "creates no layout row when an empty box is committed on an
+    // item with no rename" — and the redelivery case — "picks up a change
+    // to the org's own tab label, with no write at all".
     async function navigatorOn(layout, navItems = THREE) {
       getLayouts.mockResolvedValue(layout ? [layout] : []);
       const element = createNavigator();
@@ -3090,8 +3137,10 @@ describe("c-salesforce-navigator", () => {
       // who has only ever looked, which slice 03 has a criterion against. Nor
       // is there anything to announce: "Accounts renamed to Accounts."
       //
-      // Runs out of edit mode, unlike every other test in this describe: the
-      // guard under test sits upstream of `scheduleSave`, comparing the
+      // Runs out of edit mode, unlike most of this describe — the
+      // redelivery test below is the other exception, mounted inline for
+      // the identical reason: the guard under test sits upstream of
+      // `scheduleSave`, comparing the
       // canvas before and after. In edit mode, Save's own "nothing to write"
       // check (`hasUnsavedCanvasChanges`) would report the same "nothing
       // written" outcome whether or not that upstream guard exists — a no-op
@@ -4100,7 +4149,26 @@ describe("c-salesforce-navigator", () => {
       expect(updateLayout).not.toHaveBeenCalled();
     });
 
-    it("adds nothing and writes nothing when Escape closes the picker", async () => {
+    /**
+     * Named for what this actually is — a real gesture with a real, correct
+     * outcome — rather than for a guard it turns out to pin nothing of.
+     * Escape resolves the picker's promise with `undefined`, and no
+     * mutation reachable from here reddens either assertion below. Checked
+     * directly, not read: with both `addChosenItem`'s own
+     * `if (!tabId) { return; }` *and* `addItemToSection`'s own
+     * accessible-set check (`navigatorLayoutModel.js`) removed at once, a
+     * call carrying `tabId: undefined` still adds nothing visible — nothing
+     * in the resolved tab list has that id to render an item against — and
+     * this test runs in edit mode, where `scheduleSave` writes nothing
+     * regardless of what changed underneath it. So this test pins the
+     * outcome, honestly, and pins no guard: "writes nothing when the
+     * picker closes with a falsy value that is not undefined" (the
+     * blank-developer-name case, just above) is the one test in this file
+     * that actually discriminates `addChosenItem`'s `if (!tabId)` guard,
+     * because a blank developer name *is* in the accessible set and that
+     * guard is the only thing standing between it and the layout.
+     */
+    it("writes nothing when Escape closes the picker, though no guard here is what stops it", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
       await enterEditMode(element);
       const before = itemLabelsBySection(element);
@@ -7027,12 +7095,26 @@ describe("c-salesforce-navigator", () => {
      * is frozen once a component instance exists (LWC's own doing, checked
      * directly: `Object.getOwnPropertyDescriptor` reports non-writable,
      * non-configurable after `createElement`+`appendChild`), so `announce`
-     * cannot be spied on either. What *can* be read is `announcementNonce`'s
-     * parity, already load-bearing for the "two identical sentences" case
-     * this component relies on elsewhere: it flips on every call, so an odd
-     * number of calls since the last read (Save's own, alone) flips it and
-     * an even number (busy, then outcome) leaves it exactly where it
-     * started. That parity is what actually discriminates the fix.
+     * cannot be spied on **from this file** — not from the repo at large,
+     * only from a suite that has already mounted 558 instances by the time
+     * this test runs, which is exactly what freezes the prototype before
+     * this describe ever gets a turn. Corrected here: an earlier version of
+     * this comment claimed spying was unavailable outright, and that
+     * over-broad claim was carried into this slice's own `## Deviations`
+     * record too. `announcementNonce`'s parity is what is read here
+     * instead, and it is weaker than it looks: it constrains the
+     * announcement count *modulo two*, not to one — three calls ending on
+     * the outcome would leave this test green too. It is still worth
+     * keeping, because parity is load-bearing for the "two identical
+     * sentences" case this component relies on elsewhere: it flips on
+     * every call, so an odd number of calls since the last read (Save's
+     * own, alone) flips it and an even number (busy, then outcome) leaves
+     * it exactly where it started.
+     * `salesforceNavigator.announceLog.test.js` installs the module-scope
+     * prototype wrap this file cannot, before *its own* first
+     * `createElement`, and pins the stronger claim this test's name always
+     * meant directly off the call log: Save announces exactly once, and it
+     * is the outcome.
      */
     it("announces only Save's own outcome, never the busy message, even while the write is held open", async () => {
       const element = await storedNavigator();

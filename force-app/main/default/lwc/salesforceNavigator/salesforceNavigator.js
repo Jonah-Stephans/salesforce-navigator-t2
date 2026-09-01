@@ -1234,8 +1234,29 @@ export default class SalesforceNavigator extends LightningElement {
       const committed = this.commitLayoutNow(
         sessionSnapshot ? sessionSnapshot.json : undefined
       );
-      (committed || Promise.resolve()).finally(() => this.endWrite());
-      this.announce(`Layout renamed to ${name}.`);
+      const settled = committed || Promise.resolve();
+      settled.finally(() => this.endWrite());
+      // Ninth pass, closing the newest trap ("a live region's last write in
+      // a tick wins"). This call used to sit right here, synchronously,
+      // immediately after `beginWrite()` above with no `await`/`.then()`/
+      // `return` between them — so it collapsed the busy
+      // `WRITE_LOCK_ANNOUNCEMENT` before it ever rendered, and unlike Save
+      // this branch does not call `leaveEditMode()`, so nothing ever told
+      // the user their rename had landed either: the whole lock lifecycle
+      // was silent for them. Moved into its own `.then()` on this write's
+      // own settlement — a second, independent subscriber on `settled`,
+      // same shape as the `.finally()` above and as every other writing
+      // act's own outcome announcement — so this branch now matches what
+      // `beginWrite`'s own doc already claims of New layout, the with-row
+      // rename and Delete layout: the busy message is a real,
+      // render-visible fact until this `.then()` supersedes it.
+      // `commitLayoutNow`'s own promise never rejects (`persist`'s `.catch()`
+      // swallows a refusal and reports it through `saveErrorMessage`
+      // instead), so this still announces the rename regardless of whether
+      // the write actually succeeded — unchanged from before this pass.
+      settled.then(() => {
+        this.announce(`Layout renamed to ${name}.`);
+      });
       if (sessionSnapshot && committed) {
         committed.then(() => {
           if (this.layoutId && this.editSnapshot === sessionSnapshot) {
@@ -1770,6 +1791,27 @@ export default class SalesforceNavigator extends LightningElement {
     // handler-side check alone would not: the stale dialog itself, which a
     // screen reader would otherwise still announce as open.
     this.closePrompt();
+    // **Also what makes `handleLayoutNameCommit` and `handleLayoutDeleteConfirm`
+    // safe with no `isWriteLocked` re-check of their own, ninth pass.** Both
+    // call a writing act directly, with no lock guard at their own call site.
+    // Safe because a Tier 2 prompt cannot be acted on stale: it can only be
+    // *opened* through `handleLayoutMenuSelect`, which is itself gated on
+    // `isWriteLocked` (see it), so nothing can open one while a write is
+    // already outstanding — and the one act that *can* begin a write while a
+    // prompt is already standing open is Save, the only one of the four that
+    // does not go through that gate. Save always reaches this method,
+    // synchronously, in the same handler that engages the lock
+    // (`handleEditSave` -> `leaveEditMode`), and `this.closePrompt()` above
+    // clears `this.layoutPrompt`/`this.pendingDiscardAction` as a plain,
+    // immediate property write — no render or microtask needed for it to
+    // take effect. Both commit handlers read those fields fresh at call
+    // time rather than from anything captured earlier, so even a click that
+    // reaches a not-yet-removed prompt node in the same tick reads the
+    // already-cleared state and does nothing. Covered end to end by "closes
+    // an open delete-layout prompt when Cancel ends edit mode..." and
+    // "closes an open rename prompt when Save ends edit mode...", one exit
+    // route each.
+    //
     // Any keyboard grab still in flight ends with the mode. This is a
     // correctness bug rather than a nicety: `renderedCallback` restores focus
     // to a grabbed card *by index*, and a stale grab pointing at a card that
@@ -2432,7 +2474,7 @@ export default class SalesforceNavigator extends LightningElement {
     }
     // **Seventh pass: a surviving mutant across the whole suite, not a bug.**
     // No test in the file discriminates this branch any more — short-
-    // circuiting this guard to `if (false)` leaves all 535 tests green — because
+    // circuiting this guard to `if (false)` leaves all 564 tests green — because
     // `isWriteLocked` (see it and `beginWrite`) now refuses a second of the
     // four writing controls before either one can reach here, and two
     // immediate creates racing for the same rowless user is the only
@@ -2469,7 +2511,7 @@ export default class SalesforceNavigator extends LightningElement {
           // `isWriteLocked` forecloses that at the handler level before a
           // second writing control can even be attempted. No test in the
           // suite discriminates this ternary today — collapsing it to a bare
-          // `layoutJson` leaves all 535 green — and the lockout is what
+          // `layoutJson` leaves all 564 green — and the lockout is what
           // stands in front of it now. Preserved as defence in depth per
           // `.claude/rules/rstk-preserve-defensive-checks.md`, not deleted;
           // not claimed dead by construction, only unproven by the current
@@ -2726,7 +2768,7 @@ export default class SalesforceNavigator extends LightningElement {
     // to arbitrate — is exactly what `isWriteLocked` forecloses before either
     // one reaches `persist` at all, so no test in the suite discriminates
     // this guard any more: collapsing it to `if (!target.layoutId)` leaves
-    // all 535 green. The lockout is what stands in front of the race this
+    // all 564 green. The lockout is what stands in front of the race this
     // guard was written for; kept as defence in depth per
     // `.claude/rules/rstk-preserve-defensive-checks.md` — not claimed dead by
     // construction, only unproven by the current suite.
