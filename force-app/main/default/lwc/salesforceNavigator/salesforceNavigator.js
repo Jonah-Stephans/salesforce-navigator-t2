@@ -115,14 +115,42 @@ const RENAME_LAYOUT = "rename-layout";
 const DELETE_LAYOUT = "delete-layout";
 
 /**
- * Which of the menu's three dialogs is open, or none. It is one field rather
- * than three booleans so that two cannot be open at once, and it is
+ * Which of the menu's four dialogs is open, or none. It is one field rather
+ * than four booleans so that two cannot be open at once, and it is
  * transient UI state that never reaches the store — opening a dialog and
  * cancelling it writes nothing, which is this spec's oldest settled rule.
+ *
+ * **`PROMPT_DISCARD` joins the other three as of this slice.** It is the
+ * shared "you have unsaved work" confirmation behind all four places that can
+ * throw a Tier 1 draft away — Cancel, switching to a different saved layout,
+ * New layout and Delete layout — reusing this same field and the
+ * `openPrompt`/`closePrompt` idiom rather than adding a third dialog
+ * mechanism beside this one and the item picker's `LightningModal`. It is the
+ * same input-less shape `PROMPT_DELETE` already is.
  */
 const PROMPT_NEW = "new";
 const PROMPT_RENAME = "rename";
 const PROMPT_DELETE = "delete";
+const PROMPT_DISCARD = "discard";
+
+/**
+ * What `pendingDiscardAction.type` names once the discard prompt is open —
+ * which of the four call sites asked for it, and therefore what confirming
+ * actually does. New layout and Delete layout reuse `NEW_LAYOUT` and
+ * `DELETE_LAYOUT` above rather than a second pair of near-identical
+ * constants, so the action tag always names the same write it stands in for.
+ */
+const DISCARD_CANCEL = "cancel";
+const DISCARD_SWITCH = "switch";
+
+/**
+ * Told to the user before any of the four acts throws an unsaved Tier 1
+ * change away. One shared sentence rather than four: the fact worth stating
+ * is always the same one, and each call site's own control already says what
+ * happens once the change is gone.
+ */
+const DISCARD_PROMPT_MESSAGE =
+  "You have unsaved changes. Discard them and continue?";
 
 const SWITCH_ERROR_MESSAGE =
   "We could not switch layouts. The layout on screen is the one that is still active.";
@@ -136,6 +164,85 @@ const SWITCH_ERROR_MESSAGE =
  * not a place work can be lost.
  */
 const AUTOSAVE_DELAY_MS = 1000;
+
+/**
+ * What the live region says about each edit-mode transition.
+ *
+ * Both transitions are announced, not just the entry: leaving is the half a
+ * screen reader user cannot see happen, and the two exits mean different
+ * things — one wrote, the other did not — so they do not share a sentence.
+ * "Nothing was saved" is true of a Cancel whether or not anything was changed,
+ * which is why it is worded as a fact about the write rather than about the
+ * changes.
+ */
+const ENTER_EDIT_ANNOUNCEMENT =
+  "Edit mode on. Customise your Navigator, then press Save.";
+const SAVE_EDIT_ANNOUNCEMENT = "Changes saved. Edit mode off.";
+const CANCEL_EDIT_ANNOUNCEMENT = "Edit mode off. Nothing was saved.";
+
+/**
+ * Sixth pass, Jonah's decision (2026-08-31): the writing controls disable
+ * while one of their own acts is outstanding, so a screen reader user is told
+ * why Save/New layout/Rename layout/Delete layout just stopped responding
+ * rather than left to wonder. Named explicitly rather than left generic
+ * ("Saving…") because the four are exactly what `isWriteLocked` disables —
+ * see it and `beginWrite`.
+ */
+const WRITE_LOCK_ANNOUNCEMENT =
+  "Saving. Save, New layout, Rename layout and Delete layout are unavailable until this finishes.";
+
+/**
+ * Eighth pass, accessibility finding B. `isWriteLocked` can already be `true`
+ * the instant edit mode is (re-)entered: Save is the only one of the four
+ * writing controls that calls `leaveEditMode()` while its own write is still
+ * outstanding (see `handleEditSave`), and nothing stops the user pressing the
+ * pencil again before that write lands. `ENTER_EDIT_ANNOUNCEMENT` says "press
+ * Save," which is false in that state — Save renders `disabled`, and so do
+ * the three menu entries — and until this pass nothing told a screen reader
+ * user why. Composed from `WRITE_LOCK_ANNOUNCEMENT` rather than a second
+ * sentence saying the same thing, per `rstk-dry-enforcement.md`: the reason
+ * the four controls are unavailable is one fact, stated once, whether the
+ * user is hearing it because they just pressed one of them or because they
+ * walked back into a session that already had one outstanding.
+ */
+const ENTER_EDIT_LOCKED_ANNOUNCEMENT = `Edit mode on. ${WRITE_LOCK_ANNOUNCEMENT}`;
+
+/**
+ * Where focus goes on the render that follows an edit-mode transition, and the
+ * selectors it goes to.
+ *
+ * Entering destroys the element that had focus — the affordance is replaced by
+ * Save and Cancel rather than joined by them — so focus has to be moved
+ * explicitly or it falls to `document.body`. The entry selector names two
+ * controls and `querySelector` resolves them in *document order*, so it reads
+ * as "the first revealed control in the action row, or Cancel if New section is
+ * not rendered". Never Save: a stray Enter on the control that has just taken
+ * focus must not commit the session.
+ *
+ * **`lock` is the sixth pass's addition.** Committing New layout, Rename
+ * layout or Delete layout closes the inline prompt (`closePrompt()`) without
+ * restoring focus anywhere, and none of those three acts leaves edit mode —
+ * so the control the user just pressed is gone and focus would otherwise fall
+ * to `document.body`, the exact hazard Trap 3 names at the pencil. It goes to
+ * the layout switcher, since that is the control that opened the prompt in
+ * the first place. Save is the exception among the four writing controls: it
+ * always calls `leaveEditMode()` in the same handler, and that assigns
+ * `EDIT_FOCUS_LEAVE` *after* `beginWrite` would have assigned `lock` — so the
+ * later write wins and Save's own press still restores focus to the pencil,
+ * unchanged from before this pass.
+ */
+const EDIT_FOCUS_ENTER = "enter";
+const EDIT_FOCUS_LEAVE = "leave";
+const EDIT_FOCUS_LOCK = "lock";
+const EDIT_ENTRY_FOCUS_SELECTOR =
+  ".rstk-nav-new-section, .rstk-nav-edit-cancel";
+const EDIT_AFFORDANCE_SELECTOR = ".rstk-nav-edit";
+const WRITE_LOCK_FOCUS_SELECTOR = ".rstk-nav-layout-menu";
+const EDIT_FOCUS_SELECTORS = {
+  [EDIT_FOCUS_ENTER]: EDIT_ENTRY_FOCUS_SELECTOR,
+  [EDIT_FOCUS_LEAVE]: EDIT_AFFORDANCE_SELECTOR,
+  [EDIT_FOCUS_LOCK]: WRITE_LOCK_FOCUS_SELECTOR
+};
 
 /**
  * The same distinguisher `navigatorSection` carries for the item axis, for
@@ -208,10 +315,89 @@ export default class SalesforceNavigator extends LightningElement {
    */
   layouts = [];
 
-  // Which of the layout menu's three dialogs is open. Transient, and
+  // Which of the layout menu's four dialogs is open. Transient, and
   // deliberately nowhere near the store — see the PROMPT_* constants.
   layoutPrompt;
   draftLayoutName = "";
+
+  /**
+   * What confirming the discard prompt actually does — `{ type, ... }`, only
+   * set while `layoutPrompt === PROMPT_DISCARD`. `type` is one of
+   * `DISCARD_CANCEL`, `DISCARD_SWITCH`, `NEW_LAYOUT` or `DELETE_LAYOUT`;
+   * `DISCARD_SWITCH` also carries `layoutId`, and `NEW_LAYOUT` also carries
+   * the `name` the user had already typed before the prompt intervened —
+   * read back by `handleLayoutPromptCancel` on decline, as of the fix pass,
+   * so "Keep editing" reopens the naming prompt with it rather than losing
+   * it.
+   *
+   * **Cleared by both `openPrompt()` and `closePrompt()`, as of the third fix
+   * pass.** `closePrompt()` alone was not enough: `handleLayoutMenuSelect`'s
+   * three Tier 2 branches call `openPrompt(...)` directly with no
+   * `closePrompt()` first, so a sibling dialog opening on top of the discard
+   * prompt used to *replace* it without going through the one place this
+   * field was cleared — see the trap this closes in `## Traps`. `openPrompt`
+   * clearing it is the one-place fix, not a clear added at each of those
+   * three call sites, per `rstk-dry-enforcement.md`. On the one decline path
+   * that reopens `PROMPT_NEW` (`handleLayoutPromptCancel`), the clear now
+   * comes from that same call to `openPrompt` rather than a second explicit
+   * assignment beside it.
+   */
+  pendingDiscardAction;
+
+  /**
+   * Whether the user is customising rather than navigating. One page-wide
+   * boolean, owned here and passed down as `@api editing` by the later slices
+   * that gate the section and item affordances — page-wide rather than
+   * per-section because there is no per-section header slot to hang a toggle
+   * from, and because "New section", the layout switcher and section
+   * reordering are page-level acts with no per-section home anyway.
+   *
+   * It is a mode, and `canEdit` is a readiness flag; the two are not the same
+   * fact and neither replaces the other. A Tier 1 or Tier 2 control renders
+   * when both hold. The affordance itself renders on `canEdit` alone.
+   */
+  isEditing = false;
+
+  /**
+   * The canvas as it stood when edit mode was entered, or undefined out of it.
+   *
+   * `json` is the serialised payload, taken through `serializeLayout` rather
+   * than a hand-rolled clone: it is byte-for-byte what a save would have
+   * written, so a restore cannot reintroduce a field the stored payload does
+   * not carry, and "has anything changed" is exact string equality against it
+   * rather than a dirty-flag protocol that could disagree with the write.
+   *
+   * `wasStored` records whether the user owned a stored layout at that moment.
+   * Restoring `json` unconditionally would turn "has never changed anything"
+   * — `storedLayout === undefined`, the single fact this component uses to
+   * mean it — into "has a stored layout", by way of a Cancel that is supposed
+   * to write nothing and change nothing.
+   */
+  editSnapshot;
+
+  /**
+   * Which edit-mode transition owes focus a home on the next render, if any.
+   * A one-shot hand-off in the same shape as `cardFocusIndex`, and for the
+   * same reason: the control focus must land on does not exist until the
+   * render that reveals it.
+   */
+  editFocusTarget;
+
+  /**
+   * How many of the four writing acts — Save, New layout, Rename layout,
+   * Delete layout — have an outstanding round trip right now. Backs
+   * `isWriteLocked`, which the template disables all four controls on: the
+   * sixth pass's lockout, and now the primary guard against the "two rows for
+   * one user" class of race — see `creatingLayout` for the backstop this
+   * stands in front of, which stays rather than being removed.
+   *
+   * A counter, not a boolean, because `beginWrite`/`endWrite` are called at
+   * each act's own external entry point (not inside `commitLayoutNow`, whose
+   * internal wait-and-retry can itself take a moment) and a defensive floor
+   * of zero in `endWrite` means a stray extra call can never make it negative
+   * and hold the lockout open past its own act finishing.
+   */
+  writeInFlight = 0;
 
   saveTimer;
 
@@ -299,6 +485,73 @@ export default class SalesforceNavigator extends LightningElement {
   // which call to make.
   saveChain = Promise.resolve();
 
+  /**
+   * The most recent create still waiting on its round trip for a user who
+   * owned no row when it started, or `undefined` once none is outstanding —
+   * `{ promise, distinct }`, not a bare promise, because the wait needs an
+   * identity to fold correctly rather than by accident.
+   *
+   * `captureSaveTarget` reads `this.layoutId` synchronously, and for a user
+   * with no row that stays `undefined` until a create resolves and
+   * `rememberSaved` (or `createNewLayout`'s own success handler) adopts the
+   * id it returns — so a second immediate write made inside that window
+   * would otherwise be captured with `layoutId: undefined` too, exactly as
+   * the first one was, and become a second `createLayout` rather than the
+   * update it should be.
+   *
+   * **`distinct` is what tells "a create for the layout I am writing" from
+   * "some other layout's create".** `commitLayoutNow`'s own create (Save, or
+   * a no-row rename that is itself the first write) leaves it unset: it is
+   * the same implicit, still-rowless layout a later write on this same no-row
+   * user is addressed to, so a second such write should wait for it and land
+   * as an update of the row it creates. `createNewLayout`'s create sets it
+   * `true`: "New layout" always makes its own, separate row, seeded from
+   * scratch, regardless of who else is creating one — it is never the layout
+   * a *different* write is addressed to. An overridden write (only
+   * `renameCurrentLayout`'s no-row branch passes one) is addressed to a
+   * specific entry snapshot, not to "whichever layout is current", so it must
+   * not wait on a `distinct` create and fold into it — that would recapture
+   * against the distinct layout's own id and name once the wait cleared,
+   * silently losing the act the override was for. It instead falls through
+   * and makes its own row, honouring both acts. A bare write (Save) carries
+   * no identity of its own — it means "whatever is on screen" — so it always
+   * waits, `distinct` or not, and recaptures fresh once the wait clears.
+   *
+   * **Three call sites touch this field, not two.** `commitLayoutNow` both
+   * reads it (to wait) and writes it (for its own create) — see it for how
+   * the wait is used to fold a second write onto the row the first one is
+   * creating. `createNewLayout` only writes it, tagged `distinct: true`.
+   *
+   * **Both writers clear their own entry, and only their own.** An
+   * overridden write that falls through past a `distinct` create (the case
+   * just above) overwrites this field with its own entry while the
+   * `distinct` create is still in flight — two creates are then
+   * outstanding for one slot. Each writer's clear checks the field still
+   * holds the object *that write* put there (`this.creatingLayout ===
+   * mine`) before setting it back to `undefined`, so whichever create
+   * settles first can only ever clear its own entry, never the other
+   * writer's still-open one. Without that check, the first to settle wipes
+   * the second's entry out from under it, and the next immediate write
+   * sees no create in flight and makes a row of its own instead of
+   * waiting — closed by the fix to slice 01's finding 1.
+   *
+   * **Sixth pass: this mechanism is now the backstop, not the primary
+   * guard.** `isWriteLocked` disables all four writing controls while any one
+   * of them has a round trip outstanding, and `handleEditSave` and
+   * `handleLayoutMenuSelect` both re-check it in the handler, not only in the
+   * template — so a second write can no longer be *issued* while a first is
+   * in flight, which is the precondition every interleaving this field
+   * unwinds depends on. This field, `distinct`, the ownership checks on both
+   * writers' clears, and the wait in `commitLayoutNow` all stay: they are
+   * defence-in-depth behind the lockout, not superseded by it, per
+   * `.claude/rules/rstk-preserve-defensive-checks.md` and the same argument
+   * `## Design`'s "The draft boundary" already makes about the debounce —
+   * neutered, not deleted. Nothing here is claimed dead by construction; that
+   * claim has been made about this file three times before this pass and was
+   * wrong twice.
+   */
+  creatingLayout;
+
   // Indexed by page number rather than appended to, so that a wire
   // re-emission for a page already received (an LDS cache refresh
   // redelivering the current, possibly final, page — a normal event for a
@@ -343,9 +596,27 @@ export default class SalesforceNavigator extends LightningElement {
 
   disconnectedCallback() {
     this.isAttached = false;
-    // A pending debounce must not be dropped on the floor when the user
-    // navigates away — that is precisely the "unsaved state to lose" the
-    // design says does not exist here.
+    // Mid-edit, the user has unsaved work by design and leaving the page is
+    // not consent to write it. Explicit save means nothing is written until
+    // the user says so, and that has to hold when they say nothing at all and
+    // close the tab — so this discards rather than flushes. There is no
+    // `beforeunload` prompt to go with it: this component does not own the
+    // page it sits on inside Salesforce.
+    //
+    // **Belt to the braces, and knowingly so.** No timer can actually be armed
+    // in this state: `handleEditStart` flushes any pending pre-edit save on the
+    // way in, and `scheduleSave` arms nothing while editing. So this branch is
+    // unreachable by construction today and no test can distinguish it from an
+    // unconditional flush. It is kept because the fact it depends on lives in
+    // two other methods, and the cost of it being wrong is a user's unsaved
+    // draft written to their layout without them asking.
+    if (this.isEditing) {
+      this.discardPendingSave();
+      return;
+    }
+    // Out of edit mode a pending debounce must not be dropped on the floor
+    // when the user navigates away — that is precisely the "unsaved state to
+    // lose" the autosave design says does not exist there.
     this.flushPendingSave();
   }
 
@@ -482,6 +753,14 @@ export default class SalesforceNavigator extends LightningElement {
     return this.layoutPrompt === PROMPT_DELETE;
   }
 
+  get isConfirmingDiscard() {
+    return this.layoutPrompt === PROMPT_DISCARD;
+  }
+
+  get discardPromptMessage() {
+    return DISCARD_PROMPT_MESSAGE;
+  }
+
   get layoutPromptLabel() {
     return this.layoutPrompt === PROMPT_NEW
       ? "Name for the new layout"
@@ -507,6 +786,29 @@ export default class SalesforceNavigator extends LightningElement {
   handleLayoutMenuSelect(event) {
     const value = event.detail.value;
 
+    // Tier 2 is gated behind edit mode in the template — the three
+    // `lwc:if={isEditing}` entries above it — and `handleEditStart` already
+    // re-checks `canEdit` for the same reason: a template gate is not a
+    // guarantee about a handler. Tier 3 (`layout:…`) is deliberately not
+    // included here; choosing which layout is showing is navigation, not
+    // customisation, and stays reachable whatever `isEditing` is.
+    //
+    // **`isWriteLocked` joins the re-check as of the sixth pass, for the same
+    // "template gate is not a guarantee about a handler" reasoning.** The
+    // `disabled` attribute on these three `lightning-menu-item`s is the
+    // visible half of the lockout; this is the half that holds even if that
+    // attribute is ever bypassed. It is what makes New layout and Rename
+    // layout unable to open a *second* prompt while one of the four writing
+    // acts already has a round trip outstanding — see `isWriteLocked`.
+    if (
+      (value === NEW_LAYOUT ||
+        value === RENAME_LAYOUT ||
+        value === DELETE_LAYOUT) &&
+      (!this.isEditing || this.isWriteLocked)
+    ) {
+      return;
+    }
+
     if (value === NEW_LAYOUT) {
       this.openPrompt(PROMPT_NEW, "");
       return;
@@ -518,27 +820,185 @@ export default class SalesforceNavigator extends LightningElement {
     if (value === DELETE_LAYOUT) {
       if (this.canDeleteLayout) {
         this.openPrompt(PROMPT_DELETE, "");
+        // As of the second fix pass: this is the irreversible one of the two
+        // `alertdialog`s built by copying each other (see `focusLayoutPrompt`
+        // and the delete prompt's Cancel button below), and it was the one
+        // left silent — the discard prompt announces through this same
+        // `announce()` call, and until now nothing here did.
+        this.announce(this.layoutDeleteMessage);
       }
       return;
     }
     if (value.startsWith(LAYOUT_VALUE_PREFIX)) {
-      this.switchToLayout(value.slice(LAYOUT_VALUE_PREFIX.length));
+      const layoutId = value.slice(LAYOUT_VALUE_PREFIX.length);
+      // Tier 3 stays reachable whatever `isEditing` is — see above — but a
+      // switch made *while editing* silently overwrote an unsaved Tier 1
+      // draft before this slice: `switchToLayout`'s own `adoptFromStore`
+      // replaces `storedLayout` and re-takes the entry snapshot, which is
+      // exactly how a Cancel-worthy change disappears with no chance to keep
+      // it. Asking first, through the same discard prompt Cancel uses, is
+      // this slice's fourth call site for one shared confirmation.
+      //
+      // **This guard now copies `switchToLayout`'s whole no-op condition, not
+      // only the id-equality half, as of the second fix pass.** Every layout
+      // the user owns renders as a selectable entry, the active one
+      // included, so re-picking the layout already on screen is a real click
+      // a user makes — `layoutId !== this.layoutId` is what stops the
+      // question being asked about a switch that `switchToLayout`'s own
+      // no-op return below was always going to refuse. But `switchToLayout`
+      // refuses on `!layoutId || layoutId === this.layoutId`, and copying
+      // only the second disjunct left the first live: `get layoutChoices()`
+      // unshifts an entry whose value is the bare `LAYOUT_VALUE_PREFIX`
+      // whenever `!this.layoutId` (a user who owns no row, or one
+      // `adoptFromStore`'s no-active branch has just set `layoutId` to
+      // `undefined` for), so `layoutId` slices to `""` there and `""` is
+      // never `undefined` — the guard asked anyway, about a switch that was
+      // always going to be refused, and "Discard changes" then discarded
+      // nothing and switched nothing. `layoutId &&` closes that: a falsy
+      // `layoutId` cannot pass this guard whatever `this.layoutId` is.
+      if (
+        this.isEditing &&
+        layoutId &&
+        layoutId !== this.layoutId &&
+        this.hasUnsavedCanvasChanges
+      ) {
+        this.openDiscardPrompt({ type: DISCARD_SWITCH, layoutId });
+        return;
+      }
+      this.switchToLayout(layoutId);
     }
   }
 
-  /** Opening a dialog is not a change. Nothing here writes, and nothing may. */
+  /**
+   * Opening a dialog is not a change. Nothing here writes, and nothing may.
+   *
+   * **Every dialog's own transient state is reset here, not only in
+   * `closePrompt()`, as of the third fix pass.** `openPrompt` and
+   * `closePrompt` were not a matched pair: five call sites open a dialog, and
+   * three of them (the layout menu's New, Rename and Delete branches) do it
+   * with no `closePrompt()` first, so a sibling dialog opening on top of
+   * another used to *replace* it and skip every clear `closePrompt()`
+   * performs. `draftLayoutName` was already safe from this, but only by
+   * accident — every call site passes its own `draft` value, so the field is
+   * overwritten on every open whether or not that call site meant to guard
+   * it. `pendingDiscardAction` has no equivalent per-call parameter, so it is
+   * cleared here explicitly, deliberately rather than leaving its safety to
+   * ride along on `draft`'s coincidence the way `draftLayoutName`'s did — see
+   * the trap this closes in `## Traps`. One clear, here, rather than one
+   * added at each of the three call sites that were missing it, per
+   * `rstk-dry-enforcement.md`.
+   */
   openPrompt(prompt, draft) {
     this.draftLayoutName = draft;
+    this.pendingDiscardAction = undefined;
     this.layoutPrompt = prompt;
   }
 
+  /**
+   * Opens the shared discard-confirmation prompt — reusing `openPrompt` and
+   * `PROMPT_DISCARD`'s input-less shape rather than a fifth dialog mechanism
+   * — and records what confirming it should do. See `pendingDiscardAction`.
+   *
+   * **Announced, as of the fix pass.** An `alertdialog` a screen-reader user
+   * is never told about is exactly the failure `lwc-accessible-interactions.md`
+   * was written against, and its own cited failure is this component family.
+   * `DISCARD_PROMPT_MESSAGE` is what the dialog's own text already says, so
+   * this reuses it rather than adding a second sentence for the same fact.
+   * Focus follows separately, in `focusLayoutPrompt()` — moved deliberately
+   * once the render this call schedules has actually put the dialog on
+   * screen, the same way every other explicit focus hand-off in this file
+   * waits for `renderedCallback`.
+   *
+   * **Order matters, as of the third fix pass.** `openPrompt` now clears
+   * `pendingDiscardAction` itself (see its own doc), so the action this call
+   * exists to record has to be set *after* `openPrompt` runs, not before —
+   * setting it first, the way this used to read, would have `openPrompt`
+   * immediately wipe out the action this method's whole job is to keep.
+   */
+  openDiscardPrompt(action) {
+    this.openPrompt(PROMPT_DISCARD, "");
+    this.pendingDiscardAction = action;
+    this.announce(DISCARD_PROMPT_MESSAGE);
+  }
+
+  /**
+   * Declines whichever of the layout menu's four dialogs is open. Input-less
+   * dialogs (delete, discard) and the naming prompt's own "Cancel" all reach
+   * this one handler.
+   *
+   * **New layout is the one case that does not just close, as of the fix
+   * pass.** `handleLayoutNameCommit` clears `draftLayoutName` via
+   * `closePrompt()` before the discard prompt intervenes, so "Keep editing"
+   * on *that* discard would otherwise leave no prompt at all — the name the
+   * user already typed gone, with New layout… needing to be reopened and
+   * retyped. Reopening `PROMPT_NEW` with the name `pendingDiscardAction`
+   * already carries (see its own doc) hands it back rather than losing it.
+   * `action` is read into a local *before* that reopen, because `openPrompt`
+   * itself now clears `this.pendingDiscardAction` as of the third fix pass —
+   * left unread first, a genuine Cancel on the *reopened* naming prompt would
+   * still misread itself as still declining a discard, but `openPrompt`'s own
+   * clear is what makes that reopened prompt's Cancel come back here reading
+   * `undefined` rather than needing a second explicit clear in this method.
+   */
   handleLayoutPromptCancel() {
+    const action = this.pendingDiscardAction;
+    if (action && action.type === NEW_LAYOUT) {
+      this.openPrompt(PROMPT_NEW, action.name);
+      return;
+    }
     this.closePrompt();
   }
 
+  /**
+   * Confirms the discard prompt: the unsaved Tier 1 draft is thrown away —
+   * whichever of the four call sites asked for that is what actually does
+   * the throwing away, by re-running the act that was interrupted to ask —
+   * and `pendingDiscardAction` is consumed so a stray second confirm click
+   * cannot replay it.
+   */
+  handleDiscardConfirm() {
+    const action = this.pendingDiscardAction;
+    this.pendingDiscardAction = undefined;
+    this.closePrompt();
+    if (!action) {
+      return;
+    }
+    if (action.type === DISCARD_CANCEL) {
+      this.cancelEditsNow();
+    } else if (action.type === DISCARD_SWITCH) {
+      this.switchToLayout(action.layoutId);
+    } else if (action.type === NEW_LAYOUT) {
+      this.createNewLayout(action.name);
+    } else if (action.type === DELETE_LAYOUT) {
+      this.deleteCurrentLayout();
+    }
+  }
+
+  /**
+   * **This clear of `pendingDiscardAction` is load-bearing, not
+   * belt-and-braces, as of the second fix pass.** It was optional while
+   * `handleLayoutPromptCancel` was a bare `this.closePrompt()`, because
+   * nothing read the field except `PROMPT_DISCARD`'s own path. Once that
+   * handler started reading `pendingDiscardAction` *before* it knows which
+   * prompt is open (see its own doc), this became the only thing standing
+   * between Escape closing the discard prompt directly — which calls this
+   * method, not `handleLayoutPromptCancel` — and a later, unrelated dialog's
+   * "Cancel" misreading the action Escape left behind as its own decline.
+   *
+   * **No longer the only thing standing between them, as of the third fix
+   * pass.** That doc comment above was true of every exit this method
+   * itself is on, and understated: a dialog can also change without ever
+   * reaching `closePrompt()` at all — `handleLayoutMenuSelect`'s three Tier 2
+   * branches open the next dialog directly, replacing whichever one was
+   * showing. `openPrompt` now carries the equivalent clear for that route
+   * (see its own doc); this method's clear still covers every exit that
+   * *does* run through it — Escape, "Keep editing"'s non-reopen path,
+   * `handleDiscardConfirm`, and `leaveEditMode()`'s own unconditional call.
+   */
   closePrompt() {
     this.layoutPrompt = undefined;
     this.draftLayoutName = "";
+    this.pendingDiscardAction = undefined;
   }
 
   handleLayoutNameChange(event) {
@@ -553,7 +1013,18 @@ export default class SalesforceNavigator extends LightningElement {
     this.closePrompt();
 
     if (prompt === PROMPT_NEW) {
-      this.createNewLayout(name || NEW_LAYOUT_NAME);
+      const layoutName = name || NEW_LAYOUT_NAME;
+      // New layout replaces the canvas wholesale with a freshly seeded one
+      // (`createNewLayout` writes `buildSeededLayout(this.items)`, not the
+      // draft) and then re-takes the entry snapshot — so an unsaved Tier 1
+      // change is simply gone, with nothing left to Cancel back to, unless
+      // this asks first. Third of this slice's four call sites for the one
+      // shared discard prompt.
+      if (this.hasUnsavedCanvasChanges) {
+        this.openDiscardPrompt({ type: NEW_LAYOUT, name: layoutName });
+        return;
+      }
+      this.createNewLayout(layoutName);
       return;
     }
     if (prompt === PROMPT_RENAME) {
@@ -567,8 +1038,36 @@ export default class SalesforceNavigator extends LightningElement {
     }
   }
 
+  /**
+   * **Guards on `this.layoutId` first, copying `deleteCurrentLayout`'s whole
+   * `if (!layoutId) return;`, as of the third fix pass.** The dialog this
+   * confirms opens on `canDeleteLayout` — `Boolean(this.layoutId)`, checked
+   * once, at the *menu* — and that agreement used to be inherited rather than
+   * re-checked here: `adoptFromStore`'s no-active branch can set
+   * `this.layoutId = undefined` asynchronously while `PROMPT_DELETE` is still
+   * open, and nothing closed the dialog on that transition, so it used to
+   * outlive its own affordance. Without this guard, pressing "Delete
+   * layout" on that stale dialog would still open the discard prompt — a
+   * warning about a delete that was always going to no-op the moment
+   * `deleteCurrentLayout`'s own guard saw no id — and "Discard changes" would
+   * then call `deleteCurrentLayout` for nothing: no row deleted, no draft
+   * thrown away, the destructive button pressed and nothing destructed.
+   * Checked before `hasUnsavedCanvasChanges` on purpose: with nothing left to
+   * delete, there is nothing worth asking the user to discard for.
+   */
   handleLayoutDeleteConfirm() {
     this.closePrompt();
+    if (!this.layoutId) {
+      return;
+    }
+    // Deleting the active layout adopts whatever the store says replaces it
+    // (`deleteCurrentLayout` -> `adoptFromStore` -> `resnapshotEdit`), which
+    // is the same "the draft is simply gone" hazard New layout has above —
+    // the fourth and last of this slice's four call sites.
+    if (this.hasUnsavedCanvasChanges) {
+      this.openDiscardPrompt({ type: DELETE_LAYOUT });
+      return;
+    }
     this.deleteCurrentLayout();
   }
 
@@ -621,7 +1120,24 @@ export default class SalesforceNavigator extends LightningElement {
   createNewLayout(name) {
     this.flushPendingSave();
     const layoutJson = serializeLayout(buildSeededLayout(this.items));
-    this.saveChain = this.saveChain
+    // Whether this call's own create is the one `commitLayoutNow` needs to
+    // see. A user who already owns a row keeps `this.layoutId` truthy for
+    // the whole round trip below — it only changes at the very end, when the
+    // `.then` reassigns it to the *new* layout's id — so `commitLayoutNow`'s
+    // `!this.layoutId` check is already false for that user throughout, and
+    // `creatingLayout` would go unread. See `creatingLayout` for why this is
+    // a write-only use of the field here.
+    const wasRowless = !this.layoutId;
+    // Sixth pass: New layout is one of the four writing controls the lockout
+    // disables while any of them has a round trip outstanding. Branched off
+    // `created` with its own `.finally()` rather than folded into the
+    // `.then()`/`.catch()` above or into what gets assigned to
+    // `this.saveChain` below — a second subscriber on the same promise runs
+    // on its own schedule and cannot change when `this.saveChain` itself
+    // settles, so every other write already chained onto it keeps the exact
+    // timing it had before this pass.
+    this.beginWrite();
+    const created = this.saveChain
       .then(() => createLayout({ name, layoutJson, makeActive: true }))
       .then((saved) => {
         this.saveErrorMessage = undefined;
@@ -634,6 +1150,7 @@ export default class SalesforceNavigator extends LightningElement {
         this.layoutId = saved.layoutId;
         this.layoutName = saved.name || name;
         this.storedLayout = deserializeLayout(layoutJson);
+        this.resnapshotEdit();
         this.announce(`${this.layoutName} created and now showing.`);
       })
       .catch((error) => {
@@ -642,6 +1159,25 @@ export default class SalesforceNavigator extends LightningElement {
           SAVE_ERROR_MESSAGE
         );
       });
+    created.finally(() => this.endWrite());
+    this.saveChain = created;
+    if (wasRowless) {
+      // Cleared only if this call's own entry is still the one in the
+      // field — see `creatingLayout`. An overridden write that falls
+      // through past this `distinct` create (`renameCurrentLayout`'s
+      // no-row branch, racing this one) overwrites the field with its own
+      // entry before this create resolves; clearing unconditionally here
+      // would wipe that write's still-open entry out from under it.
+      const mine = {
+        promise: created.then(() => {
+          if (this.creatingLayout === mine) {
+            this.creatingLayout = undefined;
+          }
+        }),
+        distinct: true
+      };
+      this.creatingLayout = mine;
+    }
   }
 
   /**
@@ -667,16 +1203,79 @@ export default class SalesforceNavigator extends LightningElement {
     }
 
     if (!this.layoutId) {
+      const sessionSnapshot = this.editSnapshot;
       this.layoutName = name;
       this.applyLayout(this.layout);
-      this.announce(`Layout renamed to ${name}.`);
+      // Tier 2 commits on the spot, and this is the one Tier 2 act that has no
+      // Apex call of its own: a user with no row is renamed by the write that
+      // creates the row, which is the autosave — and in edit mode the autosave
+      // writes nothing. Left to the debounce the rename would sit behind a
+      // Save it is not supposed to wait for, and be thrown away by a Cancel
+      // that is not supposed to reach it.
+      //
+      // `commitLayoutNow` addresses this write to the entry snapshot rather
+      // than to `this.layout`, so the row it creates can never carry a Tier 1
+      // draft. Once that write lands, the row holds exactly the snapshot's
+      // payload — the same thing a Cancel would restore — so the snapshot's
+      // `wasStored` moves from false to true: a Cancel after this point must
+      // restore *to* the row the user now owns, not erase it back to
+      // `undefined` on a user who by then owns one.
+      // Sixth pass: this is one of the two paths that reach `commitLayoutNow`
+      // (the other is Save), and Rename layout is one of the four writing
+      // controls the lockout disables while any of them has a round trip
+      // outstanding. Wrapped around `commitLayoutNow`'s own return value,
+      // never around `commitLayoutNow` itself — it already covers its own
+      // internal wait-and-retry, since that call does not settle until every
+      // recursion has. `commitLayoutNow` can return `undefined` only when
+      // `hasLayoutLoadError` holds, which cannot be true in edit mode; the
+      // fallback costs one line and removes any dependence on that chain
+      // holding forever.
+      this.beginWrite();
+      const committed = this.commitLayoutNow(
+        sessionSnapshot ? sessionSnapshot.json : undefined
+      );
+      const settled = committed || Promise.resolve();
+      settled.finally(() => this.endWrite());
+      // Ninth pass, closing the newest trap ("a live region's last write in
+      // a tick wins"). This call used to sit right here, synchronously,
+      // immediately after `beginWrite()` above with no `await`/`.then()`/
+      // `return` between them — so it collapsed the busy
+      // `WRITE_LOCK_ANNOUNCEMENT` before it ever rendered, and unlike Save
+      // this branch does not call `leaveEditMode()`, so nothing ever told
+      // the user their rename had landed either: the whole lock lifecycle
+      // was silent for them. Moved into its own `.then()` on this write's
+      // own settlement — a second, independent subscriber on `settled`,
+      // same shape as the `.finally()` above and as every other writing
+      // act's own outcome announcement — so this branch now matches what
+      // `beginWrite`'s own doc already claims of New layout, the with-row
+      // rename and Delete layout: the busy message is a real,
+      // render-visible fact until this `.then()` supersedes it.
+      // `commitLayoutNow`'s own promise never rejects (`persist`'s `.catch()`
+      // swallows a refusal and reports it through `saveErrorMessage`
+      // instead), so this still announces the rename regardless of whether
+      // the write actually succeeded — unchanged from before this pass.
+      settled.then(() => {
+        this.announce(`Layout renamed to ${name}.`);
+      });
+      if (sessionSnapshot && committed) {
+        committed.then(() => {
+          if (this.layoutId && this.editSnapshot === sessionSnapshot) {
+            this.editSnapshot = { ...sessionSnapshot, wasStored: true };
+          }
+        });
+      }
       return;
     }
 
     const layoutId = this.layoutId;
     const previousName = this.layoutName;
     this.adoptLayoutName(layoutId, name);
-    this.saveChain = this.saveChain
+    // Sixth pass, same reasoning as the no-row branch above and as
+    // `createNewLayout`: branched off `renamed` with its own `.finally()`
+    // rather than folded into the chain assigned to `this.saveChain`, so this
+    // pass changes nothing about when `this.saveChain` itself settles.
+    this.beginWrite();
+    const renamed = this.saveChain
       .then(() => renameLayout({ layoutId, name }))
       .then((saved) => {
         this.saveErrorMessage = undefined;
@@ -690,6 +1289,8 @@ export default class SalesforceNavigator extends LightningElement {
           SAVE_ERROR_MESSAGE
         );
       });
+    renamed.finally(() => this.endWrite());
+    this.saveChain = renamed;
   }
 
   /**
@@ -725,7 +1326,12 @@ export default class SalesforceNavigator extends LightningElement {
       return;
     }
     this.discardPendingSave();
-    this.saveChain = this.saveChain
+    // Sixth pass, same reasoning as the other three writing controls:
+    // branched off `deleted` with its own `.finally()`, so this pass changes
+    // nothing about when `this.saveChain` itself settles for whatever is
+    // chained onto it next.
+    this.beginWrite();
+    const deleted = this.saveChain
       .then(() => deleteLayout({ layoutId }))
       .then((rows) => {
         this.saveErrorMessage = undefined;
@@ -738,6 +1344,8 @@ export default class SalesforceNavigator extends LightningElement {
           SAVE_ERROR_MESSAGE
         );
       });
+    deleted.finally(() => this.endWrite());
+    this.saveChain = deleted;
   }
 
   /**
@@ -759,11 +1367,13 @@ export default class SalesforceNavigator extends LightningElement {
       this.layoutId = undefined;
       this.layoutName = DEFAULT_LAYOUT_NAME;
       this.storedLayout = undefined;
+      this.resnapshotEdit();
       return;
     }
     this.layoutId = active.layoutId;
     this.layoutName = active.name || DEFAULT_LAYOUT_NAME;
     this.storedLayout = deserializeLayout(active.layoutJson);
+    this.resnapshotEdit();
   }
 
   // `page` is the only reactive piece of the wire config — LWC's wire
@@ -910,6 +1520,316 @@ export default class SalesforceNavigator extends LightningElement {
 
   get isEmpty() {
     return !this.isLoading && !this.hasError && this.items.length === 0;
+  }
+
+  // -------------------------------------------------------------------
+  // Edit mode.
+  //
+  // Three tiers of act, and the tier decides everything about it. **Tier 1**
+  // is the canvas — sections, column counts, items, order. It is gated behind
+  // this mode, it is held unwritten until Save, and Cancel reverts it.
+  // **Tier 2** is the set of saved layouts — create, rename, delete. It is
+  // gated too, because naming and deleting layouts is plainly customisation,
+  // but it is not drafted: each of those acts commits through its own Apex
+  // call, and rolling one back means undoing DML rather than restoring an
+  // in-memory object. **Tier 3** is which saved layout is showing, which is
+  // navigation and is not gated at all.
+  //
+  // The seam that leaves is real and is accepted rather than hidden: a user
+  // can enter edit mode, rename a layout, press Cancel, and find the rename
+  // still there. The rule a later Navigator control is tested against: if it
+  // changes the contents of a layout it is Tier 1; if it changes the set of
+  // layouts it is Tier 2; if it changes only which one is showing it is
+  // Tier 3.
+  // -------------------------------------------------------------------
+
+  handleEditStart() {
+    // `canEdit` gates the affordance in the template as well. Asked again here
+    // because a mode that cannot save is the one state this must not enter,
+    // and a template gate is not a guarantee about a handler.
+    if (!this.canEdit || this.isEditing) {
+      return;
+    }
+    // Everything made before this moment belongs to the autosave, not to the
+    // draft. A change made a moment ago is still sitting in its debounce, and
+    // leaving it there would put a write the user was already promised behind
+    // a Save they have not pressed yet — and hand Cancel a change it has no
+    // business reverting. Flushing here makes the boundary exact: the snapshot
+    // below is what is stored, so "restore what was on screen on entry" and
+    // "restore what the store holds" are the same sentence.
+    this.flushPendingSave();
+    this.editSnapshot = this.captureEditSnapshot();
+    this.isEditing = true;
+    this.editFocusTarget = EDIT_FOCUS_ENTER;
+    // Finding B: an earlier Save can still have a write outstanding — Save is
+    // the only one of the four writing controls that leaves edit mode before
+    // its own round trip settles — so `isWriteLocked` can already be true on
+    // entry. Telling the user only "press Save" would be false in that state;
+    // see `ENTER_EDIT_LOCKED_ANNOUNCEMENT`.
+    this.announce(
+      this.isWriteLocked
+        ? ENTER_EDIT_LOCKED_ANNOUNCEMENT
+        : ENTER_EDIT_ANNOUNCEMENT
+    );
+  }
+
+  /**
+   * Writes the session's work and leaves.
+   *
+   * Nothing is written when nothing changed, which is not an optimisation: a
+   * user who has only ever looked owns no layout row, and a Save that wrote
+   * regardless would create one for anybody who opened the mode and closed it
+   * again. The comparison is exact string equality on the canonical payload,
+   * so it agrees with the write by construction.
+   *
+   * **The announcement follows the write, not the button pressed.** A Save
+   * with nothing to write leaves edit mode having written nothing — the same
+   * as a Cancel — so it says exactly what Cancel says rather than claiming a
+   * save that did not happen. `CANCEL_EDIT_ANNOUNCEMENT` is already worded as
+   * a fact about the write rather than about the changes; reusing it here
+   * holds Save to that same standard instead of inventing a second sentence
+   * that says the same thing.
+   *
+   * **Re-checks `isWriteLocked` on the way in, the same reasoning already
+   * applied to `handleEditStart`'s `canEdit` re-check: a template gate — the
+   * `disabled` attribute on the Save button — is not a guarantee about a
+   * handler.** This is what actually closes the race the sixth pass exists
+   * for, not the attribute; see `isWriteLocked`.
+   *
+   * **`beginWrite({ announceLock: false })`, eighth pass (accessibility
+   * finding A).** Save is the only one of the four writing acts that calls
+   * `leaveEditMode()` — and announces its own outcome — synchronously, right
+   * here, in the same handler `beginWrite` is called from. `announceLock:
+   * false` makes that a decision rather than an accident of call order: see
+   * `beginWrite`'s own doc for the full reasoning.
+   */
+  handleEditSave() {
+    if (this.isWriteLocked) {
+      return;
+    }
+    const wroteChanges = this.hasUnsavedCanvasChanges;
+    if (wroteChanges) {
+      this.beginWrite({ announceLock: false });
+      const written = this.commitLayoutNow();
+      // `commitLayoutNow` only returns `undefined` when `hasLayoutLoadError`
+      // holds, which cannot be true here — reaching Save requires having
+      // been in edit mode, which requires `canEdit`, which requires
+      // `!hasLayoutLoadError` — but the fallback costs one line and removes
+      // any dependence on that chain holding forever.
+      (written || Promise.resolve()).finally(() => this.endWrite());
+    }
+    this.leaveEditMode();
+    this.announce(
+      wroteChanges ? SAVE_EDIT_ANNOUNCEMENT : CANCEL_EDIT_ANNOUNCEMENT
+    );
+  }
+
+  /**
+   * Cancel, pressed. An untouched session closes silently — there is nothing
+   * a confirmation would be protecting. A session with unsaved canvas changes
+   * asks first, through the shared discard prompt: the first of this slice's
+   * four call sites for it.
+   */
+  handleEditCancel() {
+    if (this.hasUnsavedCanvasChanges) {
+      this.openDiscardPrompt({ type: DISCARD_CANCEL });
+      return;
+    }
+    this.cancelEditsNow();
+  }
+
+  /**
+   * Throws the session's work away and leaves. Writes nothing, and un-writes
+   * nothing: a Tier 2 act committed during the session is not this to reach.
+   * Run either directly by `handleEditCancel`, when there was nothing to ask
+   * about, or by `handleDiscardConfirm`, once the user has said yes.
+   */
+  cancelEditsNow() {
+    // The same belt-and-braces as `disconnectedCallback`'s, and unreachable
+    // for the same reason: nothing arms a timer while editing. Kept because it
+    // is the difference between a Cancel that writes nothing and a Cancel that
+    // writes the draft it has just thrown off the screen.
+    this.discardPendingSave();
+    this.restoreEditSnapshot();
+    this.leaveEditMode();
+    this.announce(CANCEL_EDIT_ANNOUNCEMENT);
+  }
+
+  /** The canvas as it stands, in the shape `restoreEditSnapshot` reads back. */
+  captureEditSnapshot() {
+    return {
+      json: serializeLayout(this.layout),
+      wasStored: this.storedLayout !== undefined
+    };
+  }
+
+  restoreEditSnapshot() {
+    const snapshot = this.editSnapshot;
+    if (!snapshot) {
+      return;
+    }
+    this.storedLayout = snapshot.wasStored
+      ? deserializeLayout(snapshot.json)
+      : undefined;
+  }
+
+  /**
+   * Re-takes the snapshot after a Tier 2 act has replaced the canvas wholesale.
+   *
+   * Creating a layout, deleting one and switching to one all put a *different*
+   * layout on screen and all commit on the spot. A Cancel that then restored
+   * the snapshot taken before one of them would paint the previous layout's
+   * sections onto the layout now showing, and hold them there as unwritten
+   * draft — reverting a Tier 1 change the user never made, onto a row the
+   * revert was never about. No-op out of edit mode, which is why the two call
+   * sites can be unconditional.
+   */
+  resnapshotEdit() {
+    if (!this.isEditing) {
+      return;
+    }
+    this.editSnapshot = this.captureEditSnapshot();
+  }
+
+  /**
+   * Whether Save has anything to write. String equality on the canonical
+   * payload — exact, cheap, and it reuses the persistence contract rather than
+   * inventing a dirty flag that could disagree with what would be written.
+   */
+  get hasUnsavedCanvasChanges() {
+    if (!this.editSnapshot) {
+      return false;
+    }
+    return serializeLayout(this.layout) !== this.editSnapshot.json;
+  }
+
+  /**
+   * Whether any of the four writing acts — Save, New layout, Rename layout,
+   * Delete layout — has an outstanding round trip. The template disables all
+   * four on this, whichever one is actually in flight: the point is that a
+   * *second* layout operation cannot be issued inside the first's round trip,
+   * not only that the same one cannot be pressed twice.
+   */
+  get isWriteLocked() {
+    return this.writeInFlight > 0;
+  }
+
+  /**
+   * Call at each of the four writing acts' own entry point — `handleEditSave`,
+   * `createNewLayout`, both branches of `renameCurrentLayout`, and
+   * `deleteCurrentLayout` — never inside `commitLayoutNow` itself. Wrapping
+   * the outer call is what makes this safe to add without touching
+   * `commitLayoutNow`'s own wait-and-retry: whatever it returns does not
+   * settle until every internal recursion has, so a `.finally(() =>
+   * this.endWrite())` on the outer call's own return value already covers the
+   * whole window regardless of how many times it recurses, with no risk of
+   * this counter going stale mid-wait.
+   *
+   * Also owns the two accessibility obligations that come with disabling a
+   * control the user just pressed: an announcement, since a screen reader
+   * user gets no other signal that the four controls just went quiet, and a
+   * focus hand-off, since New layout, Rename layout and Delete layout all
+   * close the inline prompt they were pressed from (`closePrompt()`) without
+   * restoring focus, and none of the three leaves edit mode — see
+   * `EDIT_FOCUS_LOCK`. Save is the exception: it always calls `leaveEditMode`
+   * in the same handler, and that assigns `EDIT_FOCUS_LEAVE` after this
+   * assigns `EDIT_FOCUS_LOCK`, so the later write wins and Save keeps
+   * returning focus to the pencil, unchanged.
+   *
+   * The announcement is gated to the 0→1 transition only, so a call made
+   * while another is already outstanding — which `isWriteLocked` and the
+   * handler-side re-checks below mean should not happen from a real user
+   * gesture, but this stays cheap insurance against announcing "unavailable"
+   * twice in a row for one busy period.
+   *
+   * **`announceLock: false`, `handleEditSave`'s own call, eighth pass
+   * (accessibility finding A).** Save is the only one of the four writing
+   * acts that calls `leaveEditMode()` — and its own outcome announcement —
+   * synchronously, in the same handler that calls this. Two `announce()`
+   * calls made without an `await` between them collapse into one render: the
+   * second write to `this.announcement` is the only one that is ever
+   * flushed, so `WRITE_LOCK_ANNOUNCEMENT` could never have reached a screen
+   * reader for Save regardless of this flag, only ever the outcome that
+   * follows it. That was previously true by accident of call order rather
+   * than by decision, and the deviation that used to justify it overstated
+   * the claim to "for all four controls," which is false for Save — its
+   * outcome is not async. `announceLock: false` makes the omission the
+   * decision it always should have been: Save's own announcement is the one
+   * thing a screen reader hears about its press, never superseded by a
+   * message about controls that, by the time of the next render, are no
+   * longer even in the DOM to describe as unavailable. New layout, Rename
+   * layout and Delete layout keep the default: none of the three leaves edit
+   * mode, so their busy message is a real, render-visible fact until their
+   * own `.then()`/`.catch()` supersedes it.
+   */
+  beginWrite({ announceLock = true } = {}) {
+    this.writeInFlight += 1;
+    if (announceLock && this.writeInFlight === 1) {
+      this.announce(WRITE_LOCK_ANNOUNCEMENT);
+    }
+    this.editFocusTarget = EDIT_FOCUS_LOCK;
+  }
+
+  /** The other half of `beginWrite`. Clears on failure exactly as it does on success — both reach this the same way, through `.finally()` on the act's own promise, never through its `.then()` alone. */
+  endWrite() {
+    this.writeInFlight = Math.max(0, this.writeInFlight - 1);
+  }
+
+  leaveEditMode() {
+    this.isEditing = false;
+    this.editSnapshot = undefined;
+    this.editFocusTarget = EDIT_FOCUS_LEAVE;
+    // A Tier 2 prompt is customisation UI and has no business outliving the
+    // mode that revealed it: the "New layout…" / "Rename layout…" input and
+    // the "Delete layout…" confirmation render on `hasItems`, not on
+    // `isEditing`, so leaving edit mode by either route — Save or Cancel —
+    // would otherwise leave one standing, with its commit and its confirm
+    // button both still wired to act. Closing it here, in the one place edit
+    // mode ends, removes the prompt from the DOM outright rather than adding
+    // an `isEditing` re-check to each of its two handlers — one guard instead
+    // of two, per `rstk-dry-enforcement.md`, and it also fixes the case a
+    // handler-side check alone would not: the stale dialog itself, which a
+    // screen reader would otherwise still announce as open.
+    this.closePrompt();
+    // **Also what makes `handleLayoutNameCommit` and `handleLayoutDeleteConfirm`
+    // safe with no `isWriteLocked` re-check of their own, ninth pass.** Both
+    // call a writing act directly, with no lock guard at their own call site.
+    // Safe because a Tier 2 prompt cannot be acted on stale. **Corrected on
+    // review: an earlier version of this comment said such a prompt "can only
+    // be opened through `handleLayoutMenuSelect`". That is false — there are
+    // four `openPrompt(` sites that open a Tier 2 prompt and only three sit
+    // behind that gate; `handleLayoutPromptCancel`'s reopen of `PROMPT_NEW` is
+    // ungated, reached by New layout -> name -> commit with unsaved changes ->
+    // "Keep editing", and driven by a test in this suite. The conclusion held
+    // but the stated reason did not cover that fourth opener, so here is the
+    // one that does.** Three of the four openers are gated on `isWriteLocked`
+    // via `handleLayoutMenuSelect` (see it), so they cannot open a prompt while
+    // a write is outstanding. The fourth is covered instead by `openPrompt`
+    // itself, which clears `this.pendingDiscardAction` on every open, and by
+    // the fact that a live `NEW_LAYOUT` discard action cannot coexist with an
+    // outstanding write in the first place. Beyond the openers, the one act
+    // that *can* begin a write while a prompt is already standing open is
+    // Save, the only one of the four writing controls that does not go through
+    // that gate. Save always reaches this method,
+    // synchronously, in the same handler that engages the lock
+    // (`handleEditSave` -> `leaveEditMode`), and `this.closePrompt()` above
+    // clears `this.layoutPrompt`/`this.pendingDiscardAction` as a plain,
+    // immediate property write — no render or microtask needed for it to
+    // take effect. Both commit handlers read those fields fresh at call
+    // time rather than from anything captured earlier, so even a click that
+    // reaches a not-yet-removed prompt node in the same tick reads the
+    // already-cleared state and does nothing. Covered end to end by "closes
+    // an open delete-layout prompt when Cancel ends edit mode..." and
+    // "closes an open rename prompt when Save ends edit mode...", one exit
+    // route each.
+    //
+    // Any keyboard grab still in flight ends with the mode. This is a
+    // correctness bug rather than a nicety: `renderedCallback` restores focus
+    // to a grabbed card *by index*, and a stale grab pointing at a card that
+    // is no longer grabbable makes that restoration silently fight the
+    // hand-off above for the same render.
+    this.releaseSectionGrab();
+    this.cardFocusIndex = undefined;
   }
 
   // -------------------------------------------------------------------
@@ -1123,10 +2043,25 @@ export default class SalesforceNavigator extends LightningElement {
    * so the whole of "the user looked and changed their mind" reaches no
    * `applyLayout` at all. That is slice 03's criterion, which a picker that
    * applied unconditionally would break from a new direction.
+   *
+   * **The edit session is captured here too, not only the section index.**
+   * `NavigatorItemPicker` is a `LightningModal`, which outlives this
+   * component's own idea of "still editing" — it is mounted on
+   * `document.body` and this file asserts nothing about a real browser's
+   * modal/focus-trap guarantee that a user cannot act behind it. The button
+   * that opens it renders only under `editing`, but the *write* happens when
+   * the promise resolves, arbitrarily later, and `this.editSnapshot` at that
+   * moment is what tells "still this session" from every other case:
+   * `isEditing` alone cannot, because Cancel and Save both leave it `false`,
+   * a fresh entry leaves it `true` again with a *different* snapshot object,
+   * and a Tier 2 act mid-session (`resnapshotEdit`) replaces the canvas and
+   * re-takes the snapshot without ever leaving edit mode at all. See
+   * `addChosenItem`'s own guard.
    */
   handleSectionAddItems(event) {
     const sectionIndex = event.detail.index;
     const sectionName = this.sectionNameAt(sectionIndex);
+    const session = this.editSnapshot;
 
     NavigatorItemPicker.open({
       size: "small",
@@ -1137,16 +2072,32 @@ export default class SalesforceNavigator extends LightningElement {
       availableItems: availableTabs(this.layout, this.items),
       sectionName
     }).then((tabId) => {
-      this.addChosenItem(sectionIndex, tabId);
+      this.addChosenItem(sectionIndex, tabId, session);
     });
   }
 
-  /** The one call site for putting an item into a section. */
-  addChosenItem(sectionIndex, tabId) {
+  /**
+   * The one call site for putting an item into a section.
+   *
+   * **`session` must still be the live one.** A bare `!this.isEditing` check
+   * is not enough: it passes for a picker opened in a session that has since
+   * ended by Cancel and been followed by an unrelated re-entry, silently
+   * landing an old choice on a canvas the user never made it against. Every
+   * other case a bare check would get wrong — the mode having ended by Cancel
+   * or by Save, or a Tier 2 act mid-session replacing the canvas — falls out
+   * of the same one comparison, because each of them either leaves
+   * `isEditing` false or gives `editSnapshot` a new identity. No Tier 1
+   * mutation may reach `applyLayout` once the session that opened the picker
+   * is no longer the one on screen.
+   */
+  addChosenItem(sectionIndex, tabId, session) {
     // The picker outlives this component — see `isAttached`. A choice that
     // arrives after the user has left the tab must not schedule a save no
     // `disconnectedCallback` will ever flush.
     if (!this.isAttached) {
+      return;
+    }
+    if (!this.isEditing || this.editSnapshot !== session) {
       return;
     }
     if (!tabId) {
@@ -1343,6 +2294,10 @@ export default class SalesforceNavigator extends LightningElement {
     // keyboard user would otherwise be left with focus on nothing.
     this.focusLayoutPrompt();
 
+    // The same hand-off for the two edit-mode transitions, and for the same
+    // reason: each destroys the control the user just activated.
+    this.focusEditTransition();
+
     // A live grab wins, because it is re-asserted on every render for as long
     // as the drag lasts; `cardFocusIndex` is the one-shot hand-off the two
     // gestures that *end* a drag leave behind, and it is consumed here
@@ -1363,13 +2318,71 @@ export default class SalesforceNavigator extends LightningElement {
     }
   }
 
-  focusLayoutPrompt() {
-    if (!this.isNamingLayout) {
+  /**
+   * Puts focus where an edit-mode transition left it owing. Consumed whether
+   * or not it was used, so a hand-off cannot outlive the render it was set for
+   * and steal focus from something else later — the same one-shot discipline
+   * `cardFocusIndex` carries, and for the same reason.
+   */
+  focusEditTransition() {
+    const transition = this.editFocusTarget;
+    if (!transition) {
       return;
     }
-    const input = this.template.querySelector(".rstk-nav-layout-prompt__input");
-    if (input && this.template.activeElement !== input) {
-      input.focus();
+    this.editFocusTarget = undefined;
+    const selector = EDIT_FOCUS_SELECTORS[transition];
+    const control = selector ? this.template.querySelector(selector) : null;
+    if (control && this.template.activeElement !== control) {
+      control.focus();
+    }
+  }
+
+  /**
+   * Puts focus into whichever input-taking layout dialog is open.
+   *
+   * **The discard confirmation joins this, as of the first fix pass.** It has
+   * no input, so there is nothing for the naming prompt's own branch to find
+   * — but the `alertdialog` still has to receive focus deliberately or it
+   * falls to `document.body`, exactly Trap 3's hazard at a third and fourth
+   * place (New layout and Delete layout both call `closePrompt()` first,
+   * destroying the control that held focus, before this dialog opens in its
+   * place). The target is "Keep editing", never "Discard changes" — the same
+   * "not the control that commits" reasoning `EDIT_ENTRY_FOCUS_SELECTOR`
+   * already uses for the pencil, so a stray Enter cannot fire the destructive
+   * action.
+   *
+   * **The delete confirmation joins this too, as of the second fix pass.**
+   * `PROMPT_DELETE` is the shape `PROMPT_DISCARD` was built by copying — same
+   * container, same `role="alertdialog"`, same `onkeydown` — and the first
+   * fix pass gave the copy this focus hand-off while leaving the original
+   * exactly as silent as it always was. The target is "Cancel", for the same
+   * "not the control that commits" reason: "Delete layout" is destructive and
+   * irreversible, so a stray Enter must not land there.
+   */
+  focusLayoutPrompt() {
+    if (this.isNamingLayout) {
+      const input = this.template.querySelector(
+        ".rstk-nav-layout-prompt__input"
+      );
+      if (input && this.template.activeElement !== input) {
+        input.focus();
+      }
+      return;
+    }
+    if (this.isConfirmingLayoutDelete) {
+      const cancel = this.template.querySelector(".rstk-nav-delete-cancel");
+      if (cancel && this.template.activeElement !== cancel) {
+        cancel.focus();
+      }
+      return;
+    }
+    if (this.isConfirmingDiscard) {
+      const keepEditing = this.template.querySelector(
+        ".rstk-nav-discard-keep-editing"
+      );
+      if (keepEditing && this.template.activeElement !== keepEditing) {
+        keepEditing.focus();
+      }
     }
   }
 
@@ -1385,6 +2398,167 @@ export default class SalesforceNavigator extends LightningElement {
     this.scheduleSave();
   }
 
+  /**
+   * Which layout is being written, and what to. Captured **at the moment of
+   * the change** rather than when the write runs — see `pendingSave` for why
+   * that difference is the whole of it — and shared by the debounced path and
+   * the two paths that write immediately, so the three cannot disagree about
+   * what a save is addressed to.
+   *
+   * `layoutJson` defaults to the canvas as it stands, which is right for every
+   * caller except one: `commitLayoutNow`, mid-edit-session, passes the entry
+   * snapshot's payload instead, because "the canvas as it stands" is the Tier
+   * 1 draft there — see it for why that distinction exists at all.
+   */
+  captureSaveTarget(layoutJson = serializeLayout(this.layout)) {
+    return {
+      layoutId: this.layoutId,
+      name: this.layoutName,
+      layoutJson
+    };
+  }
+
+  /**
+   * Writes the layout as it stands, now, instead of when a debounce would have
+   * fired. `flushPendingSave` cannot do this job: it is a no-op unless a timer
+   * is already armed, and in edit mode no timer is ever armed.
+   *
+   * **"As it stands" is not always `this.layout`, so a caller may override
+   * it.** `handleEditSave` calls this with nothing, and there "as it stands"
+   * rightly means the current canvas — that write is Save committing the Tier
+   * 1 draft the user asked to keep. `renameCurrentLayout`'s no-row branch is
+   * different: it is a Tier 2 act, and while editing `this.layout` is that
+   * same Tier 1 draft, not what Save would write, because the user has not
+   * pressed Save. Committing the draft there the moment a layout is named
+   * would carry it to the server behind Cancel's back, which is exactly the
+   * write explicit-save exists to prevent — so that caller passes the entry
+   * snapshot's payload instead, the canvas as it was and as Cancel would
+   * restore it.
+   *
+   * Returns the save chain so a caller that needs to know when *this*
+   * particular write has landed — `renameCurrentLayout`'s no-row branch,
+   * to flip `editSnapshot.wasStored` once the row it creates exists — can
+   * wait on it.
+   *
+   * **A create still in flight is made visible to the next call, here and
+   * nowhere else.** All three of this file's immediate creates reach this
+   * one field: Save and `renameCurrentLayout`'s no-row branch both reach the
+   * server *through* this method, and `createNewLayout` — which creates its
+   * own, separate row directly off `saveChain` rather than through here —
+   * writes the same field for this method's benefit. One shared flag rather
+   * than a second one set at the third call site, per
+   * `rstk-dry-enforcement.md`. Without it, a second call made before the
+   * first create's round trip lands would read `this.layoutId` as still
+   * `undefined` — precisely as the first call did — and be captured as
+   * another create, leaving the user with two rows and the server's active
+   * flag on whichever one lands last. `creatingLayout` names that window: a
+   * call made inside it waits for the in-flight create and then calls itself
+   * again, so it captures *after* `this.layoutId` is known and lands as an
+   * update of the row the first call is creating, never as a second row —
+   * **for a create the wait may correctly fold into.** See `creatingLayout`
+   * for `distinct`, the flag that says whether it may.
+   *
+   * **An overridden call never folds into a `distinct` create.**
+   * `renameCurrentLayout`'s no-row branch is the one caller that passes
+   * `layoutJson`, and doing so means this write is addressed to a specific
+   * entry snapshot — a specific act — not to "whichever layout is current".
+   * `createNewLayout`'s create is a different act making a different,
+   * separate layout; waiting for it and then recapturing would read
+   * `this.layoutId` and `this.layoutName` as *its* id and *its* name, which
+   * by then they are, and silently turn the override's write into a no-op
+   * update of a row it was never addressed to — the act it carried erased
+   * rather than committed. So an overridden call falls through instead and
+   * makes its own row, addressed to what it was always addressed to: two
+   * acts, two rows, both honoured. A bare call (`Save`, `layoutJson` left
+   * `undefined`) carries no such identity — it means "whatever is on
+   * screen" — so it always waits, `distinct` or not, and recaptures fresh
+   * once the wait clears: `captureSaveTarget`'s own default reads
+   * `this.layout` fresh regardless of what replaced it while waiting.
+   */
+  commitLayoutNow(layoutJson) {
+    if (this.hasLayoutLoadError) {
+      return undefined;
+    }
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+    }
+    // **Seventh pass: a surviving mutant across the whole suite, not a bug.**
+    // No test in the file discriminates this branch any more — short-
+    // circuiting this guard to `if (false)` leaves all 564 tests green — because
+    // `isWriteLocked` (see it and `beginWrite`) now refuses a second of the
+    // four writing controls before either one can reach here, and two
+    // immediate creates racing for the same rowless user is the only
+    // precondition this branch exists to arbitrate. Preserved anyway, as
+    // defence in depth, per `.claude/rules/rstk-preserve-defensive-checks.md`
+    // — not claimed dead by construction, only unproven by the current suite.
+    if (!this.layoutId && this.creatingLayout) {
+      const inFlight = this.creatingLayout;
+      if (layoutJson === undefined || !inFlight.distinct) {
+        return inFlight.promise.then(() => {
+          // Re-resolves an override against `this.editSnapshot` fresh
+          // rather than replaying the value handed in before the wait.
+          // **Live, not dead — a prior pass claimed this could not
+          // discriminate because "the only thing that ever moves
+          // `editSnapshot.json` mid-session is `resnapshotEdit`," and that
+          // enumeration was wrong.** Two other things move it: re-entering
+          // edit mode re-takes the snapshot on every entry
+          // (`handleEditStart`'s `captureEditSnapshot()`), and for a user
+          // whose `storedLayout` is `undefined` the snapshot is built from
+          // `this.items`, which the tab wire can redeliver on an LDS cache
+          // refresh — an ordinary event for a UI API adapter, per the
+          // comment on `wiredNavItems` above. A second no-row rename that
+          // waits on the first's still-open create can clear that wait
+          // after a Cancel, a wire redelivery and a re-entry have moved
+          // the snapshot out from under it; replaying the value captured
+          // when the wait started would then write a superseded canvas.
+          // Re-reading `this.editSnapshot` here is what keeps the write
+          // addressed to the entry snapshot as it stands *now*, not as it
+          // stood when this call was made.
+          //
+          // **That liveness predates the lockout and is superseded now, not
+          // corrected.** The re-entry/wire-redelivery route above needed two
+          // of `creatingLayout`'s writers to hold an entry at once, and
+          // `isWriteLocked` forecloses that at the handler level before a
+          // second writing control can even be attempted. No test in the
+          // suite discriminates this ternary today — collapsing it to a bare
+          // `layoutJson` leaves all 564 green — and the lockout is what
+          // stands in front of it now. Preserved as defence in depth per
+          // `.claude/rules/rstk-preserve-defensive-checks.md`, not deleted;
+          // not claimed dead by construction, only unproven by the current
+          // suite.
+          const resolvedOverride =
+            layoutJson !== undefined && this.editSnapshot
+              ? this.editSnapshot.json
+              : layoutJson;
+          return this.commitLayoutNow(resolvedOverride);
+        });
+      }
+      // Else: `inFlight` is a distinct act's create (`createNewLayout`'s),
+      // and this call carries an override — a specific act of its own. Fall
+      // through and make this write's own row rather than folding onto one
+      // it was never addressed to.
+    }
+    this.pendingSave = this.captureSaveTarget(layoutJson);
+    const isCreate = !this.pendingSave.layoutId;
+    const result = this.save();
+    if (isCreate) {
+      // Same ownership check as `createNewLayout`'s writer — see
+      // `creatingLayout` — so this create's resolution cannot clear a
+      // different write's still-open entry out from under it.
+      const mine = {
+        promise: result.then(() => {
+          if (this.creatingLayout === mine) {
+            this.creatingLayout = undefined;
+          }
+        })
+      };
+      this.creatingLayout = mine;
+      return mine.promise;
+    }
+    return result;
+  }
+
   scheduleSave() {
     // Nothing is written while the stored layout is unknown. The section
     // menus live in a child component and stay operable, so the change is
@@ -1394,15 +2568,24 @@ export default class SalesforceNavigator extends LightningElement {
     if (this.hasLayoutLoadError) {
       return;
     }
+    // **The whole of the explicit-save suppression, in one place.** Every
+    // Tier 1 mutation reaches the store through `applyLayout`, and
+    // `applyLayout` reaches the timer through here — so one guard covers all
+    // ten call sites. Ten guards at ten call sites is exactly what
+    // `.claude/rules/rstk-dry-enforcement.md` exists to prevent.
+    //
+    // The debounce is neutered by this, not deleted. With every mutation
+    // behind edit mode it can no longer legitimately fire — but it is the only
+    // thing standing between a future ungated write and a save storm, and
+    // removing it is a larger diff than leaving it behind one guard.
+    if (this.isEditing) {
+      return;
+    }
     // **Which layout is being written is decided here — at the moment of the
     // change — and carried to the call.** See `pendingSave`. A burst
     // overwrites it, which is exactly what the debounce coalescing means: the
     // last change in a burst is the state the layout is in.
-    this.pendingSave = {
-      layoutId: this.layoutId,
-      name: this.layoutName,
-      layoutJson: serializeLayout(this.layout)
-    };
+    this.pendingSave = this.captureSaveTarget();
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
     }
@@ -1512,7 +2695,21 @@ export default class SalesforceNavigator extends LightningElement {
     // payload to the layout it was made on without dragging the active flag
     // back there. A late answer here cannot reach the wrong row, because the
     // row is already decided.
-    const isCurrent = target.layoutId === this.layoutId;
+    //
+    // **The create branch asks the same question its neighbours already ask,
+    // rather than assuming yes.** A create's row has no id yet to compare, so
+    // "is this still the one on screen" reads as "is the screen still
+    // undecided" — `this.layoutId === undefined` — which is exactly the fact
+    // `rememberSaved` checks one step later to decide whether to adopt this
+    // row as current at all. Hard-coding `true` here let two creates racing
+    // for the same rowless user (this one, and a distinct act's own, e.g.
+    // `createNewLayout`) both claim the active flag, and the last to land on
+    // the server won regardless of which one `this.layoutId` had already
+    // moved on to — the same "one row, two meanings" failure this file exists
+    // to keep shut, reached a fourth way.
+    const isCurrent = target.layoutId
+      ? target.layoutId === this.layoutId
+      : this.layoutId === undefined;
 
     const call = target.layoutId
       ? updateLayout({
@@ -1524,7 +2721,7 @@ export default class SalesforceNavigator extends LightningElement {
       : createLayout({
           name: target.name,
           layoutJson: target.layoutJson,
-          makeActive: true
+          makeActive: isCurrent
         });
 
     return call
@@ -1577,6 +2774,15 @@ export default class SalesforceNavigator extends LightningElement {
         })
       : this.layouts.concat([row]);
 
+    // **Seventh pass: a surviving mutant now, not corrected.** Two creates
+    // racing for the same rowless user — the precondition this guard exists
+    // to arbitrate — is exactly what `isWriteLocked` forecloses before either
+    // one reaches `persist` at all, so no test in the suite discriminates
+    // this guard any more: collapsing it to `if (!target.layoutId)` leaves
+    // all 564 green. The lockout is what stands in front of the race this
+    // guard was written for; kept as defence in depth per
+    // `.claude/rules/rstk-preserve-defensive-checks.md` — not claimed dead by
+    // construction, only unproven by the current suite.
     if (!target.layoutId && this.layoutId === undefined) {
       this.layoutId = savedId;
     }

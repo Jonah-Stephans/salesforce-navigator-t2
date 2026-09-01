@@ -88,6 +88,45 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
    */
   @api moveTargets = [];
 
+  /**
+   * Whether the whole Navigator is in edit mode, set by this item's section —
+   * the same `@api` down / `CustomEvent` up route `index`, `grabbed` and
+   * `moveTargets` already use, rather than a new state-sharing mechanism. The
+   * per-item overflow menu — and therefore renaming, removing and moving this
+   * item to another section — is reachable only while this holds true; out of
+   * edit mode it does not render at all (`lwc:if`, not a CSS class), so
+   * neither the tab order nor a screen reader can reach it. Nothing else about
+   * this item changes: the anchor, its drag attributes and `handleClick` are
+   * untouched by this flag, which is what keeps the link working in both
+   * states.
+   *
+   * A setter rather than a bare field for the same reason `navigatorSection`'s
+   * `editing` is one: an in-progress rename is this item's own transient
+   * state, entered only through the now-gated menu. If edit mode ends
+   * mid-rename, the menu that could reopen or abandon it is gone, so nothing
+   * else on this item would close a rename input left open — ending edit mode
+   * ends any in-progress rename along with it.
+   */
+  @api
+  get editing() {
+    return this.isEditingItem;
+  }
+
+  set editing(value) {
+    // Coerced rather than stored as-is: this is an `@api` boundary, and LWC
+    // renders a bound expression that resolves `undefined` by omitting the
+    // attribute — the same thing it does for a literal `false` — so an
+    // uncoerced `undefined` here would leave `draggable={editing}` bound to
+    // `undefined` too, which LWC also renders as an absent `draggable`
+    // attribute, and a real `<a href>` is natively draggable without it.
+    this.isEditingItem = value === true;
+    if (!this.isEditingItem) {
+      this.isRenaming = false;
+    }
+  }
+
+  isEditingItem = false;
+
   // Defaults to a real, non-empty href so the anchor is always a genuine
   // link — in tab order, exposing a link role, and supporting native
   // middle-click / "open in new tab" — from first render, before
@@ -177,9 +216,17 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
    * SLDS 2 global hooks.
    */
   get anchorClass() {
-    return this.grabbed
-      ? "rstk-nav-item rstk-nav-item_grabbed"
-      : "rstk-nav-item";
+    const classes = ["rstk-nav-item"];
+    // The grab cursor lives on this class rather than on the base rule —
+    // see `navigatorItem.css` — so it is on-screen only while a drag could
+    // actually start, not permanently.
+    if (this.editing) {
+      classes.push("rstk-nav-item_editing");
+    }
+    if (this.grabbed) {
+      classes.push("rstk-nav-item_grabbed");
+    }
+    return classes.join(" ");
   }
 
   /** The instruction node's id exists only while the item is grabbed. */
@@ -188,12 +235,24 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   }
 
   /**
-   * The resting hint's id, which is the mirror image: it exists only while
-   * the item is *not* grabbed. The two nodes are alternatives, never
-   * co-present, so that the anchor is never described by both at once.
+   * The resting hint's id, which is the mirror image of `instructionsId`: it
+   * exists only while the item is *not* grabbed **and** the Navigator is in
+   * edit mode. The two nodes are alternatives, never co-present, so that the
+   * anchor is never described by both at once.
+   *
+   * Gated on `editing` too as of this spec's third fix pass — out of edit
+   * mode `handleDragKeydown` returns `false` on its very first line, so
+   * Space does nothing here, and a hint reading "Press Space to move."
+   * would be telling a screen reader user to press a key that does nothing
+   * rather than merely one they cannot reach yet. `grabbed` alone already
+   * implies `editing` (a grab can only start in edit mode, and leaving edit
+   * mode releases any grab in flight — see the `editing` setter above), so
+   * this getter only needed to add the other half.
    */
   get hintId() {
-    return this.grabbed ? undefined : `rstk-nav-hint-${this.tabId}`;
+    return this.grabbed || !this.editing
+      ? undefined
+      : `rstk-nav-hint-${this.tabId}`;
   }
 
   /**
@@ -389,6 +448,17 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   }
 
   handleDragOver(event) {
+    // Out of edit mode this anchor is not a drop target at all. Without this
+    // guard the anchor would still call `preventDefault()` and advertise a
+    // "move" cursor for *any* drag passing over it — a file, a link, a text
+    // selection, none of them the Navigator's own — which is a drag surface
+    // by O1's own definition even though it writes and lights nothing. This
+    // is the item's half of the same gate `navigatorSection.js`'s
+    // `handleCardDragOver` carries for the card, and it covers more surface:
+    // an item covers most of a card's own area.
+    if (!this.editing) {
+      return;
+    }
     // Without preventDefault() here the browser never fires `drop` at all.
     // This is the whole mechanism that makes an item a drop target, not a
     // detail of it.
@@ -401,8 +471,34 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
   }
 
   handleDrop(event) {
-    event.preventDefault();
+    // Corrected rather than deleted, on the third fix pass: this comment
+    // used to argue `navigatorSection.js`'s `handleCardDrop` was safe left
+    // ungated because a real browser never fires `drop` at all once the
+    // preceding `dragover` went uncancelled. That reasoning was correct as
+    // far as it went, and it did not distinguish the card from this anchor —
+    // a re-review ran the identical synthetic-`drop` probe against the card
+    // and got the identical result. `handleCardDrop` is gated the same way
+    // now, for the same reason this handler already was, and this anchor's
+    // own gate is no longer resting alone on an inference the card's
+    // ungated status used to lean on too.
+    //
+    // stopPropagation() below now fires unconditionally, ahead of the
+    // `editing` check, rather than after it. That ordering was the actual
+    // gap: with the guard returning before stopPropagation(), a drop out of
+    // edit mode still bubbled past this anchor to the section's own
+    // `<article>` and was read there instead — the composed-level probe that
+    // found it is `salesforceNavigator.test.js`'s "does not move an item
+    // across sections when dropped on another item out of edit mode, and
+    // writes nothing". Stopping the event here regardless of mode is the
+    // line that keeps a drop on this anchor from being read a second time by
+    // the card underneath it — the job it did unconditionally before any
+    // edit mode existed — and the `editing` check now decides only whether
+    // *this* handler treats the drop as its own.
     event.stopPropagation();
+    if (!this.editing) {
+      return;
+    }
+    event.preventDefault();
     this.dispatch("itemdrop", { index: this.index });
   }
 
@@ -437,6 +533,19 @@ export default class NavigatorItem extends NavigationMixin(LightningElement) {
 
   /** Returns whether the key was consumed as part of the drag pattern. */
   handleDragKeydown(event) {
+    // Out of edit mode this item is not a drag source at all — `draggable`
+    // is bound to `editing` in the template, which the browser respects for
+    // a pointer drag, but `onkeydown` fires whether or not the element is
+    // draggable. Without this the Space key would still grab the item from
+    // the keyboard even though a mouse user has no equivalent gesture
+    // available, which is exactly the asymmetry `lwc-accessible-interactions.md`
+    // exists to catch. Returning `false` here — rather than swallowing the
+    // key — leaves the rest of `handleKeydown` free to do its own job (the
+    // no-href Enter fallback) undisturbed.
+    if (!this.editing) {
+      return false;
+    }
+
     const key = event.key;
 
     if (key === " " || key === "Spacebar") {

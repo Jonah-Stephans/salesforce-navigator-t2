@@ -109,6 +109,16 @@ function selectSectionMenuItem(element, sectionIndex, value) {
     .dispatchEvent(new CustomEvent("select", { detail: { value } }));
 }
 
+// The section's overflow menu is a Tier 1 control and only renders in edit
+// mode as of this slice; this file otherwise carries no edit-mode
+// infrastructure at all (the it.each below is only test here that needs it).
+const EDIT_AFFORDANCE = "lightning-button-icon.rstk-nav-edit";
+
+async function enterEditMode(element) {
+  element.shadowRoot.querySelector(EDIT_AFFORDANCE).click();
+  await flush();
+}
+
 describe("c-salesforce-navigator on the Small form factor", () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -222,6 +232,7 @@ describe("c-salesforce-navigator on the Small form factor", () => {
       getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
       await flush();
 
+      await enterEditMode(element);
       selectSectionMenuItem(element, 0, `columns-${columns}`);
       await flush();
 

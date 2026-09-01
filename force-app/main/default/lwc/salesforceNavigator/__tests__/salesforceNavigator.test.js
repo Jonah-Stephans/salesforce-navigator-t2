@@ -191,10 +191,41 @@ function selectSectionMenuItem(element, sectionIndex, value) {
     .dispatchEvent(new CustomEvent("select", { detail: { value } }));
 }
 
-/** One change in a burst: made, rendered, and 100ms of the debounce spent. */
-async function burstChange(element, columns) {
-  selectSectionMenuItem(element, 0, `columns-${columns}`);
+/**
+ * A change to the layout, used as the mutation vehicle wherever a test's
+ * actual subject is the save chain's debounce/coalescing/id-handling
+ * behaviour rather than any particular control. Chosen over item removal
+ * because, like `columns-N`, it can be repeated on the same target with a
+ * fresh distinct value each time.
+ *
+ * Item rename is gated behind edit mode as of slice 04, and `scheduleSave`
+ * itself returns early while editing — so a test of the *debounce* has to
+ * run out of edit mode, which is exactly where the item's own menu no longer
+ * renders at all. This dispatches the `itemrename` the menu would have
+ * dispatched directly on the item element instead of opening that (now
+ * edit-mode-only) menu, which is what lets these tests keep running out of
+ * edit mode. It works unchanged whether or not the fixture can even *reach*
+ * edit mode — the two `hasLayoutLoadError` fixtures below have no edit
+ * affordance at all — because it never touches the item's own rendered UI,
+ * only the event the parent's listeners already respond to regardless of
+ * what produced it. Doing this keeps these tests pinning the debounce as the
+ * backstop `## Design` calls it — against a *future* ungated write — rather
+ * than as a route a user can still reach today.
+ */
+async function renameFirstItem(element, sectionIndex, value) {
+  const item =
+    querySections(element)[sectionIndex].shadowRoot.querySelector(
+      "c-navigator-item"
+    );
+  item.dispatchEvent(
+    new CustomEvent("itemrename", { detail: { index: 0, rename: value } })
+  );
   await flush();
+}
+
+/** One rename in a burst: made, rendered, and 100ms of the debounce spent. */
+async function burstItemRename(element, value) {
+  await renameFirstItem(element, 0, value);
   jest.advanceTimersByTime(100);
 }
 
@@ -202,6 +233,105 @@ async function settleAutosave() {
   jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
   await flush();
   await flush();
+}
+
+// The four controls the action row can hold. Each is queried by its own class
+// rather than by tag: `lightning-button` alone used to name exactly one button
+// on this page and now names three, so a bare tag selector would silently
+// resolve to whichever the template happens to order first.
+const EDIT_AFFORDANCE = "lightning-button-icon.rstk-nav-edit";
+const NEW_SECTION_BUTTON = "lightning-button.rstk-nav-new-section";
+const EDIT_SAVE_BUTTON = "lightning-button.rstk-nav-edit-save";
+const EDIT_CANCEL_BUTTON = "lightning-button.rstk-nav-edit-cancel";
+
+/** Everything in `lightning-card`'s actions slot, in the order it renders. */
+function actionRow(element) {
+  return Array.from(element.shadowRoot.querySelectorAll('[slot="actions"]'));
+}
+
+/** Enters edit mode the way a user does — through the affordance in the top right. */
+async function enterEditMode(element) {
+  element.shadowRoot.querySelector(EDIT_AFFORDANCE).click();
+  await flush();
+}
+
+/** Presses Save. Two flushes, because the write goes onto the save chain. */
+async function saveEdits(element) {
+  element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).click();
+  await flush();
+  await flush();
+}
+
+/**
+ * The confirm button on the shared discard-confirmation prompt, or `null`
+ * when it is not open. Shared with the dedicated tests of that prompt below,
+ * which look the same way for "Keep editing" by its own label.
+ */
+function discardConfirmButton(element) {
+  return (
+    Array.from(
+      element.shadowRoot.querySelectorAll(
+        ".rstk-nav-layout-prompt lightning-button"
+      )
+    ).find((button) => button.label === "Discard changes") || null
+  );
+}
+
+/** The decline half of the same prompt — stays editing, throws nothing away. */
+function keepEditingButton(element) {
+  return (
+    Array.from(
+      element.shadowRoot.querySelectorAll(
+        ".rstk-nav-layout-prompt lightning-button"
+      )
+    ).find((button) => button.label === "Keep editing") || null
+  );
+}
+
+/**
+ * Presses Cancel the way a user does. If the session is untouched this ends
+ * it on the spot; if there is an unsaved canvas change, the shared discard-
+ * confirmation prompt opens first, and this confirms it — `cancelEdits`
+ * always means "the user successfully cancelled", whichever route that took.
+ * The prompt's own asking-versus-declining behaviour has its own dedicated
+ * tests, which press the two buttons directly rather than through here.
+ */
+async function cancelEdits(element) {
+  element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
+  await flush();
+  const confirmDiscard = discardConfirmButton(element);
+  if (confirmDiscard) {
+    confirmDiscard.click();
+    await flush();
+  }
+}
+
+/** Presses New section, which only exists in edit mode. */
+async function addSection(element) {
+  element.shadowRoot.querySelector(NEW_SECTION_BUTTON).click();
+  await flush();
+}
+
+/**
+ * Every element the component moves focus to, in order.
+ *
+ * `element.shadowRoot.activeElement` is the right assertion for a section card,
+ * which is a real `<article tabindex="0">`, and it is useless for the action
+ * row: those are `lightning-*` base components, which sfdx-lwc-jest replaces
+ * with stubs rendering nothing focusable, so a perfectly deliberate `focus()`
+ * leaves `activeElement` null. Both edit-mode transitions also focus a control
+ * that does not exist until the render revealing it, so an instance spy cannot
+ * be installed in advance either. The call itself is what is left to assert,
+ * and it is what this records. See `.claude/rules/lwc-jest-ceilings.md`.
+ */
+function recordFocusMoves() {
+  const moved = [];
+  jest
+    .spyOn(HTMLElement.prototype, "focus")
+    .mockImplementation(function record() {
+      moved.push(this);
+    });
+  return moved;
 }
 
 describe("c-salesforce-navigator", () => {
@@ -242,6 +372,11 @@ describe("c-salesforce-navigator", () => {
     await flush();
     jest.useRealTimers();
     jest.clearAllMocks();
+    // `clearAllMocks` empties a spy's recorded calls but leaves it installed.
+    // `recordFocusMoves` spies on a *shared prototype*, so one left in place
+    // would swallow every later test's focus() call — including the section
+    // card focus restoration, which asserts on activeElement.
+    jest.restoreAllMocks();
   });
 
   it("renders every tab the wire adapter returns, under its platform label", async () => {
@@ -465,8 +600,8 @@ describe("c-salesforce-navigator", () => {
       await flush();
       expect(sectionNames(element)).toEqual(["Daily work"]);
 
-      element.shadowRoot.querySelector("lightning-button").click();
-      await flush();
+      await enterEditMode(element);
+      await addSection(element);
       expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
 
       deliver([storedRow("a0X000000000009AAA", "Rival")]);
@@ -486,7 +621,12 @@ describe("c-salesforce-navigator", () => {
       getNavItems.emit({ navItems: [ACCOUNT_ITEM, CONTACT_ITEM] });
       await flush();
 
-      expect(element.shadowRoot.querySelector("lightning-button")).toBeNull();
+      // The affordance, not "New section": the pencil is now the only
+      // customisation control that renders out of edit mode, so it is the one
+      // thing whose absence means nothing can be changed yet. Asserting the
+      // absence of "New section" here would pass on any build at all, because
+      // it is absent out of edit mode whatever the load has done.
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).toBeNull();
       expect(querySections(element)).toHaveLength(0);
 
       settle([
@@ -503,9 +643,12 @@ describe("c-salesforce-navigator", () => {
       await flush();
 
       expect(sectionNames(element)).toEqual(["Daily work"]);
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      await enterEditMode(element);
       expect(
-        element.shadowRoot.querySelector("lightning-button")
+        element.shadowRoot.querySelector(NEW_SECTION_BUTTON)
       ).not.toBeNull();
+      await cancelEdits(element);
 
       // And the fetch landing is not itself a change.
       await settleAutosave();
@@ -531,10 +674,36 @@ describe("c-salesforce-navigator", () => {
       // The seeded Navigator is still there to look at and navigate from.
       expect(queryItems(element)).toHaveLength(2);
       // But nothing may be written: a create here would displace the layout
-      // we failed to read.
-      expect(element.shadowRoot.querySelector("lightning-button")).toBeNull();
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      // we failed to read — so there is no way into the mode that could write.
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).toBeNull();
+      // Stronger than attempting a change and checking nothing saved: there
+      // is no control left to attempt one with at all, section-level or
+      // otherwise.
+      expect(
+        querySections(element)[0].shadowRoot.querySelector(
+          "lightning-button-menu"
+        )
+      ).toBeNull();
+      expect(
+        querySections(element)[0].shadowRoot.querySelector(
+          ".rstk-nav-section__add"
+        )
+      ).toBeNull();
+      // The item's own overflow menu is gated the same way as of slice 04,
+      // and for the same reason: `canEdit` false means no way into the mode
+      // that could write, at every level of the canvas.
+      expect(
+        querySections(element)[0]
+          .shadowRoot.querySelector("c-navigator-item")
+          .shadowRoot.querySelector("lightning-button-menu")
+      ).toBeNull();
+      // Stronger still: actually attempt the change the item's own gated menu
+      // would have made, so `scheduleSave`'s own `hasLayoutLoadError` early
+      // return stays pinned by a real mutation rather than only by the
+      // controls being absent. `renameFirstItem` dispatches the event
+      // directly on the item, so it reaches this guard whether or not edit
+      // mode is reachable at all.
+      await renameFirstItem(element, 0, "Renamed");
       await settleAutosave();
 
       expect(createLayout).not.toHaveBeenCalled();
@@ -562,14 +731,14 @@ describe("c-salesforce-navigator", () => {
       });
       await flush();
 
-      expect(element.shadowRoot.querySelector("lightning-button")).toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).toBeNull();
 
       getNavItems.emit({ navItems: secondPage, nextPageUrl: null });
       await flush();
 
-      element.shadowRoot.querySelector("lightning-button").click();
-      await flush();
-      await settleAutosave();
+      await enterEditMode(element);
+      await addSection(element);
+      await saveEdits(element);
 
       // Every reachable tab, not just the pages that had arrived.
       expect(lastSavedLayout(createLayout).sections[0].items).toHaveLength(
@@ -644,8 +813,34 @@ describe("c-salesforce-navigator", () => {
 
       // And no write, because every write this component makes passes
       // `makeActive: true` and would deactivate the row it cannot read.
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      // Stronger than attempting a change and checking nothing saved: there
+      // is no control left to attempt one with at all, section-level or
+      // otherwise.
+      expect(
+        querySections(element)[0].shadowRoot.querySelector(
+          "lightning-button-menu"
+        )
+      ).toBeNull();
+      expect(
+        querySections(element)[0].shadowRoot.querySelector(
+          ".rstk-nav-section__add"
+        )
+      ).toBeNull();
+      // The item's own overflow menu is gated the same way as of slice 04,
+      // and for the same reason: `canEdit` false means no way into the mode
+      // that could write, at every level of the canvas.
+      expect(
+        querySections(element)[0]
+          .shadowRoot.querySelector("c-navigator-item")
+          .shadowRoot.querySelector("lightning-button-menu")
+      ).toBeNull();
+      // Stronger still: actually attempt the change the item's own gated menu
+      // would have made, so `scheduleSave`'s own `hasLayoutLoadError` early
+      // return stays pinned by a real mutation rather than only by the
+      // controls being absent. `renameFirstItem` dispatches the event
+      // directly on the item, so it reaches this guard whether or not edit
+      // mode is reachable at all.
+      await renameFirstItem(element, 0, "Renamed");
       await settleAutosave();
 
       expect(createLayout).not.toHaveBeenCalled();
@@ -681,8 +876,8 @@ describe("c-salesforce-navigator", () => {
     it("creates a new section on request, alongside the seeded one", async () => {
       const element = await navigatorWithTabs();
 
-      element.shadowRoot.querySelector("lightning-button").click();
-      await flush();
+      await enterEditMode(element);
+      await addSection(element);
 
       const names = querySections(element).map(
         (section) => section.shadowRoot.querySelector("h2").textContent
@@ -693,6 +888,7 @@ describe("c-salesforce-navigator", () => {
     it("renames the section the user renamed, and saves the new name", async () => {
       const element = await navigatorWithTabs();
 
+      await enterEditMode(element);
       selectSectionMenuItem(element, 0, "rename");
       await flush();
       const section = querySections(element)[0];
@@ -707,14 +903,14 @@ describe("c-salesforce-navigator", () => {
         querySections(element)[0].shadowRoot.querySelector("h2").textContent
       ).toBe("Daily work");
 
-      await settleAutosave();
+      await saveEdits(element);
       expect(lastSavedLayout(createLayout).sections[0].name).toBe("Daily work");
     });
 
     it("deletes the section the user deleted, and saves the layout without it", async () => {
       const element = await navigatorWithTabs();
-      element.shadowRoot.querySelector("lightning-button").click();
-      await flush();
+      await enterEditMode(element);
+      await addSection(element);
       expect(querySections(element)).toHaveLength(2);
 
       selectSectionMenuItem(element, 0, "delete");
@@ -725,7 +921,7 @@ describe("c-salesforce-navigator", () => {
       );
       expect(names).toEqual(["New section"]);
 
-      await settleAutosave();
+      await saveEdits(element);
       expect(
         lastSavedLayout(createLayout).sections.map((section) => section.name)
       ).toEqual(["New section"]);
@@ -734,8 +930,33 @@ describe("c-salesforce-navigator", () => {
     it.each([1, 2, 3, 4, 5, 6])(
       "renders the section in %i columns once the user chooses that count, and stores it",
       async (columns) => {
+        // A no-op edit-mode Save writes nothing at all (see "writes no
+        // layout record for a user who opened edit mode, changed nothing and
+        // pressed Save" below), so the layout has to start at a column count
+        // other than the one being chosen this iteration, or the pass
+        // landing on the seeded default of 3 would have nothing to save.
+        const startColumns =
+          columns === MIN_COLUMNS ? MAX_COLUMNS : MIN_COLUMNS;
+        getLayouts.mockResolvedValue([
+          {
+            layoutId: EXISTING_LAYOUT_ID,
+            name: "My Navigator",
+            isActive: true,
+            layoutJson: JSON.stringify({
+              schemaVersion: SCHEMA_VERSION,
+              sections: [
+                {
+                  name: "All Items",
+                  columns: startColumns,
+                  items: [{ id: "Account" }, { id: "Contact" }]
+                }
+              ]
+            })
+          }
+        ]);
         const element = await navigatorWithTabs();
 
+        await enterEditMode(element);
         selectSectionMenuItem(element, 0, `columns-${columns}`);
         await flush();
 
@@ -764,8 +985,11 @@ describe("c-salesforce-navigator", () => {
           .filter((name) => /^rstk-nav-section_span-\d+$/.test(name));
         expect(appliedSpans).toEqual([`rstk-nav-section_span-${columns}`]);
 
-        await settleAutosave();
-        expect(lastSavedLayout(createLayout).sections[0].columns).toBe(columns);
+        await saveEdits(element);
+        // `updateLayout`, not `createLayout`: the fixture now starts from an
+        // existing stored layout so every iteration has something to change
+        // away from — see the comment above.
+        expect(lastSavedLayout(updateLayout).sections[0].columns).toBe(columns);
       }
     );
   });
@@ -1102,8 +1326,7 @@ describe("c-salesforce-navigator", () => {
     it("saves nothing at all until the debounce elapses", async () => {
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed once");
       jest.advanceTimersByTime(AUTOSAVE_DELAY_MS - 1);
       await flush();
 
@@ -1116,18 +1339,20 @@ describe("c-salesforce-navigator", () => {
       // Five changes 100ms apart — well inside one debounce window, and
       // written out rather than looped because each has to be awaited and
       // `no-await-in-loop` is on.
-      await burstChange(element, 2);
-      await burstChange(element, 3);
-      await burstChange(element, 4);
-      await burstChange(element, 5);
-      await burstChange(element, 6);
+      await burstItemRename(element, "Renamed 2");
+      await burstItemRename(element, "Renamed 3");
+      await burstItemRename(element, "Renamed 4");
+      await burstItemRename(element, "Renamed 5");
+      await burstItemRename(element, "Renamed 6");
       await settleAutosave();
 
       expect(createLayout).toHaveBeenCalledTimes(1);
       expect(updateLayout).not.toHaveBeenCalled();
       // One save, and it is the *last* change — a debounce that fired on the
-      // leading edge would save 2 columns and lose the other four changes.
-      expect(lastSavedLayout(createLayout).sections[0].columns).toBe(6);
+      // leading edge would save "Renamed 2" and lose the other four changes.
+      expect(lastSavedLayout(createLayout).sections[0].items[0].rename).toBe(
+        "Renamed 6"
+      );
     });
 
     it("updates the record the first change created rather than creating a second one", async () => {
@@ -1137,19 +1362,19 @@ describe("c-salesforce-navigator", () => {
       // overwriting whichever layout the server picked.
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-2");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed 2");
       await settleAutosave();
       expect(createLayout).toHaveBeenCalledTimes(1);
 
-      selectSectionMenuItem(element, 0, "columns-3");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed 3");
       await settleAutosave();
 
       expect(createLayout).toHaveBeenCalledTimes(1);
       expect(updateLayout).toHaveBeenCalledTimes(1);
       expect(updateLayout.mock.calls[0][0].layoutId).toBe(CREATED_LAYOUT_ID);
-      expect(lastSavedLayout(updateLayout).sections[0].columns).toBe(3);
+      expect(lastSavedLayout(updateLayout).sections[0].items[0].rename).toBe(
+        "Renamed 3"
+      );
     });
 
     it("updates the layout it loaded, by that layout's own id, and never creates", async () => {
@@ -1160,14 +1385,15 @@ describe("c-salesforce-navigator", () => {
           isActive: true,
           layoutJson: JSON.stringify({
             schemaVersion: SCHEMA_VERSION,
-            sections: [{ name: "Daily work", columns: 2, items: [] }]
+            sections: [
+              { name: "Daily work", columns: 2, items: [{ id: "Account" }] }
+            ]
           })
         }
       ]);
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed");
       await settleAutosave();
 
       expect(createLayout).not.toHaveBeenCalled();
@@ -1178,11 +1404,9 @@ describe("c-salesforce-navigator", () => {
     it("never asks the controller to update a null id", async () => {
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-2");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed 2");
       await settleAutosave();
-      selectSectionMenuItem(element, 0, "columns-3");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed 3");
       await settleAutosave();
 
       for (const call of updateLayout.mock.calls) {
@@ -1193,9 +1417,9 @@ describe("c-salesforce-navigator", () => {
     it("saves the seeded arrangement along with the first change, so seeding is not lost", async () => {
       const element = await navigatorWithTabs();
 
-      element.shadowRoot.querySelector("lightning-button").click();
-      await flush();
-      await settleAutosave();
+      await enterEditMode(element);
+      await addSection(element);
+      await saveEdits(element);
 
       const saved = lastSavedLayout(createLayout);
       expect(saved.schemaVersion).toBe(SCHEMA_VERSION);
@@ -1212,13 +1436,14 @@ describe("c-salesforce-navigator", () => {
     it("flushes a pending save when the component goes away, rather than dropping it", async () => {
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed");
       document.body.removeChild(element);
       await flush();
 
       expect(createLayout).toHaveBeenCalledTimes(1);
-      expect(lastSavedLayout(createLayout).sections[0].columns).toBe(4);
+      expect(lastSavedLayout(createLayout).sections[0].items[0].rename).toBe(
+        "Renamed"
+      );
     });
 
     it("keeps the user's change on screen, and its id, when the save is refused", async () => {
@@ -1229,12 +1454,12 @@ describe("c-salesforce-navigator", () => {
       });
       const element = await navigatorWithTabs();
 
-      selectSectionMenuItem(element, 0, "columns-4");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed");
       await settleAutosave();
 
-      const grid = querySections(element)[0].shadowRoot.querySelector("ul");
-      expect(grid.className).toContain("cols-4");
+      const item =
+        querySections(element)[0].shadowRoot.querySelector("c-navigator-item");
+      expect(item.label).toBe("Renamed");
       expect(
         element.shadowRoot.querySelector('[role="alert"]').textContent
       ).toContain("does not belong to you");
@@ -1249,10 +1474,17 @@ describe("c-salesforce-navigator", () => {
     const THREE = [ACCOUNT_ITEM, ACTION_HUB_ITEM, CONTACT_ITEM];
     const STORED_IDS = THREE.map((item) => item.developerName);
 
+    // Enters edit mode as part of mounting: pointer dragging and the
+    // keyboard grab-move-drop-cancel path are both gated behind it as of
+    // slice 05, and every test in this describe drives one gesture or the
+    // other. `enterEditMode` also arms `saveEdits` as the one route left to
+    // persist a change made here — `scheduleSave`'s own debounce is
+    // suppressed while editing, per `## Design`.
     async function navigatorWithThree() {
       const element = createNavigator();
       getNavItems.emit({ navItems: THREE });
       await flush();
+      await enterEditMode(element);
       return element;
     }
 
@@ -1340,6 +1572,34 @@ describe("c-salesforce-navigator", () => {
       return navigatorWithThree();
     }
 
+    it("does not grab an item on Space out of edit mode, and writes nothing", async () => {
+      // The composed counterpart of navigatorItem's own unit test: mounted
+      // without `enterEditMode`, so this is the state every user starts in.
+      const element = createNavigator();
+      getNavItems.emit({ navItems: THREE });
+      await flush();
+
+      press(anchorAt(element, 0), " ");
+      await flush();
+
+      expect(queryItems(element).map((item) => item.grabbed)).toEqual([
+        false,
+        false,
+        false
+      ]);
+      // The section axis's counterpart of this test asserts the live region
+      // on both halves of criterion 2 — no grab and no announcement. This
+      // one only checked the flags: a gate that suppressed the grab but
+      // still announced would have passed it.
+      expect(
+        querySections(element)[0].shadowRoot.querySelector("[aria-live]")
+          .textContent
+      ).toBe("");
+      await settleAutosave();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
     it("moves a dragged item to its new position and writes that order", async () => {
       const element = await navigatorWithThree();
 
@@ -1351,7 +1611,7 @@ describe("c-salesforce-navigator", () => {
         "Accounts"
       ]);
 
-      await settleAutosave();
+      await saveEdits(element);
       expect(savedItemIds(createLayout)).toEqual([
         "standard-ActionHub",
         "Contact",
@@ -1369,13 +1629,13 @@ describe("c-salesforce-navigator", () => {
         // the model's own `reorder`.
         const dragged = await freshNavigator();
         await dragItem(dragged, from, to);
-        await settleAutosave();
+        await saveEdits(dragged);
         const byMouse = savedItemIds(createLayout);
         document.body.removeChild(dragged);
 
         const typed = await freshNavigator();
         await walkItem(typed, from, to - from);
-        await settleAutosave();
+        await saveEdits(typed);
         const byKeyboard = savedItemIds(createLayout);
         document.body.removeChild(typed);
 
@@ -1392,7 +1652,7 @@ describe("c-salesforce-navigator", () => {
       // a reload is, since nothing else survives.
       const element = await navigatorWithThree();
       await dragItem(element, 2, 0);
-      await settleAutosave();
+      await saveEdits(element);
       const written = createLayout.mock.calls[0][0].layoutJson;
       document.body.removeChild(element);
       jest.clearAllMocks();
@@ -1424,7 +1684,7 @@ describe("c-salesforce-navigator", () => {
       // that renders.
       const element = await navigatorWithThree();
       await walkItem(element, 2, -2);
-      await settleAutosave();
+      await saveEdits(element);
       const written = createLayout.mock.calls[0][0].layoutJson;
       document.body.removeChild(element);
       jest.clearAllMocks();
@@ -1470,8 +1730,16 @@ describe("c-salesforce-navigator", () => {
         "Action Plans",
         "Contacts"
       ]);
-      await settleAutosave();
-      expect(savedItemIds(createLayout)).toEqual(STORED_IDS);
+      // A cancelled drag that lands back on the order the session started
+      // with is byte-identical to the entry snapshot, so Save — explicit
+      // now, rather than a debounce that would have fired regardless — has
+      // nothing to write. Before explicit save this asserted that the
+      // eventual autosave persisted the reverted order; the equivalent claim
+      // now is the stronger one available under the new model: a cancelled
+      // drag leaves no write behind at all, not even a redundant one.
+      await saveEdits(element);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
     });
 
     it("keeps a dropped move, so a second Space is not a cancel", async () => {
@@ -1486,7 +1754,7 @@ describe("c-salesforce-navigator", () => {
         "Contacts",
         "Accounts"
       ]);
-      await settleAutosave();
+      await saveEdits(element);
       expect(savedItemIds(createLayout)).toEqual([
         "standard-ActionHub",
         "Contact",
@@ -1541,11 +1809,18 @@ describe("c-salesforce-navigator", () => {
         })
       };
 
+      // Enters edit mode as part of mounting: section pointer dragging and
+      // the section keyboard grab-move-drop-cancel path are both gated
+      // behind it as of slice 05, and every test below drives the card as a
+      // draggable or keyboard-grabbable thing. `saveEdits`, not
+      // `settleAutosave`, is therefore the route these tests use to persist
+      // a change — `scheduleSave`'s debounce is suppressed while editing.
       async function navigatorWithSections() {
         getLayouts.mockResolvedValue([TWO_SECTIONS]);
         const element = createNavigator();
         getNavItems.emit({ navItems: THREE });
         await flush();
+        await enterEditMode(element);
         return element;
       }
 
@@ -1561,6 +1836,28 @@ describe("c-salesforce-navigator", () => {
         );
       }
 
+      it("does not grab a section card on Space out of edit mode, and writes nothing", async () => {
+        // Mounted without `enterEditMode`, so this is the state every user
+        // starts in — the composed counterpart of navigatorSection's own
+        // unit test.
+        getLayouts.mockResolvedValue([TWO_SECTIONS]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
+
+        cardAt(element, 0).dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+        await flush();
+
+        expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
+        expect(
+          element.shadowRoot.querySelector("[aria-live]").textContent
+        ).toBe("");
+        await settleAutosave();
+        expect(updateLayout).not.toHaveBeenCalled();
+      });
+
       it("reorders the sections when a section card is dragged onto another", async () => {
         const element = await navigatorWithSections();
 
@@ -1573,7 +1870,7 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["Third", "First", "Second"]);
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedSectionNames()).toEqual(["Third", "First", "Second"]);
       });
 
@@ -1586,7 +1883,7 @@ describe("c-salesforce-navigator", () => {
           new CustomEvent("drop", { bubbles: true, cancelable: true })
         );
         await flush();
-        await settleAutosave();
+        await saveEdits(element);
         const written = updateLayout.mock.calls[0][0].layoutJson;
         document.body.removeChild(element);
         jest.clearAllMocks();
@@ -1619,7 +1916,7 @@ describe("c-salesforce-navigator", () => {
           new KeyboardEvent("keydown", { key: " ", cancelable: true })
         );
         await flush();
-        await settleAutosave();
+        await saveEdits(element);
 
         const written = updateLayout.mock.calls[0][0].layoutJson;
         document.body.removeChild(element);
@@ -1667,8 +1964,14 @@ describe("c-salesforce-navigator", () => {
         expect(
           element.shadowRoot.querySelector("[aria-live]").textContent
         ).toMatch(/cancelled/i);
-        await settleAutosave();
-        expect(savedSectionNames()).toEqual(["First", "Second", "Third"]);
+        // A cancelled section drag that lands back on the entry order is
+        // byte-identical to the edit-session snapshot, so Save has nothing
+        // to write — the stronger, and now available, form of the claim
+        // this asserted before explicit save: that a cancelled drag does not
+        // leave a stale write behind, up to and including a redundant one.
+        await saveEdits(element);
+        expect(createLayout).not.toHaveBeenCalled();
+        expect(updateLayout).not.toHaveBeenCalled();
       });
 
       it("reorders the sections when a dragged card is dropped on another card's item", async () => {
@@ -1693,7 +1996,7 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["Third", "First", "Second"]);
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedSectionNames()).toEqual(["Third", "First", "Second"]);
       });
 
@@ -1720,16 +2023,32 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
-        await settleAutosave();
+        // Pressing Save is what makes this discriminating rather than
+        // vacuous: `scheduleSave`'s debounce is suppressed while editing
+        // regardless of what the abandoned drag left behind, so a
+        // `settleAutosave` here would pass whether or not the abandon logic
+        // actually cleared the stale drag state.
+        await saveEdits(element);
         expect(updateLayout).not.toHaveBeenCalled();
+        expect(createLayout).not.toHaveBeenCalled();
       });
 
       it("writes nothing when a section card is dropped back on itself", async () => {
-        // The order is the same either way, so the order alone proves
-        // nothing: what the short-circuit prevents is a write — a save of a
-        // layout identical to the stored one, on a gesture that changed
-        // nothing.
-        const element = await navigatorWithSections();
+        // Mounted out of edit mode, deliberately not through
+        // `navigatorWithSections`. In edit mode, `saveEdits`'s
+        // `hasUnsavedCanvasChanges` guard finds a byte-identical canvas and
+        // swallows the write on its own, regardless of whether the
+        // short-circuit below fired — the same shape trap 273 names. Out of
+        // edit mode the debounce isn't suppressed and carries no content
+        // check of its own, so `settleAutosave` is what actually pins the
+        // short-circuit: delete `if (from === to) { return; }` from
+        // `handleSectionDrop` and this reddens, because the redundant
+        // `applyLayout` it would otherwise call arms the debounce on a
+        // layout identical to the stored one.
+        getLayouts.mockResolvedValue([TWO_SECTIONS]);
+        const element = createNavigator();
+        getNavItems.emit({ navItems: THREE });
+        await flush();
 
         cardAt(element, 1).dispatchEvent(
           new CustomEvent("dragstart", { bubbles: true, cancelable: true })
@@ -1742,6 +2061,7 @@ describe("c-salesforce-navigator", () => {
         expect(sectionNames(element)).toEqual(["First", "Second", "Third"]);
         await settleAutosave();
         expect(updateLayout).not.toHaveBeenCalled();
+        expect(createLayout).not.toHaveBeenCalled();
       });
 
       it("re-announces a repeated arrow press on a card rather than writing nothing", async () => {
@@ -1883,7 +2203,7 @@ describe("c-salesforce-navigator", () => {
         await flush();
 
         expect(sectionNames(element)).toEqual(["Second", "First", "Third"]);
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedSectionNames()).toEqual(["Second", "First", "Third"]);
       });
 
@@ -2059,6 +2379,7 @@ describe("c-salesforce-navigator", () => {
 
       it("moves the item the user picked, not the one sharing its stored position", async () => {
         const element = await navigatorWithAWithdrawnTab();
+        await enterEditMode(element);
         expect(itemLabelsBySection(element)).toEqual([
           ["Action Plans", "Contacts"],
           []
@@ -2072,7 +2393,7 @@ describe("c-salesforce-navigator", () => {
           ["Action Plans"]
         ]);
 
-        await settleAutosave();
+        await saveEdits(element);
         // `Account` is still first in `Selling`, so restoring access still
         // restores it in its original position.
         expect(savedIds(updateLayout, 0)).toEqual(["Account", "Contact"]);
@@ -2080,7 +2401,15 @@ describe("c-salesforce-navigator", () => {
       });
 
       it("drags the item the user picked up, not the one sharing its stored position", async () => {
+        // Mounted in edit mode as of this spec's third fix pass: the drop
+        // lands on the destination card's own `<article>`
+        // (`handleCardDrop`), which is now gated on `editing` — the fourth
+        // of the family's four `dragover`/`drop` handlers to carry that
+        // guard. This test's own subject, resolving the dragged item by
+        // identity rather than by its rendered position, is an in-edit-mode
+        // concern regardless.
         const element = await navigatorWithAWithdrawnTab();
+        await enterEditMode(element);
         const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
 
         dragged.dispatchEvent(dragEvent("dragstart"));
@@ -2100,6 +2429,7 @@ describe("c-salesforce-navigator", () => {
         // same rendered index into the same stored layout. Fixed at the same
         // seam, so it is pinned here.
         const element = await navigatorWithAWithdrawnTab();
+        await enterEditMode(element);
 
         press(itemsIn(element, 0)[0].shadowRoot.querySelector("a"), " ");
         await flush();
@@ -2113,7 +2443,7 @@ describe("c-salesforce-navigator", () => {
           []
         ]);
 
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedIds(updateLayout, 0)).toEqual([
           "Account",
           "Contact",
@@ -2127,6 +2457,7 @@ describe("c-salesforce-navigator", () => {
         // section's vanish-detection sees the item leave its list and cannot,
         // on its own, tell "moved away" from "withdrawn".
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         press(itemsIn(element, 0)[1].shadowRoot.querySelector("a"), " ");
         await flush();
@@ -2177,6 +2508,7 @@ describe("c-salesforce-navigator", () => {
         const element = createNavigator();
         getNavItems.emit({ navItems: THREE });
         await flush();
+        await enterEditMode(element);
 
         // Hold the last of the three.
         press(itemsIn(element, 0)[2].shadowRoot.querySelector("a"), " ");
@@ -2236,6 +2568,7 @@ describe("c-salesforce-navigator", () => {
         const element = createNavigator();
         getNavItems.emit({ navItems: THREE });
         await flush();
+        await enterEditMode(element);
 
         await chooseDestination(element, 0, 0, "Support");
 
@@ -2244,12 +2577,13 @@ describe("c-salesforce-navigator", () => {
           ["Contacts", "Accounts"]
         ]);
 
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedIds(updateLayout, 1)).toEqual(["Contact", "Account"]);
       });
 
       it("offers every other section on an item's menu, and never the item's own", async () => {
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         expect(menuEntries(element, 0, 0).map((entry) => entry.label)).toEqual([
           "Support"
@@ -2263,6 +2597,7 @@ describe("c-salesforce-navigator", () => {
         // The whole cross-section route without a mouse anywhere in it: a
         // menu, chosen by its label, on an item that is a plain link.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         await chooseDestination(element, 0, 1, "Support");
 
@@ -2271,7 +2606,7 @@ describe("c-salesforce-navigator", () => {
           ["Contacts", "Action Plans"]
         ]);
 
-        await settleAutosave();
+        await saveEdits(element);
         expect(savedIds(updateLayout, 0)).toEqual(["Account"]);
         expect(savedIds(updateLayout, 1)).toEqual([
           "Contact",
@@ -2285,6 +2620,7 @@ describe("c-salesforce-navigator", () => {
         // string: a component that reported a constant index would be
         // invisible without a move that starts somewhere else.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         await chooseDestination(element, 1, 0, "Selling");
 
@@ -2298,8 +2634,9 @@ describe("c-salesforce-navigator", () => {
         // A remount on the payload that was actually written is what a reload
         // is, since nothing else survives one.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
         await chooseDestination(element, 0, 1, "Support");
-        await settleAutosave();
+        await saveEdits(element);
 
         const written = updateLayout.mock.calls[0][0].layoutJson;
         document.body.removeChild(element);
@@ -2320,6 +2657,7 @@ describe("c-salesforce-navigator", () => {
 
       it("announces the move to a screen reader, naming the section it went to", async () => {
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         await chooseDestination(element, 0, 1, "Support");
 
@@ -2333,6 +2671,7 @@ describe("c-salesforce-navigator", () => {
         // The rename is the user's own wording and has nothing to do with
         // where the item sits, so crossing a boundary must not drop it.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
 
         await chooseDestination(element, 0, 0, "Support");
 
@@ -2340,7 +2679,7 @@ describe("c-salesforce-navigator", () => {
           ["Action Plans"],
           ["Contacts", "Clients"]
         ]);
-        await settleAutosave();
+        await saveEdits(element);
         expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([
           { id: "Contact" },
           { id: "Account", rename: "Clients" }
@@ -2356,6 +2695,7 @@ describe("c-salesforce-navigator", () => {
         const element = createNavigator();
         getNavItems.emit({ navItems: THREE });
         await flush();
+        await enterEditMode(element);
 
         expect(sectionNames(element)).toEqual(["All Items"]);
         queryItems(element).forEach((item) => {
@@ -2371,7 +2711,13 @@ describe("c-salesforce-navigator", () => {
       });
 
       it("drops the item at the position it was dropped at, not at the end", async () => {
+        // In edit mode, unlike its "on the card rather than on an item"
+        // sibling below: the landing spot here is another item's own anchor,
+        // and as of this slice's fix pass that anchor's `dragover`/`drop` are
+        // gated on `editing` the same way the card's own drop target is, so
+        // out of edit mode this drop no longer reaches anything to position.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
         const dragged = itemsIn(element, 0)[1].shadowRoot.querySelector("a");
         const landing = itemsIn(element, 1)[0].shadowRoot.querySelector("a");
 
@@ -2387,7 +2733,13 @@ describe("c-salesforce-navigator", () => {
       });
 
       it("puts the item at the end when it is dropped on the card rather than on an item", async () => {
+        // Mounted in edit mode as of this spec's third fix pass:
+        // `handleCardDrop` is now gated on `editing`, matching the item's
+        // own `handleDrop` and `handleDragOver`, and the card's own
+        // `handleCardDragOver` — the fourth of the family's four
+        // `dragover`/`drop` handlers to carry that guard.
         const element = await navigatorWithTwoSections();
+        await enterEditMode(element);
         const dragged = itemsIn(element, 0)[0].shadowRoot.querySelector("a");
 
         dragged.dispatchEvent(dragEvent("dragstart"));
@@ -2400,6 +2752,78 @@ describe("c-salesforce-navigator", () => {
           ["Action Plans"],
           ["Contacts", "Clients"]
         ]);
+      });
+
+      it("does not move an item across sections when dropped on another item out of edit mode, and writes nothing", async () => {
+        // Finding 1 of the third fix pass, pinned at the composed level
+        // rather than only on an isolated `c-navigator-item`. The prior
+        // pass's own composed-level probe found that gating only the item's
+        // `handleDrop` (and leaving `handleCardDrop` ungated) closed nothing
+        // here: with `handleDrop` returning before its `stopPropagation()`,
+        // a drop on this anchor still bubbled to the section's own
+        // `<article>` and was read there instead, at the end position
+        // rather than the dropped-on one, but still a write. Both gaps are
+        // closed now — `stopPropagation()` fires unconditionally in
+        // `handleDrop`, and `handleCardDrop` is gated the same way as the
+        // other three `dragover`/`drop` handlers in the family — so this
+        // gesture, run entirely out of edit mode, must move nothing and
+        // write nothing.
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[1].shadowRoot.querySelector("a");
+        const landing = itemsIn(element, 1)[0].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        landing.dispatchEvent(dragEvent("dragover"));
+        landing.dispatchEvent(dragEvent("drop"));
+        await flush();
+        await settleAutosave();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients", "Action Plans"],
+          ["Contacts"]
+        ]);
+        expect(updateLayout).not.toHaveBeenCalled();
+        expect(createLayout).not.toHaveBeenCalled();
+      });
+
+      /**
+       * Critique finding on slice 05, third fix pass. The composed pin above
+       * only reddens when *both* `handleDrop`'s `stopPropagation()` reorder
+       * and `handleCardDrop`'s own `editing` guard are reverted — a drop
+       * landing on another *item*'s anchor is caught by either protection
+       * alone, so that gesture cannot isolate the card's own guard.
+       * Measured, not assumed: reverting `handleCardDrop`'s guard alone
+       * leaves the pin above green (the item's `stopPropagation()` still
+       * keeps the event off the card), and reverting only the
+       * `stopPropagation()` reorder also leaves it green (the card's own
+       * guard still catches the bubbled event). A drop landing on the
+       * destination section's own `<article>` instead of on one of its
+       * items never passes through an item's `handleDrop` at all, so
+       * `handleCardDrop`'s guard is the *sole* protection on that route —
+       * and slice 05's own fix pass moved both composed tests that used to
+       * drive it ("puts the item at the end when it is dropped on the card
+       * rather than on an item", "drags the item the user picked up, not
+       * the one sharing its stored position") behind `enterEditMode`,
+       * leaving this route with no write-side assertion out of edit mode at
+       * all. This closes that gap.
+       */
+      it("does not move an item across sections when dropped on the destination section's own card out of edit mode, and writes nothing", async () => {
+        const element = await navigatorWithTwoSections();
+        const dragged = itemsIn(element, 0)[1].shadowRoot.querySelector("a");
+
+        dragged.dispatchEvent(dragEvent("dragstart"));
+        querySections(element)[1]
+          .shadowRoot.querySelector("article")
+          .dispatchEvent(dragEvent("drop"));
+        await flush();
+        await settleAutosave();
+
+        expect(itemLabelsBySection(element)).toEqual([
+          ["Clients", "Action Plans"],
+          ["Contacts"]
+        ]);
+        expect(updateLayout).not.toHaveBeenCalled();
+        expect(createLayout).not.toHaveBeenCalled();
       });
 
       it("writes nothing when an item is dropped back into the section it came from", async () => {
@@ -2502,11 +2926,31 @@ describe("c-salesforce-navigator", () => {
       }
     ]);
 
+    // Enters edit mode as part of mounting: an item's own rename is gated
+    // behind it as of slice 04, and most tests in this describe drive that
+    // menu at some point — this is the behavioural suite for the rename
+    // itself (wording, payload shape, reload, clearing), not the debounce
+    // mechanism, so there is no reason for most of them to stay out of edit
+    // mode. **Four of the fifteen tests here never touch the menu at all,
+    // not three.** The navigation/rename-target test ("shows the user's own
+    // wording and still navigates to exactly the same tab") and the
+    // no-other-layout test ("leaves the org's tab label alone for anyone
+    // without this layout") are unaffected by `isEditing` either way —
+    // navigation and the payload each item renders do not care what mode
+    // mounted them — so both stay on this shared helper rather than get
+    // their own mount. The other two mount inline instead, deliberately out
+    // of edit mode, because each one's own subject is `scheduleSave`'s
+    // behaviour, which this helper's edit-mode entry would make the
+    // assertion vacuous for (see each test's own comment): the empty-box
+    // case — "creates no layout row when an empty box is committed on an
+    // item with no rename" — and the redelivery case — "picks up a change
+    // to the org's own tab label, with no write at all".
     async function navigatorOn(layout, navItems = THREE) {
       getLayouts.mockResolvedValue(layout ? [layout] : []);
       const element = createNavigator();
       getNavItems.emit({ navItems });
       await flush();
+      await enterEditMode(element);
       return element;
     }
 
@@ -2619,7 +3063,7 @@ describe("c-salesforce-navigator", () => {
       const element = await navigatorOn(RENAMED);
 
       await renameTo(element, 0, 1, "People");
-      await settleAutosave();
+      await saveEdits(element);
 
       expect(savedItems(updateLayout)).toEqual([
         { id: "Account", rename: "Clients" },
@@ -2640,7 +3084,7 @@ describe("c-salesforce-navigator", () => {
       // owner-filtered, so a fresh login reads back this same row.
       const element = await navigatorOn(RENAMED);
       await renameTo(element, 0, 1, "People");
-      await settleAutosave();
+      await saveEdits(element);
 
       const written = updateLayout.mock.calls[0][0].layoutJson;
       document.body.removeChild(element);
@@ -2660,7 +3104,7 @@ describe("c-salesforce-navigator", () => {
       await renameTo(element, 0, 0, "");
 
       expect(renderedLabel(element, 0, 0)).toBe("Accounts");
-      await settleAutosave();
+      await saveEdits(element);
       // Cleared is the key's absence, not an empty string sitting in the
       // payload — asserted as an exact key set, because `toEqual` alone would
       // not tell `{id}` from `{id, rename: ""}` if the value were undefined.
@@ -2671,7 +3115,7 @@ describe("c-salesforce-navigator", () => {
     it("keeps the cleared item under its Salesforce label after a reload", async () => {
       const element = await navigatorOn(RENAMED);
       await renameTo(element, 0, 0, "");
-      await settleAutosave();
+      await saveEdits(element);
 
       const written = updateLayout.mock.calls[0][0].layoutJson;
       document.body.removeChild(element);
@@ -2692,9 +3136,28 @@ describe("c-salesforce-navigator", () => {
       // that stores nothing must not be what creates a layout row for a user
       // who has only ever looked, which slice 03 has a criterion against. Nor
       // is there anything to announce: "Accounts renamed to Accounts."
-      const element = await navigatorOn(undefined, [ACCOUNT_ITEM]);
+      //
+      // Runs out of edit mode, unlike most of this describe — the
+      // redelivery test below is the other exception, mounted inline for
+      // the identical reason: the guard under test sits upstream of
+      // `scheduleSave`, comparing the
+      // canvas before and after. In edit mode, Save's own "nothing to write"
+      // check (`hasUnsavedCanvasChanges`) would report the same "nothing
+      // written" outcome whether or not that upstream guard exists — a no-op
+      // rename leaves the serialised layout identical either way, so Save
+      // would refuse to write regardless — which is exactly the vacuous-pass
+      // shape trap 273 warns about. Dispatching `itemrename` directly on the
+      // item, the way `renameFirstItem` does, is what keeps this test out of
+      // edit mode without going through the now-gated menu.
+      getLayouts.mockResolvedValue([]);
+      const element = createNavigator();
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM] });
+      await flush();
 
-      await renameTo(element, 0, 0, "");
+      itemAt(element, 0, 0).dispatchEvent(
+        new CustomEvent("itemrename", { detail: { index: 0, rename: "" } })
+      );
+      await flush();
       await settleAutosave();
 
       expect(createLayout).not.toHaveBeenCalled();
@@ -2719,7 +3182,7 @@ describe("c-salesforce-navigator", () => {
       await renameTo(element, 0, 0, "Accounts");
 
       expect(renderedLabel(element, 0, 0)).toBe("Accounts");
-      await settleAutosave();
+      await saveEdits(element);
       expect(savedItems(updateLayout)[0]).toEqual({ id: "Account" });
       expect(Object.keys(savedItems(updateLayout)[0])).toEqual(["id"]);
     });
@@ -2727,7 +3190,20 @@ describe("c-salesforce-navigator", () => {
     it("picks up a change to the org's own tab label, with no write at all", async () => {
       // The payload stores no labels, so this costs nothing: the item is
       // resolved against the live tab source on every render.
-      const element = await navigatorOn(RENAMED);
+      //
+      // Stays out of edit mode, unlike its neighbours in this describe, and
+      // is mounted inline rather than through this describe's `navigatorOn`
+      // (which enters edit mode as part of mounting): the hazard this test
+      // pins is a wire redelivery arming the debounce, which is a claim about
+      // `scheduleSave` itself, not about the now-gated menu. Asserting this
+      // in edit mode would be satisfied by `scheduleSave`'s own `isEditing`
+      // guard whether or not the redelivery guard exists — the same
+      // vacuous-pass shape trap 273 warns about — so the negative assertion
+      // has to be made where autosave is actually live.
+      getLayouts.mockResolvedValue([RENAMED]);
+      const element = createNavigator();
+      getNavItems.emit({ navItems: THREE });
+      await flush();
       expect(renderedLabel(element, 0, 1)).toBe("Contacts");
 
       getNavItems.emit({
@@ -2789,7 +3265,7 @@ describe("c-salesforce-navigator", () => {
         "Plans",
         "Contacts"
       ]);
-      await settleAutosave();
+      await saveEdits(element);
       expect(savedItems(updateLayout)).toEqual([
         { id: "Account" },
         { id: "standard-ActionHub", rename: "Plans" },
@@ -2810,7 +3286,7 @@ describe("c-salesforce-navigator", () => {
       await renameTo(element, 1, 0, "People");
 
       expect(itemLabelsBySection(element)).toEqual([["Accounts"], ["People"]]);
-      await settleAutosave();
+      await saveEdits(element);
       expect(savedItems(updateLayout, 0)).toEqual([{ id: "Account" }]);
       expect(savedItems(updateLayout, 1)).toEqual([
         { id: "Contact", rename: "People" }
@@ -2883,6 +3359,7 @@ describe("c-salesforce-navigator", () => {
         navItems: [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM]
       });
       await flush();
+      await enterEditMode(element);
 
       const section = querySections(element)[0];
       queryItems(element)[2]
@@ -2949,6 +3426,7 @@ describe("c-salesforce-navigator", () => {
         navItems: [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM]
       });
       await flush();
+      await enterEditMode(element);
 
       const section = querySections(element)[0];
       queryItems(element)[0]
@@ -2995,9 +3473,10 @@ describe("c-salesforce-navigator", () => {
       getNavItems.emit({ navItems: [ACCOUNT_ITEM, ACTION_HUB_ITEM] });
       await flush();
 
+      await enterEditMode(element);
       selectSectionMenuItem(element, 0, "columns-5");
       await flush();
-      await settleAutosave();
+      await saveEdits(element);
 
       expect(lastSavedLayout(updateLayout).sections[0].items).toEqual([
         { id: "Account" },
@@ -3052,6 +3531,15 @@ describe("c-salesforce-navigator", () => {
       { name: "Selling", columns: 3, items: [{ id: "Account" }] },
       { name: "Support", columns: 2, items: [{ id: "standard-ActionHub" }] }
     ]);
+
+    // Mounts only — it does not enter edit mode. Folding `enterEditMode` in
+    // here once shadowed `handleItemRemove`'s payload-equality guard: every
+    // "writes nothing" assertion in this describe was satisfied by
+    // `scheduleSave`'s `isEditing` early return rather than by the guard
+    // under test, because a removal that names no item on screen was always
+    // driven from inside edit mode. Tests that reach for "Add items", the
+    // section's own overflow menu, Save, or — as of slice 04 — the item's
+    // own overflow menu, call `enterEditMode` themselves.
 
     async function navigatorOn(layout, navItems = THREE) {
       getLayouts.mockResolvedValue(layout ? [layout] : []);
@@ -3135,6 +3623,7 @@ describe("c-salesforce-navigator", () => {
 
     it("takes an item out of the layout when Remove is chosen from its menu", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       // The entry has to be findable, not merely respondable-to — slice 06's
       // row 16 is the reason this assertion is here and not implied.
       expect(itemMenuEntries(element, 0, 0)).toContainEqual([
@@ -3150,6 +3639,7 @@ describe("c-salesforce-navigator", () => {
 
     it("removes the item the user chose, out of the second section as readily as the first", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
 
       selectItemMenuItem(element, 1, 0, "remove");
       await flush();
@@ -3159,10 +3649,11 @@ describe("c-salesforce-navigator", () => {
 
     it("writes the removal, and a reload shows the item still gone", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
 
       selectItemMenuItem(element, 1, 0, "remove");
       await flush();
-      await settleAutosave();
+      await saveEdits(element);
 
       expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([]);
 
@@ -3179,6 +3670,7 @@ describe("c-salesforce-navigator", () => {
 
     it("announces the removal, naming the item and the section it left", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
 
       selectItemMenuItem(element, 1, 0, "remove");
       await flush();
@@ -3210,10 +3702,11 @@ describe("c-salesforce-navigator", () => {
       expect(itemLabelsBySection(element)).toEqual([
         ["Accounts", "Action Plans"]
       ]);
+      await enterEditMode(element);
 
       selectItemMenuItem(element, 0, 0, "remove");
       await flush();
-      await settleAutosave();
+      await saveEdits(element);
 
       // `Contact` is unreachable and must survive untouched, in place.
       expect(lastSavedLayout(updateLayout).sections[0].items).toEqual([
@@ -3229,6 +3722,7 @@ describe("c-salesforce-navigator", () => {
           { name: "Selling", columns: 3, items: [{ id: "Account" }] }
         ])
       );
+      await enterEditMode(element);
 
       selectItemMenuItem(element, 0, 0, "remove");
       await flush();
@@ -3242,8 +3736,36 @@ describe("c-salesforce-navigator", () => {
       expect(addButtonOf(element, 0)).not.toBeNull();
     });
 
+    it("says only that the section is empty once Save leaves it that way out of edit mode", async () => {
+      // The display-only counterpart to the test above. The Add items button
+      // this message used to name unconditionally is itself gated behind edit
+      // mode (this slice's own subject), so out of edit mode the sentence
+      // must not send the user after a control that is not on screen. Save,
+      // not Cancel: Cancel would restore the removed item along with
+      // everything else the session touched, and the section would not be
+      // empty to look at any more.
+      const element = await navigatorOn(
+        storedLayout([
+          { name: "Selling", columns: 3, items: [{ id: "Account" }] }
+        ])
+      );
+      await enterEditMode(element);
+      selectItemMenuItem(element, 0, 0, "remove");
+      await flush();
+      await saveEdits(element);
+
+      const empty = querySections(element)[0].shadowRoot.querySelector(
+        ".rstk-nav-section__empty"
+      );
+      expect(empty).not.toBeNull();
+      expect(empty.textContent).toContain("no items");
+      expect(empty.textContent).not.toContain("Add items");
+      expect(addButtonOf(element, 0)).toBeNull();
+    });
+
     it("opens a picker from the section header listing every reachable tab not in the layout", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
 
       const picker = await openPicker(element, 0);
 
@@ -3264,6 +3786,7 @@ describe("c-salesforce-navigator", () => {
         ]),
         [ACCOUNT_ITEM, ACTION_HUB_ITEM]
       );
+      await enterEditMode(element);
 
       const picker = await openPicker(element, 0);
 
@@ -3282,6 +3805,7 @@ describe("c-salesforce-navigator", () => {
       );
       // The rename is on screen, so the layout really does carry one.
       expect(itemLabelsBySection(element)).toEqual([["Clients"]]);
+      await enterEditMode(element);
 
       const picker = await openPicker(element, 0);
 
@@ -3292,6 +3816,7 @@ describe("c-salesforce-navigator", () => {
       const element = await navigatorOn(
         storedLayout([{ name: "Selling", columns: 3, items: [] }])
       );
+      await enterEditMode(element);
       const picker = await openPicker(element, 0);
       expect(pickerLabels(picker)).toHaveLength(3);
 
@@ -3307,6 +3832,7 @@ describe("c-salesforce-navigator", () => {
 
     it("adds the chosen item to the section the picker was opened from", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 1);
 
       pickerEntries(picker)[0].click();
@@ -3322,6 +3848,7 @@ describe("c-salesforce-navigator", () => {
       // A parent that always added to section 0 would pass every assertion
       // driven from section 0 — slice 05's row 13 on this axis.
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 0);
 
       pickerEntries(picker)[0].click();
@@ -3335,11 +3862,12 @@ describe("c-salesforce-navigator", () => {
 
     it("writes the addition, and a reload shows the item still there", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 1);
 
       pickerEntries(picker)[0].click();
       await flush();
-      await settleAutosave();
+      await saveEdits(element);
 
       expect(lastSavedLayout(updateLayout).sections[1].items).toEqual([
         { id: "standard-ActionHub" },
@@ -3360,6 +3888,7 @@ describe("c-salesforce-navigator", () => {
 
     it("announces the addition, naming the item and the section it landed in", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 1);
 
       pickerEntries(picker)[0].click();
@@ -3371,6 +3900,7 @@ describe("c-salesforce-navigator", () => {
     it("offers an item removed earlier back, and adds it to where it is asked for", async () => {
       // The round trip the criterion names, driven as one gesture chain.
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       selectItemMenuItem(element, 0, 0, "remove");
       await flush();
       expect(itemLabelsBySection(element)).toEqual([[], ["Action Plans"]]);
@@ -3391,6 +3921,7 @@ describe("c-salesforce-navigator", () => {
 
     it("offers a deleted section's items back rather than discarding them", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
 
       selectSectionMenuItem(element, 1, "delete");
       await flush();
@@ -3405,13 +3936,14 @@ describe("c-salesforce-navigator", () => {
 
     it("adds a deleted section's item back into a surviving section", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       selectSectionMenuItem(element, 1, "delete");
       await flush();
 
       const picker = await openPicker(element, 0);
       pickerEntries(picker)[0].click();
       await flush();
-      await settleAutosave();
+      await saveEdits(element);
 
       expect(itemLabelsBySection(element)).toEqual([
         ["Accounts", "Action Plans"]
@@ -3429,6 +3961,7 @@ describe("c-salesforce-navigator", () => {
       // here, so a write would be a `createLayout` — the exact gesture that
       // generates a row for a user who never customised anything.
       const element = await navigatorOn(undefined);
+      await enterEditMode(element);
 
       const picker = await openPicker(element, 0);
       await settleAutosave();
@@ -3440,6 +3973,7 @@ describe("c-salesforce-navigator", () => {
 
     it("writes nothing when the picker is cancelled", async () => {
       const element = await navigatorOn(undefined);
+      await enterEditMode(element);
       const picker = await openPicker(element, 0);
 
       picker.shadowRoot
@@ -3504,6 +4038,7 @@ describe("c-salesforce-navigator", () => {
           }
         ])
       );
+      await enterEditMode(element);
       const before = itemLabelsBySection(element);
 
       const picker = await openPicker(element, 0);
@@ -3529,7 +4064,16 @@ describe("c-salesforce-navigator", () => {
       // is the only write path in the file not driven by a template event, and
       // therefore the only one that can fire after disconnect.
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 0);
+
+      // Leaving edit mode first (silently — nothing has changed yet) so the
+      // disconnect below happens out of edit mode. `scheduleSave` already
+      // returns early while editing, for a reason unrelated to this test's
+      // subject; if editing stayed on, `jest.getTimerCount()` would read 0
+      // for that reason regardless of whether the disconnected-instance guard
+      // below fired at all, proving nothing.
+      await cancelEdits(element);
 
       document.body.removeChild(element);
       expect(jest.getTimerCount()).toBe(0);
@@ -3545,8 +4089,88 @@ describe("c-salesforce-navigator", () => {
       expect(updateLayout).not.toHaveBeenCalled();
     });
 
-    it("adds nothing and writes nothing when Escape closes the picker", async () => {
+    /**
+     * Inherited from slice 01's critique: `handleSectionAddItems` gates the
+     * button on `editing`, but the write happens when the picker's promise
+     * *resolves* — arbitrarily later — and the original guard on
+     * `addChosenItem` checked only `isAttached`, not the mode. Walked exactly
+     * as the finding describes: enter edit mode, open the picker, press
+     * Cancel while it is still open (nothing else has changed, so it closes
+     * silently), then choose an entry from the still-open picker. Reachable
+     * in a real org only because `lightning/modal` is a real modal with its
+     * own backdrop and focus trap — a platform guarantee this suite cannot
+     * assert — but this mock, per the note on the import above, mounts the
+     * real picker component, so the choice really does still land here.
+     */
+    it("does not write when a chosen item resolves after Cancel has ended the session that opened the picker", async () => {
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
+      const picker = await openPicker(element, 0);
+      const before = itemLabelsBySection(element);
+
+      await cancelEdits(element);
+
+      pickerEntries(picker)[0].dispatchEvent(new CustomEvent("click"));
+      await flush();
+
+      // Nothing changed on screen, and no debounce armed to write it later —
+      // the same two-part proof the disconnected-instance test above uses,
+      // since a stray timer is the hazard even when the eventual write does
+      // not land immediately.
+      expect(itemLabelsBySection(element)).toEqual(before);
+      expect(jest.getTimerCount()).toBe(0);
+      await settleAutosave();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The half of the same finding a bare `!this.isEditing` guard would still
+     * miss: Cancel ends the session the picker was opened in, but re-entering
+     * edit mode starts a *new* one, and `isEditing` reads `true` throughout —
+     * a mode check alone cannot tell the two apart. The stale picker's choice
+     * must not land on the session that replaced the one it was opened for.
+     */
+    it("does not let a stale picker's choice land on a different, later edit session", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
+      const picker = await openPicker(element, 0);
+
+      await cancelEdits(element);
+      await enterEditMode(element);
+      const before = itemLabelsBySection(element);
+
+      pickerEntries(picker)[0].dispatchEvent(new CustomEvent("click"));
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual(before);
+      await settleAutosave();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Named for what this actually is — a real gesture with a real, correct
+     * outcome — rather than for a guard it turns out to pin nothing of.
+     * Escape resolves the picker's promise with `undefined`, and no
+     * mutation reachable from here reddens either assertion below. Checked
+     * directly, not read: with both `addChosenItem`'s own
+     * `if (!tabId) { return; }` *and* `addItemToSection`'s own
+     * accessible-set check (`navigatorLayoutModel.js`) removed at once, a
+     * call carrying `tabId: undefined` still adds nothing visible — nothing
+     * in the resolved tab list has that id to render an item against — and
+     * this test runs in edit mode, where `scheduleSave` writes nothing
+     * regardless of what changed underneath it. So this test pins the
+     * outcome, honestly, and pins no guard: "writes nothing when the
+     * picker closes with a falsy value that is not undefined" (the
+     * blank-developer-name case, just above) is the one test in this file
+     * that actually discriminates `addChosenItem`'s `if (!tabId)` guard,
+     * because a blank developer name *is* in the accessible set and that
+     * guard is the only thing standing between it and the layout.
+     */
+    it("writes nothing when Escape closes the picker, though no guard here is what stops it", async () => {
+      const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const before = itemLabelsBySection(element);
       const picker = await openPicker(element, 0);
 
@@ -3579,6 +4203,7 @@ describe("c-salesforce-navigator", () => {
           }
         ])
       );
+      await enterEditMode(element);
 
       const picker = await openPicker(element, 0);
 
@@ -3593,6 +4218,7 @@ describe("c-salesforce-navigator", () => {
       // dropping it. Section 1, not 0, so "names the section" is
       // distinguishable from "names the first one".
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 1);
 
       expect(configOf(picker).label).toBe("Add items to Support");
@@ -3605,6 +4231,7 @@ describe("c-salesforce-navigator", () => {
       // trap and Escape are the platform's rather than ours. A div dressed up
       // as a dialog would pass every click-driven assertion above.
       const element = await navigatorOn(TWO_SECTIONS);
+      await enterEditMode(element);
       const picker = await openPicker(element, 0);
 
       expect(
@@ -3870,6 +4497,20 @@ describe("c-salesforce-navigator", () => {
       }));
     }
 
+    /**
+     * Whether the switcher's `value` entry is `disabled` right now — a
+     * separate helper from `layoutMenuEntries` rather than a new key added to
+     * it, because that function's return shape is asserted with `toEqual`
+     * against object literals elsewhere in this file and a new key would
+     * break every one of them for a fact they are not about.
+     */
+    function menuItemDisabled(element, value) {
+      const item = Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).find((entry) => entry.value === value);
+      return item ? item.disabled === true : undefined;
+    }
+
     function selectLayoutMenu(element, value) {
       layoutMenu(element).dispatchEvent(
         new CustomEvent("select", { detail: { value } })
@@ -3917,13 +4558,14 @@ describe("c-salesforce-navigator", () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
 
+      // The Tier 3 half of the switcher, which is what renders out of edit
+      // mode: every layout the user owns, with the active one checked.
+      // Creating, renaming and deleting are Tier 2 and are gated — see
+      // "entering and leaving edit mode" for the entries that join these.
       expect(layoutMenuEntries(element)).toEqual([
         { value: `layout:${FIRST_ID}`, label: "Selling", checked: false },
         { value: `layout:${SECOND_ID}`, label: "Support", checked: true },
-        { value: `layout:${THIRD_ID}`, label: "Admin", checked: false },
-        { value: "new-layout", label: "New layout…", checked: false },
-        { value: "rename-layout", label: "Rename layout…", checked: false },
-        { value: "delete-layout", label: "Delete layout…", checked: false }
+        { value: `layout:${THIRD_ID}`, label: "Admin", checked: false }
       ]);
       expect(layoutMenu(element).label).toBe("Support");
     });
@@ -4028,14 +4670,20 @@ describe("c-salesforce-navigator", () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
 
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      // An item rename is gated behind edit mode as of this slice, same as a
+      // section-level change. `renameFirstItem` dispatches the `itemrename`
+      // event directly on the item element rather than opening its (now
+      // gated) menu, which is what still lets it stand in here — out of
+      // edit mode, where this test stays throughout — for "some canvas
+      // mutation"; the debounce/race behaviour under test does not care
+      // which act armed it.
+      await renameFirstItem(element, 0, "Renamed");
       // Switched inside the debounce window, before the save has fired.
       await switchToLayout(element, THIRD_ID);
 
-      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
-        6
-      );
+      expect(
+        JSON.parse(store.payloadOf(SECOND_ID)).sections[0].items[0].rename
+      ).toBe("Renamed");
       expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
       expect(store.activeName()).toBe("Admin");
     });
@@ -4061,17 +4709,16 @@ describe("c-salesforce-navigator", () => {
 
       // Still looking at Support, because the switch has not landed.
       expect(sectionNames(element)).toEqual(["Support"]);
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed");
       jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
       await flush();
 
       releaseSwitch();
       await settleAutosave();
 
-      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
-        6
-      );
+      expect(
+        JSON.parse(store.payloadOf(SECOND_ID)).sections[0].items[0].rename
+      ).toBe("Renamed");
       expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
       expect(store.activeName()).toBe("Admin");
       expect(sectionNames(element)).toEqual(["Admin"]);
@@ -4098,8 +4745,7 @@ describe("c-salesforce-navigator", () => {
 
       // Still looking at Support, because the switch has not landed.
       expect(sectionNames(element)).toEqual(["Support"]);
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed");
 
       // The switch lands first. Microtasks, then timers.
       releaseSwitch();
@@ -4111,9 +4757,9 @@ describe("c-salesforce-navigator", () => {
       await flush();
       await flush();
 
-      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
-        6
-      );
+      expect(
+        JSON.parse(store.payloadOf(SECOND_ID)).sections[0].items[0].rename
+      ).toBe("Renamed");
       expect(store.payloadOf(THIRD_ID)).toBe(ADMIN);
       expect(store.activeName()).toBe("Admin");
     });
@@ -4129,8 +4775,7 @@ describe("c-salesforce-navigator", () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
 
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed on Support");
 
       // Switched inside the debounce window, before the save has fired.
       selectLayoutMenu(element, `layout:${THIRD_ID}`);
@@ -4140,16 +4785,17 @@ describe("c-salesforce-navigator", () => {
       expect(sectionNames(element)).toEqual(["Admin"]);
 
       // A second change, still inside the first one's window.
-      selectSectionMenuItem(element, 0, "columns-2");
-      await flush();
+      await renameFirstItem(element, 0, "Renamed on Admin");
       jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
       await flush();
       await flush();
 
-      expect(JSON.parse(store.payloadOf(SECOND_ID)).sections[0].columns).toBe(
-        6
-      );
-      expect(JSON.parse(store.payloadOf(THIRD_ID)).sections[0].columns).toBe(2);
+      expect(
+        JSON.parse(store.payloadOf(SECOND_ID)).sections[0].items[0].rename
+      ).toBe("Renamed on Support");
+      expect(
+        JSON.parse(store.payloadOf(THIRD_ID)).sections[0].items[0].rename
+      ).toBe("Renamed on Admin");
     });
 
     /**
@@ -4164,6 +4810,7 @@ describe("c-salesforce-navigator", () => {
     it("a store whose active layout is one this version cannot read still shows a layout the user owns, not the seeded one", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       deleteLayout.mockResolvedValueOnce([
         {
@@ -4192,14 +4839,19 @@ describe("c-salesforce-navigator", () => {
     });
 
     /**
-     * Why the delete path *discards* a pending change where the switch path
-     * flushes one: a payload written to a row that is about to be deleted is
-     * work with no reader, and a failure would report a save error about a
-     * layout that no longer exists.
+     * Once Tier 2 requires edit mode, this can no longer be a race against a
+     * *live* debounce: entering edit mode is a precondition for reaching
+     * "delete-layout" at all, and entering it is exactly what stops a Tier 1
+     * change from ever arming a debounce in the first place. What survives of
+     * the original claim is the outcome — a canvas change made and then its
+     * layout deleted, inside the same session, writes nothing — proven here
+     * by `scheduleSave`'s `isEditing` guard rather than by `persist`'s
+     * `stillExists` check, which this interleaving can no longer reach.
      */
-    it("a change still in the debounce when its layout is deleted is dropped rather than written", async () => {
+    it("a change made and then its layout deleted, inside the same edit session, writes nothing", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectSectionMenuItem(element, 0, "columns-6");
       await flush();
@@ -4207,6 +4859,11 @@ describe("c-salesforce-navigator", () => {
       selectLayoutMenu(element, "delete-layout");
       await flush();
       promptButton(element, "Delete layout").click();
+      await flush();
+      // The canvas change made above means Delete layout's own confirm now
+      // opens the shared discard prompt instead of deleting on the spot —
+      // slice 02's widening of the same confirmation to this call site.
+      promptButton(element, "Discard changes").click();
       await settleAutosave();
 
       expect(updateLayout).not.toHaveBeenCalled();
@@ -4215,21 +4872,19 @@ describe("c-salesforce-navigator", () => {
     });
 
     /**
-     * The other half of the same rule, and the half `discardPendingSave` cannot
-     * reach: the change is made *after* the gesture, while the delete is still
-     * in flight. `this.layoutId` still names the doomed row until the reply
-     * lands, so the change is captured against it — and a write addressed
-     * there is refused, telling the user a save failed about the very layout
-     * they had just asked to be rid of, beside a screen already showing its
-     * successor.
-     *
-     * Interleaved by hand rather than through `settleAutosave`, which advances
-     * the timer first and so could never see the delete land ahead of the
-     * pending debounce.
+     * The delete itself is unaffected by an edit session in progress: it
+     * still commits on the spot, still adopts the store's own answer about
+     * which layout replaces the one removed, and still reports no save error,
+     * because nothing was attempted. Once Tier 2 requires edit mode, a canvas
+     * change made while the delete's round trip is in flight is a Tier 1
+     * draft rather than a pending debounce — `scheduleSave`'s `isEditing`
+     * guard is what keeps it unwritten now, not `persist`'s `stillExists`
+     * check, which this interleaving can no longer reach.
      */
-    it("a change made while its layout is being deleted is written nowhere and reports no save error", async () => {
+    it("a canvas change made while its layout is being deleted is written nowhere and reports no save error", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
       const releaseDelete = store.deferNextDelete();
 
       selectLayoutMenu(element, "delete-layout");
@@ -4259,17 +4914,130 @@ describe("c-salesforce-navigator", () => {
     });
 
     /**
-     * `rememberSaved`'s create-adoption guard, which needs both of its
-     * conditions and can only be reached by making a change while a *create* is
-     * in flight. The change belongs to a user who owned no row, so it creates
-     * one — correctly, that is what a first change does — but the layout on
-     * screen by the time it lands is the one *New layout* made, and adopting
-     * the id would point every later save at a layout the change was never
-     * made on.
+     * Re-review finding C. Narrowing the race above to `scheduleSave`'s
+     * `isEditing` guard dropped the suite's only coverage of `persist`'s
+     * `stillExists` early return — and that guard is still reachable, just
+     * not through the autosave. Save is an immediate write and does not check
+     * `isEditing`: pressed while this layout's own delete is still in flight,
+     * it captures `target.layoutId` as the doomed row, and by the time it
+     * runs, `adoptFromStore` has already dropped that row from
+     * `this.layouts`. Disabling `stillExists` here calls `updateLayout` on a
+     * layout that no longer exists and reports a save error about it.
      */
-    it("a change made while a new layout is being created gets its own row, and the new layout stays the one on screen", async () => {
+    it("a Save that lands after its own layout has been deleted writes nothing and reports no save error", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      const releaseDelete = store.deferNextDelete();
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await flush();
+      // The canvas change above means this confirm opens the shared discard
+      // prompt rather than deleting on the spot — slice 02's widening of the
+      // same confirmation to this call site.
+      promptButton(element, "Discard changes").click();
+      await flush();
+
+      // Still looking at Support — the delete has not landed — and Save is
+      // pressed on it while the delete is in flight.
+      expect(sectionNames(element)).toEqual(["Support"]);
+      await saveEdits(element);
+
+      releaseDelete();
+      await flush();
+      await flush();
+      await flush();
+
+      expect(sectionNames(element)).toEqual(["Admin"]);
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(store.names()).toEqual(["Selling", "Admin"]);
+      expect(store.activeName()).toBe("Admin");
+      expect(element.shadowRoot.querySelector('[role="alert"]')).toBeNull();
+    });
+
+    /**
+     * Third fix pass, the sweep finding: `handleLayoutDeleteConfirm`'s guard
+     * agreed with `deleteCurrentLayout`'s own `if (!layoutId) return;` only
+     * by inheritance from `canDeleteLayout` at the menu — a check made when
+     * the dialog *opens*, not when it is *confirmed*. Tier 3 (choosing a
+     * different saved layout) stays reachable whatever `isEditing` is, so a
+     * switch can land — and `adoptFromStore`'s no-active branch can clear
+     * `this.layoutId` — while `PROMPT_DELETE` is still on screen. Nothing
+     * closes it on that transition: it renders off `layoutPrompt`, not off
+     * `canDeleteLayout`, so the dialog outlives its own affordance.
+     */
+    it("a switch that lands with no active row while Delete layout's confirmation is open leaves the dialog outliving its own affordance", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      expect(promptButton(element, "Delete layout")).not.toBeNull();
+
+      // A switch lands while the delete confirmation is still showing, and
+      // the store reports nobody active — `adoptFromStore`'s no-active
+      // branch, which sets `this.layoutId = undefined`.
+      activateLayout.mockResolvedValueOnce([]);
+      selectLayoutMenu(element, `layout:${FIRST_ID}`);
+      await flush();
+      await flush();
+
+      // The dialog is still here — nothing in the switch closed it.
+      expect(promptButton(element, "Delete layout")).not.toBeNull();
+
+      // A canvas change on the freshly-adopted (seeded) layout, so the
+      // confirm would open the shared discard prompt rather than deleting on
+      // the spot — the same widening slice 02 gave every other Tier 2 call
+      // site.
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      promptButton(element, "Delete layout").click();
+      await flush();
+
+      // Fixed: nothing is left to delete, so nothing is asked about it — the
+      // stale confirmation just closes. Unfixed: this opens a *second*
+      // dialog asking to discard changes for a delete that
+      // `deleteCurrentLayout`'s own `layoutId` guard was always going to
+      // refuse — the user presses a `variant="destructive"` button and
+      // nothing is discarded and nothing is deleted.
+      expect(promptButton(element, "Discard changes")).toBeUndefined();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
+      ).toBeNull();
+      expect(deleteLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(
+        element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON)
+      ).not.toBeNull();
+    });
+
+    /**
+     * `rememberSaved`'s create-adoption guard does not need a Tier 1 autosave
+     * to reach — one from *New layout*, one from an ordinary Tier 1 autosave
+     * racing it was the pairing the fix pass measured, and once Tier 2
+     * requires edit mode that specific pairing cannot happen any more: a
+     * Tier 1 change made during this wait is a draft held by the same
+     * session, never an autosave of its own. **Re-review correction:** that
+     * is not the only pairing, and the fix pass's conclusion — that the
+     * guard is therefore unreachable by any user path — does not follow from
+     * it. `createNewLayout` does not leave edit mode, so a user can press
+     * Save on the draft it is replacing while its own create is still in
+     * flight; the test below this one reaches the guard through exactly
+     * that pairing. What this test proves is narrower and still true: the
+     * screen shows nothing of the new layout until the write actually lands.
+     */
+    it("a new layout being created does not show on screen until the write lands", async () => {
       const store = installStore([]);
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
       const releaseCreate = store.deferNextCreate();
 
       selectLayoutMenu(element, "new-layout");
@@ -4281,22 +5049,426 @@ describe("c-salesforce-navigator", () => {
       input.dispatchEvent(new CustomEvent("commit"));
       await flush();
 
-      selectSectionMenuItem(element, 0, "columns-6");
-      await flush();
-      jest.advanceTimersByTime(AUTOSAVE_DELAY_MS);
-      await flush();
+      // Nothing on the server yet: the create has not landed.
+      expect(store.names()).toEqual([]);
 
       releaseCreate();
       await flush();
       await flush();
       await flush();
 
-      expect(store.names()).toEqual(["Weekly review", "My Navigator"]);
+      expect(store.names()).toEqual(["Weekly review"]);
       expect(
         layoutMenuEntries(element)
           .filter((entry) => entry.checked)
           .map((entry) => entry.label)
       ).toEqual(["Weekly review"]);
+    });
+
+    /**
+     * Re-review finding B. `rememberSaved`'s create-adoption guard
+     * (`!target.layoutId && this.layoutId === undefined`) is live, not dead.
+     * `createNewLayout` does not leave edit mode, so a user can press Save —
+     * an immediate write — on the draft it is replacing while its own create
+     * is still in flight. That Save is captured with `layoutId: undefined`,
+     * exactly as New layout's own create was, and by the time it lands
+     * `this.layoutId` already names the layout New layout created. With the
+     * guard intact the switcher's checked entry stays on New layout's row;
+     * collapsed to `if (!target.layoutId)`, adopting the Save's id
+     * unconditionally would move it back onto the draft the user has already
+     * moved on from.
+     */
+    it("a Save that lands after New layout does not move the active layout back to the draft it replaced", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      const releaseCreate = store.deferNextCreate();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+      // The canvas change above means committing the name opens the shared
+      // discard prompt rather than creating on the spot — slice 02's
+      // widening of the same confirmation to this call site.
+      discardConfirmButton(element).click();
+      await flush();
+
+      // The abandoned draft, saved while New layout's create is still in
+      // flight.
+      await saveEdits(element);
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      expect(
+        layoutMenuEntries(element)
+          .filter((entry) => entry.checked)
+          .map((entry) => entry.label)
+      ).toEqual(["Weekly review"]);
+    });
+
+    /**
+     * Re-review, the finding above's own re-review. The test above proves the
+     * switcher's checked entry stays correct, and that is not the whole of
+     * the damage: `createNewLayout` calls `createLayout` directly off
+     * `saveChain` rather than through `commitLayoutNow`, so it never set
+     * `creatingLayout`, and a Save made inside its round trip was still
+     * captured with `layoutId: undefined` — a second row, with the server's
+     * active flag on it, while the switcher's checked entry (read from
+     * `this.layoutId`, guarded separately by `rememberSaved`) stayed right.
+     * Reading the store, not only the screen, is what catches it.
+     */
+    it("a Save that lands after New layout does not create a second row on the server", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      const releaseCreate = store.deferNextCreate();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+      // The canvas change above means committing the name opens the shared
+      // discard prompt rather than creating on the spot — slice 02's
+      // widening of the same confirmation to this call site.
+      discardConfirmButton(element).click();
+      await flush();
+
+      // The abandoned draft, saved while New layout's create is still in
+      // flight.
+      await saveEdits(element);
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // One row, not two, and the server's own active flag agrees with it —
+      // not only the switcher's checked entry, which stayed right even on
+      // the unfixed code.
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(store.names()).toEqual(["Weekly review"]);
+      expect(store.activeName()).toBe("Weekly review");
+    });
+
+    /**
+     * Superseded by the sixth pass's lockout (Jonah's decision, 2026-08-31).
+     * This test used to pin the *coalescing* mechanism's correctness under an
+     * overlap the client used to allow — a no-row rename made while New
+     * layout's own create was still open landed as its own, separate row
+     * rather than silently folding into it. `isWriteLocked` now closes that
+     * overlap outright: Rename layout is one of the four writing controls it
+     * disables — the `disabled` attribute in the template and the
+     * handler-side re-check in `handleLayoutMenuSelect` both — for as long as
+     * *any* of the four has a round trip outstanding, so the rename prompt
+     * cannot even be opened until New layout's create lands. What remains
+     * true and reachable is checked instead: the attempt does nothing while
+     * locked, and once New layout's create settles, that is the layout on
+     * screen — renaming it renames that one row, not a second.
+     *
+     * The mutation this test used to catch — `rememberSaved`'s create-
+     * adoption guard, `!target.layoutId && this.layoutId === undefined`,
+     * collapsed to `if (!target.layoutId)` — needs two creates racing for the
+     * same rowless user to discriminate at all, and the lockout is exactly
+     * what makes that pairing unreachable now; see the corresponding
+     * `## Deviations` bullet on whether anything else in this file still
+     * discriminates it.
+     */
+    it("cannot open Rename layout while New layout's create is still open, and renames the layout it created once it lands", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      const releaseCreate = store.deferNextCreate();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = promptInput(element);
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+      // The canvas change above means committing the name opens the shared
+      // discard prompt rather than creating on the spot — slice 02's
+      // widening of the same confirmation to this call site.
+      discardConfirmButton(element).click();
+      await flush();
+
+      // The attempt itself: Rename layout is disabled while New layout's own
+      // create is still outstanding, and selecting it does nothing — no
+      // prompt opens, and no second `createLayout` is queued behind it.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(true);
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      expect(promptInput(element)).toBeNull();
+      expect(createLayout).toHaveBeenCalledTimes(1);
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // The lock has cleared: Rename layout is available again, and it
+      // renames the layout New layout created, since that is what is on
+      // screen now.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Renamed");
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(store.names()).toEqual(["Renamed"]);
+      expect(store.activeName()).toBe("Renamed");
+    });
+
+    /**
+     * Superseded by the sixth pass's lockout (Jonah's decision, 2026-08-31),
+     * for the same reason as the test above and for one more of its own. The
+     * original scenario needed a no-row rename to land *while* New layout's
+     * own create was still open, captured against the abandoned six-column
+     * draft a rejected Save had left in `storedLayout` — `isWriteLocked`
+     * forecloses the overlap itself, and by the time Rename layout is
+     * available again, New layout's own successful create has already
+     * replaced the canvas with its own seed (`createNewLayout`'s success
+     * handler sets `storedLayout` and re-takes the entry snapshot), so the
+     * rejected draft is gone before a rename could ever reach it — there is
+     * no sequence left that reaches a rename holding six columns here.
+     *
+     * What the prior rejection can still affect, and what remains worth
+     * checking: that its stale draft does not leak into New layout's own
+     * seed. Structurally this cannot happen — `createNewLayout` seeds from
+     * `this.items`, the live tab list, never from `this.layout` — but that
+     * guarantee is worth a direct assertion rather than an inference from
+     * reading the method, and the rejection is what puts a draft in
+     * `storedLayout` for it to fail to leak from.
+     */
+    it("a rejected create's abandoned draft does not leak into a New layout made afterward", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      // A change, then a Save the server rejects: `layoutId` stays
+      // undefined and the draft stays in `storedLayout` rather than being
+      // replaced by a seed the server never confirmed.
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      createLayout.mockRejectedValueOnce(new Error("The save failed."));
+      await saveEdits(element);
+
+      // Re-entering takes the abandoned draft as this session's entry
+      // snapshot, not the seed.
+      await enterEditMode(element);
+      expect(renderedColumns(element, 0)).toBe(6);
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await typeLayoutName(element, "Weekly review");
+
+      // New layout's own seed, three columns — not the rejected draft's six.
+      expect(store.names()).toEqual(["Weekly review"]);
+      expect(JSON.parse(store.rows[0].layoutJson).sections[0].columns).toBe(3);
+      expect(renderedColumns(element, 0)).toBe(3);
+
+      // The lock has cleared now that New layout's create has landed:
+      // Rename layout renames the layout actually on screen.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Renamed");
+
+      // Two `createLayout` calls total: the rejected one from the earlier
+      // Save, and New layout's own successful one — never a third, since the
+      // rename above is a with-row rename of the layout New layout created.
+      expect(createLayout).toHaveBeenCalledTimes(2);
+      expect(store.names()).toEqual(["Renamed"]);
+      expect(store.activeName()).toBe("Renamed");
+    });
+
+    /**
+     * Finding 1, the fifth-pass regression. The single `creatingLayout`
+     * slot used to be cleared by whichever create resolved first rather
+     * than by its owner: a no-row rename that falls through past New
+     * layout's `distinct` create overwrites the field with its own,
+     * non-`distinct` entry, and both writers cleared with a bare
+     * `this.creatingLayout = undefined` that never checked the field still
+     * held their own entry — so when New layout's create settled, it wiped
+     * the *rename's* entry while the rename's own create was still open. A
+     * Save made in that window then read `!this.layoutId &&
+     * !this.creatingLayout`, skipped the wait a bare call is documented to
+     * always take, and was captured as a third create.
+     *
+     * **Superseded by the sixth pass's lockout (Jonah's decision,
+     * 2026-08-31), and this is finding 2's own disposition.** Finding 2
+     * asked for coverage of `commitLayoutNow`'s ownership check on its own
+     * create's clear, walking exactly the sequence this test used to: a
+     * no-row rename's create held open, New layout's own create *also*
+     * started and refused inside that window, then Save pressed while the
+     * rename's create was still open. `isWriteLocked` closes the setup at
+     * its second step — New layout is one of the four controls the lockout
+     * disables while any of them, including a rename, has a round trip
+     * outstanding — so New layout can no longer be attempted at all while
+     * the rename's own create is open, refused or not. This is unreachable
+     * rather than corrected: no production line inside `commitLayoutNow`
+     * changed for this disposition, and the ownership check itself stands
+     * exactly as finding 1 left it, as defence in depth behind the lockout
+     * rather than the thing now closing the race.
+     *
+     * What remains true and reachable, walked as far as it still goes: New
+     * layout and Save are both genuinely blocked while the rename's own
+     * create is open, and once it clears, Save is an ordinary single write
+     * — the only shape a write can still take once two cannot overlap.
+     */
+    it("New layout and Save are both blocked while a no-row rename's create is open, closing the race finding 2 asked for coverage of", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      const releaseRenameCreate = store.deferNextCreate();
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Renamed");
+
+      // New layout, attempted while the rename's own create is still open:
+      // blocked, not raced. This is the step finding 2's own probe needed
+      // to get past to reach `commitLayoutNow`'s ownership-check race, and
+      // it cannot anymore.
+      expect(menuItemDisabled(element, "new-layout")).toBe(true);
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      expect(promptInput(element)).toBeNull();
+      expect(createLayout).toHaveBeenCalledTimes(1);
+
+      // Save, attempted in the same window, is blocked the same way — it
+      // does nothing rather than waiting to coalesce.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
+      await saveEdits(element);
+      expect(updateLayout).not.toHaveBeenCalled();
+
+      releaseRenameCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // The lock has cleared: Save now updates the row the rename created
+      // — the only write left to make, since the race this finding named
+      // has no walkable path to it anymore.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        false
+      );
+      await saveEdits(element);
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).toHaveBeenCalledTimes(1);
+      expect(store.names()).toEqual(["Renamed"]);
+      const renamed = store.rows.find((row) => row.name === "Renamed");
+      expect(JSON.parse(renamed.layoutJson).sections[0].columns).toBe(6);
+    });
+
+    /**
+     * Superseded by the sixth pass's lockout (Jonah's decision, 2026-08-31).
+     * The original scenario needed a *second* no-row rename to be attempted
+     * while the first's own create was still open, so `commitLayoutNow`'s
+     * wait-and-recapture branch would re-read `this.editSnapshot` after the
+     * wait cleared rather than replay the stale value handed in when the
+     * second call was made. `isWriteLocked` forecloses attempting a second
+     * Tier 2 act at all while the first has a round trip outstanding — Rename
+     * layout disables the instant the first rename's create begins — so that
+     * branch has no remaining route through the UI; see the corresponding
+     * `## Deviations` bullet. And once the first rename's create has landed,
+     * `this.layoutId` is set, so a rename attempted afterward is no longer a
+     * no-row rename at all: it is the ordinary with-row path (`renameLayout`,
+     * which "carries no payload"), and there is no sequence left in which a
+     * *second* no-row rename's payload could ever be built from a snapshot
+     * other than the one current when it was made — there is no longer a
+     * second no-row rename to be made.
+     *
+     * What that leaves worth pinning, in place of the original: once a
+     * no-row rename's create has landed, a later rename of the same layout
+     * changes only its name — the canvas the first rename actually sent
+     * survives untouched, whatever the tab list has done since.
+     */
+    it("a rename made after a no-row rename's create has landed changes only the name, not the canvas it already sent", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      const releaseCreate = store.deferNextCreate();
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "First");
+
+      // A second attempt, while the first's create is still open, does
+      // nothing: Rename layout is locked.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(true);
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      expect(promptInput(element)).toBeNull();
+
+      // A tab list change arriving while the create is in flight — a normal
+      // event for a UI API adapter, per this file's own comment on
+      // `wiredNavItems`.
+      getNavItems.emit({ navItems: [ACCOUNT_ITEM] });
+      await flush();
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // The lock has cleared, and `this.layoutId` now names the row the
+      // first rename created — a second rename is an ordinary with-row
+      // rename, not a second no-row create.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await typeLayoutName(element, "Second");
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(renameLayout).toHaveBeenCalledTimes(1);
+      expect(store.names()).toEqual(["Second"]);
+
+      // The name changed; the canvas the first rename actually sent — three
+      // items, from before the tab list shrank — did not.
+      const row = store.rows.find((existing) => existing.name === "Second");
+      expect(JSON.parse(row.layoutJson).sections[0].items).toHaveLength(3);
     });
 
     it("the chosen layout is still the active one after a reload", async () => {
@@ -4344,12 +5516,149 @@ describe("c-salesforce-navigator", () => {
     });
 
     // ---------------------------------------------------------------
+    // Switching while editing, with an unsaved Tier 1 canvas change on
+    // screen: the same discard confirmation Cancel uses, at a second call
+    // site — `## Design`'s "Leaving edit mode with unsaved work" names this
+    // pair explicitly.
+    // ---------------------------------------------------------------
+
+    it("switches immediately, without asking, when editing with nothing unsaved", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await settleAutosave();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(store.activeName()).toBe("Admin");
+      expect(sectionNames(element)).toEqual(["Admin"]);
+    });
+
+    it("asks before discarding when switching layouts while editing with unsaved changes, and declining stays on the layout being edited", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      const moved = recordFocusMoves();
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await flush();
+
+      // Asked, not silently switched: still on Support, the change still on
+      // screen, and nothing sent to the server.
+      expect(
+        element.shadowRoot.querySelector('[role="alertdialog"]')
+      ).not.toBeNull();
+      expect(sectionNames(element)).toEqual(["Support"]);
+      expect(activateLayout).not.toHaveBeenCalled();
+      // Finding 2: the alertdialog nothing focused and nothing announced.
+      // Focus lands on "Keep editing" deliberately, never "Discard changes",
+      // and the live region carries the same fact the dialog's own text does.
+      expect(moved[moved.length - 1]).toBe(keepEditingButton(element));
+      expect(
+        spoken(
+          element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+        )
+      ).toBe("You have unsaved changes. Discard them and continue?");
+
+      keepEditingButton(element).click();
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(sectionNames(element)).toEqual(["Support"]);
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(activateLayout).not.toHaveBeenCalled();
+      expect(store.activeName()).toBe("Support");
+    });
+
+    it("re-picking the layout already on screen while editing with unsaved changes does not ask, and switches to nothing", async () => {
+      // Finding 1: every layout the user owns is a selectable entry, the
+      // active one included, so this is a click a user makes by re-picking
+      // what they are already looking at. `switchToLayout` itself already
+      // refuses this as a no-op (`layoutId === this.layoutId`) — the Tier 3
+      // guard has to agree before asking, or it asks about a loss that
+      // cannot happen and "Discard changes" then discards nothing.
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, `layout:${SECOND_ID}`);
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(activateLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(sectionNames(element)).toEqual(["Support"]);
+      expect(store.activeName()).toBe("Support");
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
+    });
+
+    it("does not ask, and switches to nothing, when a rowless user picks the bare layout entry while editing with unsaved changes", async () => {
+      // Finding 1 of the re-review: the guard above used to copy only the
+      // id-equality half of `switchToLayout`'s own no-op condition
+      // (`!layoutId || layoutId === this.layoutId`). A user who owns no row
+      // gets an extra menu entry whose value is the bare `LAYOUT_VALUE_PREFIX`
+      // (`get layoutChoices()`'s unshifted entry), so picking it slices to
+      // `layoutId === ""`, and `"" !== this.layoutId` (`undefined`) passed
+      // the half-copied guard — the discard prompt opened about a switch
+      // that was always going to be refused, and "Discard changes" then
+      // discarded nothing and switched nothing. `adoptFromStore`'s no-active
+      // branch reaches the same state for a user who holds rows the store
+      // reports none active for, not only one who has never saved.
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "layout:");
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(activateLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(sectionNames(element)).toEqual(["All Items"]);
+      expect(store.rows).toEqual([]);
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
+    });
+
+    it("confirming the discard prompt on a layout switch throws the draft away and switches, by the same route Cancel uses", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, `layout:${THIRD_ID}`);
+      await flush();
+      discardConfirmButton(element).click();
+      await settleAutosave();
+
+      expect(store.activeName()).toBe("Admin");
+      expect(sectionNames(element)).toEqual(["Admin"]);
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+      // Tier 3 does not itself decide whether the mode is left; this switch
+      // does not, so the action row still shows Save.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
+    });
+
+    // ---------------------------------------------------------------
     // Creating
     // ---------------------------------------------------------------
 
     it("a new layout sits beside the existing ones rather than renaming and overwriting one", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "new-layout");
       await flush();
@@ -4369,6 +5678,7 @@ describe("c-salesforce-navigator", () => {
     it("a new layout starts from every tab the user can reach, as a first open does", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "new-layout");
       await flush();
@@ -4387,6 +5697,7 @@ describe("c-salesforce-navigator", () => {
     it("renaming a layout renames that layout in the store and leaves its payload and its neighbours alone", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "rename-layout");
       await flush();
@@ -4409,6 +5720,7 @@ describe("c-salesforce-navigator", () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
       renameLayout.mockRejectedValueOnce(new Error("Refused"));
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "rename-layout");
       await flush();
@@ -4424,8 +5736,12 @@ describe("c-salesforce-navigator", () => {
         "Delete layout…"
       ]);
 
+      // A canvas change made in the same session, unrelated to the refused
+      // rename, and committed by Save rather than by an autosave — Tier 1
+      // writes only happen that way once edit mode is entered.
       selectSectionMenuItem(element, 0, "columns-6");
-      await settleAutosave();
+      await flush();
+      await saveEdits(element);
 
       expect(updateLayout).toHaveBeenCalledWith(
         expect.objectContaining({ layoutId: SECOND_ID, name: "Support" })
@@ -4440,6 +5756,7 @@ describe("c-salesforce-navigator", () => {
     it("deleting the active layout leaves the layout that takes its place active and on screen", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "delete-layout");
       await flush();
@@ -4464,6 +5781,7 @@ describe("c-salesforce-navigator", () => {
         }
       ]);
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       selectLayoutMenu(element, "delete-layout");
       await flush();
@@ -4478,12 +5796,104 @@ describe("c-salesforce-navigator", () => {
     });
 
     // ---------------------------------------------------------------
+    // The lockout (sixth pass, Jonah's decision, 2026-08-31): while any one
+    // of the four writing controls has a round trip outstanding, all four
+    // disable — not only the one pressed — so a second layout operation
+    // cannot be issued inside the first's server round trip.
+    // ---------------------------------------------------------------
+
+    it("Delete layout disables all four writing controls while its own delete is outstanding, and clears them once it lands", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      const releaseDelete = store.deferNextDelete();
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      promptButton(element, "Delete layout").click();
+      await flush();
+
+      // The delete is outstanding: every one of the four controls is
+      // disabled, not only Delete layout itself.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
+      expect(menuItemDisabled(element, "new-layout")).toBe(true);
+      expect(menuItemDisabled(element, "rename-layout")).toBe(true);
+      expect(menuItemDisabled(element, "delete-layout")).toBe(true);
+
+      // None of them can be issued while locked — attempting each does
+      // nothing.
+      await saveEdits(element);
+      expect(updateLayout).not.toHaveBeenCalled();
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      expect(promptInput(element)).toBeNull();
+
+      releaseDelete();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // The lock has cleared: all four are available again.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        false
+      );
+      expect(menuItemDisabled(element, "new-layout")).toBe(false);
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+      expect(store.names()).toEqual(["Selling", "Admin"]);
+    });
+
+    it("the lockout clears on a refused write exactly as it does on a successful one", async () => {
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      // New layout's own create — held open, then refused rather than
+      // resolved.
+      let refuseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            refuseCreate = () =>
+              reject(new Error("That layout could not be saved."));
+          })
+      );
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await typeLayoutName(element, "Weekly review");
+
+      // Locked while the refusal is still pending.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(true);
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
+
+      refuseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // A refusal clears the lock exactly as a success does — a stuck-open
+      // lockout would be worse than the race it exists to close.
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        false
+      );
+      expect(store.rows).toEqual([]);
+    });
+
+    // ---------------------------------------------------------------
     // Looking is not changing
     // ---------------------------------------------------------------
 
     it("opening the menu, and opening each of its dialogs, writes nothing for a user who has never changed anything", async () => {
       const store = installStore([]);
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       layoutMenu(element).dispatchEvent(new CustomEvent("open"));
       await settleAutosave();
@@ -4505,6 +5915,7 @@ describe("c-salesforce-navigator", () => {
     it("cancelling New layout, Rename layout and Delete layout each writes nothing", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
+      await enterEditMode(element);
 
       for (const entry of ["new-layout", "rename-layout", "delete-layout"]) {
         selectLayoutMenu(element, entry);
@@ -4529,14 +5940,1492 @@ describe("c-salesforce-navigator", () => {
       const element = await navigatorOnStore(store);
 
       expect(layoutMenu(element).label).toBe("My Navigator");
+      expect(layoutMenuEntries(element).map((entry) => entry.value)).toEqual([
+        "layout:"
+      ]);
+
       // Delete is absent: there is no row to delete, and offering it would
-      // promise something no call could deliver.
+      // promise something no call could deliver. That is a claim about the
+      // *edit-mode* half of the menu, so it can only be asked there.
+      await enterEditMode(element);
       expect(layoutMenuEntries(element).map((entry) => entry.value)).toEqual([
         "layout:",
         "new-layout",
         "rename-layout"
       ]);
       expect(store.rows).toEqual([]);
+    });
+  });
+
+  // ---------------------------------------------------------------
+  // Edit mode: the gate itself, and the draft boundary behind it
+  // ---------------------------------------------------------------
+
+  describe("entering and leaving edit mode", () => {
+    const NAV_ITEMS = [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM];
+    const OTHER_ID = "a0X000000000031AAA";
+
+    const ENTER_ANNOUNCEMENT =
+      "Edit mode on. Customise your Navigator, then press Save.";
+    const SAVE_ANNOUNCEMENT = "Changes saved. Edit mode off.";
+    const CANCEL_ANNOUNCEMENT = "Edit mode off. Nothing was saved.";
+    const DISCARD_ANNOUNCEMENT =
+      "You have unsaved changes. Discard them and continue?";
+    const WRITE_LOCK_ANNOUNCEMENT =
+      "Saving. Save, New layout, Rename layout and Delete layout are unavailable until this finishes.";
+    // Finding B: what a user hears re-entering a session an earlier Save's
+    // own write has left locked.
+    const ENTER_LOCKED_ANNOUNCEMENT = `Edit mode on. ${WRITE_LOCK_ANNOUNCEMENT}`;
+
+    function payload(sectionName, columns, items) {
+      return JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
+        sections: [{ name: sectionName, columns, items }]
+      });
+    }
+
+    const DAILY_WORK = payload("Daily work", 2, [{ id: "Account" }]);
+    const ADMIN = payload("Admin", 1, [{ id: "standard-ActionHub" }]);
+
+    function storedRow(overrides) {
+      return {
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "My Navigator",
+        isActive: true,
+        isReadable: true,
+        layoutJson: DAILY_WORK,
+        ...overrides
+      };
+    }
+
+    function adminRow(overrides) {
+      return {
+        layoutId: OTHER_ID,
+        name: "Admin",
+        isActive: false,
+        isReadable: true,
+        layoutJson: ADMIN,
+        ...overrides
+      };
+    }
+
+    async function navigatorWithTabs(navItems = NAV_ITEMS) {
+      const element = createNavigator();
+      getNavItems.emit({ navItems });
+      await flush();
+      await flush();
+      return element;
+    }
+
+    /** A Navigator that has a stored layout, so there is something to edit. */
+    async function storedNavigator() {
+      getLayouts.mockResolvedValue([storedRow()]);
+      return navigatorWithTabs();
+    }
+
+    function layoutMenu(element) {
+      return element.shadowRoot.querySelector("lightning-button-menu");
+    }
+
+    function selectLayoutMenu(element, value) {
+      layoutMenu(element).dispatchEvent(
+        new CustomEvent("select", { detail: { value } })
+      );
+    }
+
+    function menuEntryValues(element) {
+      return Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).map((entry) => entry.value);
+    }
+
+    function announcement(element) {
+      return spoken(
+        element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+      );
+    }
+
+    /** The column count actually painted, read off the grid's class. */
+    function renderedColumns(element, sectionIndex) {
+      const grid =
+        querySections(element)[sectionIndex].shadowRoot.querySelector("ul");
+      return Number(/cols-(\d)/.exec(grid.className)[1]);
+    }
+
+    async function commitLayoutName(element, name) {
+      const input = element.shadowRoot.querySelector(
+        ".rstk-nav-layout-prompt__input"
+      );
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: name } })
+      );
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+      await flush();
+    }
+
+    // ---------------------------------------------------------------
+    // What the action row holds, in each state
+    // ---------------------------------------------------------------
+
+    it("holds exactly the layout switcher and the edit affordance out of edit mode", async () => {
+      const element = await storedNavigator();
+
+      expect(
+        actionRow(element).map((control) => control.tagName.toLowerCase())
+      ).toEqual(["lightning-button-menu", "lightning-button-icon"]);
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      // The affordance has to say what it is to a screen reader: an icon
+      // button with no alternative text is announced as nothing at all.
+      expect(
+        element.shadowRoot.querySelector(EDIT_AFFORDANCE).alternativeText
+      ).toBeTruthy();
+    });
+
+    it("lists the user's saved layouts and switches between them out of edit mode, because choosing a layout is navigation", async () => {
+      getLayouts.mockResolvedValue([storedRow(), adminRow()]);
+      activateLayout.mockResolvedValue([
+        storedRow({ isActive: false }),
+        adminRow({ isActive: true })
+      ]);
+      const element = await navigatorWithTabs();
+
+      expect(menuEntryValues(element)).toEqual([
+        `layout:${EXISTING_LAYOUT_ID}`,
+        `layout:${OTHER_ID}`
+      ]);
+
+      selectLayoutMenu(element, `layout:${OTHER_ID}`);
+      await flush();
+      await flush();
+
+      expect(activateLayout).toHaveBeenCalledWith({ layoutId: OTHER_ID });
+      expect(sectionNames(element)).toEqual(["Admin"]);
+      // And the switch was navigation, not a way into customisation: the mode
+      // is exactly where it was.
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      expect(element.shadowRoot.querySelector(NEW_SECTION_BUTTON)).toBeNull();
+    });
+
+    it("keeps New, Rename and Delete layout out of the switcher until edit mode is entered", async () => {
+      const element = await storedNavigator();
+
+      expect(menuEntryValues(element)).toEqual([
+        `layout:${EXISTING_LAYOUT_ID}`
+      ]);
+
+      await enterEditMode(element);
+
+      expect(menuEntryValues(element)).toEqual([
+        `layout:${EXISTING_LAYOUT_ID}`,
+        "new-layout",
+        "rename-layout",
+        "delete-layout"
+      ]);
+    });
+
+    it("keeps New section off the page until edit mode is entered", async () => {
+      const element = await storedNavigator();
+
+      expect(element.shadowRoot.querySelector(NEW_SECTION_BUTTON)).toBeNull();
+
+      await enterEditMode(element);
+
+      expect(
+        element.shadowRoot.querySelector(NEW_SECTION_BUTTON)
+      ).not.toBeNull();
+    });
+
+    it("replaces the edit affordance with Cancel and Save, and puts it back on the way out", async () => {
+      const element = await storedNavigator();
+
+      await enterEditMode(element);
+
+      // Replaced, not joined: there is exactly one way out of the mode from
+      // the action row.
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).toBeNull();
+      expect(
+        actionRow(element)
+          .slice(1)
+          .map((control) => control.label)
+      ).toEqual(["New section", "Cancel", "Save"]);
+      // Save is the primary action, and the SLDS action row puts that last.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).variant).toBe(
+        "brand"
+      );
+
+      await cancelEdits(element);
+
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON)).toBeNull();
+    });
+
+    it("offers no way into edit mode when the stored layout could not be read", async () => {
+      // A mode that could not save is worse than no mode: the user would make
+      // changes, press Save, and be told the write was refused.
+      getLayouts.mockRejectedValue({ body: { message: "Read timed out" } });
+      const element = await navigatorWithTabs();
+
+      expect(element.shadowRoot.querySelector('[role="alert"]')).not.toBeNull();
+      // The seeded Navigator is still there and still navigates.
+      expect(queryItems(element)).toHaveLength(NAV_ITEMS.length);
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).toBeNull();
+      expect(actionRow(element)).toHaveLength(0);
+    });
+
+    // ---------------------------------------------------------------
+    // The draft boundary
+    // ---------------------------------------------------------------
+
+    it("writes nothing when the autosave interval elapses mid-edit", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      expect(renderedColumns(element, 0)).toBe(6);
+
+      await settleAutosave();
+
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+      // Held, not lost: the change is still the one on screen.
+      expect(renderedColumns(element, 0)).toBe(6);
+    });
+
+    it("writes the layout on Save, leaves edit mode, and the change is still there after a reload", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      await saveEdits(element);
+
+      expect(updateLayout).toHaveBeenCalledTimes(1);
+      expect(lastSavedLayout(updateLayout).sections[0].columns).toBe(6);
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      expect(element.shadowRoot.querySelector(NEW_SECTION_BUTTON)).toBeNull();
+
+      // Remounted on the payload the write actually captured, rather than on
+      // the in-memory model — which would prove nothing about what was stored.
+      const written = updateLayout.mock.calls[0][0].layoutJson;
+      document.body.removeChild(element);
+      jest.runOnlyPendingTimers();
+      await flush();
+      getLayouts.mockResolvedValue([storedRow({ layoutJson: written })]);
+      const reloaded = await navigatorWithTabs();
+
+      expect(renderedColumns(reloaded, 0)).toBe(6);
+    });
+
+    it("commits a change made before edit mode was entered, so the snapshot is what is stored", async () => {
+      // The draft boundary has to be exact at both ends. A change made a
+      // moment before the pencil was pressed belongs to the autosave that was
+      // already going to write it — leaving it in its debounce would put a
+      // promised write behind a Save the user has not pressed, and hand Cancel
+      // a change it has no business reverting.
+      const element = await storedNavigator();
+
+      // An item rename is gated behind edit mode as of this slice, same as a
+      // section-level change. `renameFirstItem` dispatches the `itemrename`
+      // event directly on the item element rather than opening its (now
+      // gated) menu, so the call below still stands in for "a canvas change
+      // made before edit mode was entered" even though no user path reaches
+      // the menu itself out here — the draft-boundary behaviour under test
+      // does not care which act made it. The second call, once edit mode has
+      // been entered, dispatches the identical event but is then a faithful
+      // stand-in for what that menu would send for real.
+      await renameFirstItem(element, 0, "Renamed before edit");
+      expect(updateLayout).not.toHaveBeenCalled();
+
+      await enterEditMode(element);
+      await flush();
+
+      expect(updateLayout).toHaveBeenCalledTimes(1);
+      expect(lastSavedLayout(updateLayout).sections[0].items[0].rename).toBe(
+        "Renamed before edit"
+      );
+
+      // And Cancel goes back to that, not past it.
+      await renameFirstItem(element, 0, "Renamed during edit");
+      await cancelEdits(element);
+
+      const item =
+        querySections(element)[0].shadowRoot.querySelector("c-navigator-item");
+      expect(item.label).toBe("Renamed before edit");
+      expect(updateLayout).toHaveBeenCalledTimes(1);
+    });
+
+    it("puts the canvas back exactly as it was on entry when Cancel is pressed, and writes nothing", async () => {
+      const element = await storedNavigator();
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+      expect(renderedColumns(element, 0)).toBe(2);
+
+      await enterEditMode(element);
+      await addSection(element);
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+      expect(renderedColumns(element, 0)).toBe(6);
+
+      await cancelEdits(element);
+      await settleAutosave();
+
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+      expect(renderedColumns(element, 0)).toBe(2);
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("writes no layout record for a user who opened edit mode, changed nothing and pressed Save", async () => {
+      // The oldest settled rule on this component: a user who has only ever
+      // looked owns no row. Opening the mode and closing it again is looking.
+      const element = await navigatorWithTabs();
+
+      await enterEditMode(element);
+      await saveEdits(element);
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+    });
+
+    it("leaves a user who has never changed anything exactly there when they cancel", async () => {
+      const element = await navigatorWithTabs([ACCOUNT_ITEM, CONTACT_ITEM]);
+
+      await enterEditMode(element);
+      await addSection(element);
+      await cancelEdits(element);
+
+      expect(sectionNames(element)).toEqual(["All Items"]);
+
+      // Still computed from the platform's tab list rather than frozen into a
+      // stored layout: a tab the user gains after the cancel still appears.
+      // Restoring the snapshot unconditionally would turn "has never changed
+      // anything" into "has a stored layout" — by way of a Cancel whose whole
+      // promise is that it changes nothing.
+      getNavItems.emit({
+        navItems: [ACCOUNT_ITEM, CONTACT_ITEM, ACTION_HUB_ITEM],
+        nextPageUrl: null
+      });
+      await flush();
+
+      expect(itemLabelsBySection(element)).toEqual([
+        ["Accounts", "Contacts", "Action Plans"]
+      ]);
+    });
+
+    it("loses an unsaved canvas change when the user leaves the page mid-edit, rather than flushing it", async () => {
+      // The pre-spec `disconnectedCallback` flushed unconditionally, because
+      // there was no such thing as an unsaved change. Explicit save means
+      // nothing is written until the user says so, and that has to hold when
+      // the user leaves by closing the tab.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      document.body.removeChild(element);
+      jest.runOnlyPendingTimers();
+      await flush();
+      await flush();
+
+      expect(updateLayout).not.toHaveBeenCalled();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    // ---------------------------------------------------------------
+    // Confirming before discarding unsaved work. Cancel, switching layouts,
+    // New layout and Delete layout all reach the same shared prompt — see
+    // `## Design`'s "Leaving edit mode with unsaved work" — asked exactly
+    // when a write would differ from the entry snapshot, string for string.
+    // ---------------------------------------------------------------
+
+    it("closes edit mode without asking when Cancel is pressed on an untouched session", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON)).toBeNull();
+    });
+
+    it("asks before discarding when Cancel is pressed with unsaved canvas changes, and declining leaves the user editing with them intact", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+      await addSection(element);
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+
+      const moved = recordFocusMoves();
+      element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
+      await flush();
+
+      // Asked, not silently discarded: still editing, the change still on
+      // screen, and — reusing the same inline-prompt idiom the naming and
+      // delete confirmations already use, per criterion 6 — the same
+      // `.rstk-nav-layout-prompt` container and `alertdialog` role the
+      // delete confirmation renders with.
+      const dialog = element.shadowRoot.querySelector(
+        ".rstk-nav-layout-prompt[role='alertdialog']"
+      );
+      expect(dialog).not.toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+      // Finding 2: focus moves into the dialog deliberately (never onto
+      // "Discard changes"), and the live region announces it — the Cancel
+      // button that opened it survives the render, which is exactly the
+      // "inherited, not measurably broken" half of the finding, but nothing
+      // was reaching a screen reader either way before this pass.
+      expect(moved[moved.length - 1]).toBe(keepEditingButton(element));
+      expect(announcement(element)).toBe(DISCARD_ANNOUNCEMENT);
+
+      keepEditingButton(element).click();
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
+      expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    it("confirming the discard prompt on Cancel throws the unsaved changes away and leaves edit mode", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+      await addSection(element);
+
+      element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
+      await flush();
+      discardConfirmButton(element).click();
+      await flush();
+
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).toBeNull();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Criterion 5: whether there is anything to lose is exact string equality
+     * on the canonical payload, not a dirty flag that could disagree with it.
+     * A change made and then undone back to precisely the entry snapshot's
+     * own value has nothing left for a write to differ about, so Cancel
+     * closes exactly as it does on a session nothing ever touched.
+     */
+    it("closes without asking when a change is undone back to exactly its entry value", async () => {
+      const element = await storedNavigator();
+      expect(renderedColumns(element, 0)).toBe(2);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+      selectSectionMenuItem(element, 0, "columns-2");
+      await flush();
+      expect(renderedColumns(element, 0)).toBe(2);
+
+      element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+    });
+
+    it("asks before discarding when New layout is chosen with unsaved canvas changes, and declining leaves the draft in place", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      const input = element.shadowRoot.querySelector(
+        ".rstk-nav-layout-prompt__input"
+      );
+      input.dispatchEvent(
+        new CustomEvent("change", { detail: { value: "Weekly review" } })
+      );
+      const moved = recordFocusMoves();
+      input.dispatchEvent(new CustomEvent("commit"));
+      await flush();
+
+      // The naming prompt's own commit does not create on the spot: there is
+      // a draft to lose, so the shared discard prompt intervenes first.
+      expect(discardConfirmButton(element)).not.toBeNull();
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      // Finding 2: `closePrompt()` destroyed the naming input that held
+      // focus before this dialog opened in its place, so without an explicit
+      // hand-off focus falls to `document.body` here — the measured case,
+      // not just the inherited one.
+      expect(moved[moved.length - 1]).toBe(keepEditingButton(element));
+      expect(announcement(element)).toBe(DISCARD_ANNOUNCEMENT);
+
+      keepEditingButton(element).click();
+      await flush();
+
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(layoutMenu(element).label).toBe("My Navigator");
+      // Finding 4: declining does not lose the name already typed. The
+      // naming prompt reopens with it rather than leaving the user to reopen
+      // "New layout…" and retype.
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input").value
+      ).toBe("Weekly review");
+    });
+
+    it("confirming the discard prompt on New layout throws the draft away and creates the named layout", async () => {
+      createLayout.mockResolvedValue({
+        layoutId: CREATED_LAYOUT_ID,
+        name: "Weekly review",
+        isActive: true
+      });
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+      discardConfirmButton(element).click();
+      await flush();
+      await flush();
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      // Addressed to New layout's own seed, never to the six-column draft
+      // that was thrown away — `createNewLayout` seeds from the live tab
+      // list, not from the discarded canvas.
+      expect(
+        JSON.parse(createLayout.mock.calls[0][0].layoutJson).sections[0].columns
+      ).toBe(3);
+      expect(layoutMenu(element).label).toBe("Weekly review");
+      expect(sectionNames(element)).toEqual(["All Items"]);
+    });
+
+    it("a genuine Cancel on the reopened New layout prompt closes it, rather than reopening it again", async () => {
+      // Finding 4's fix reopens PROMPT_NEW on decline and hands the typed
+      // name back in. Both the reopened prompt's "Cancel" and the discard
+      // prompt's "Keep editing" reach the same `handleLayoutPromptCancel` —
+      // so if `pendingDiscardAction` were left set after the reopen, a real
+      // Cancel here would misread itself as still declining a discard and
+      // reopen PROMPT_NEW a second time instead of closing.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+      keepEditingButton(element).click();
+      await flush();
+
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Cancel")
+        .click();
+      await flush();
+
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
+      ).toBeNull();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("a genuine Cancel on Rename layout closes it, not a discard action Escape left stale by closing the prompt directly", async () => {
+      // Finding 2 of the re-review: the fix above made `handleLayoutPromptCancel`
+      // read `pendingDiscardAction` *before* it knows which prompt is open,
+      // which put a live reader of that field on every dialog's Cancel, not
+      // only the reopened New layout prompt's own. Escape closes the discard
+      // prompt through `handleLayoutPromptKeydown` -> `closePrompt()`
+      // directly, never through `handleLayoutPromptCancel` — so
+      // `closePrompt()`'s own clear of `pendingDiscardAction` is the only
+      // thing stopping a later, unrelated dialog's Cancel from misreading
+      // the action Escape left behind as its own decline.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+      expect(discardConfirmButton(element)).not.toBeNull();
+
+      element.shadowRoot.querySelector(".rstk-nav-layout-prompt").dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true
+        })
+      );
+      await flush();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
+      ).toBeNull();
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input")
+      ).not.toBeNull();
+
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Cancel")
+        .click();
+      await flush();
+
+      // The rename prompt closes. Without `closePrompt()`'s clear, this
+      // would instead reopen New layout with "Weekly review" still in it —
+      // the exact reproduction the finding measured.
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
+      ).toBeNull();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("choosing Rename layout while the discard prompt is still open replaces it, and its own Cancel closes rather than bringing New layout back", async () => {
+      // Third fix pass, finding A: unlike the Escape route above, which
+      // closes the discard prompt through `handleLayoutPromptKeydown` ->
+      // `closePrompt()`, `handleLayoutMenuSelect`'s three Tier 2 branches
+      // (New layout, Rename layout, Delete layout) call `openPrompt`
+      // directly, with no `closePrompt()` first. Picking one of them while
+      // the discard prompt is showing used to *replace* it without going
+      // through the one place `pendingDiscardAction` was cleared, so the
+      // replacement dialog's own Cancel read the stale action and reopened
+      // New layout instead of closing. One mouse click, nothing async, and
+      // no mutation needed — this reproduces on unfixed code as-is.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+      expect(discardConfirmButton(element)).not.toBeNull();
+
+      // Instead of Escape: the layout switcher stays rendered beside the
+      // discard prompt throughout, with no backdrop and no focus trap, so
+      // Rename layout… is one click away from here.
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      const renamePrompt = element.shadowRoot.querySelector(
+        ".rstk-nav-layout-prompt"
+      );
+      expect(renamePrompt.getAttribute("aria-label")).toBe(
+        "Rename My Navigator"
+      );
+
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Cancel")
+        .click();
+      await flush();
+
+      // On unfixed code this comes back as New layout's own prompt,
+      // labelled "Name for the new layout" with "Weekly review" still in the
+      // input — the stale `pendingDiscardAction` the sibling-open route left
+      // behind, read by this same Cancel button.
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
+      ).toBeNull();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("announces the delete confirmation and focuses Cancel when Delete layout is chosen with nothing unsaved", async () => {
+      // Finding 3 of the re-review: `PROMPT_DELETE` is the shape
+      // `PROMPT_DISCARD` was built by copying — same container, same
+      // `role="alertdialog"`, same `onkeydown` — but the first fix pass gave
+      // only the copy a focus-and-announce treatment and left the original
+      // exactly as silent and unfocused as it always was, which made the one
+      // irreversible confirmation in this component the one that reached a
+      // screen-reader user as nothing.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      const moved = recordFocusMoves();
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+
+      const dialog = element.shadowRoot.querySelector(
+        ".rstk-nav-layout-prompt[role='alertdialog']"
+      );
+      expect(dialog).not.toBeNull();
+      const cancelButton = Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      ).find((button) => button.label === "Cancel");
+      // Focus lands on "Cancel", never "Delete layout" — the same "not the
+      // control that commits" reasoning the discard prompt's own focus
+      // target already uses, so a stray Enter cannot fire the destructive
+      // act.
+      expect(moved[moved.length - 1]).toBe(cancelButton);
+      expect(announcement(element)).toBe(
+        "Delete My Navigator? You will go back to seeing every tab you can reach in one section."
+      );
+    });
+
+    it("asks before discarding when Delete layout is confirmed with unsaved canvas changes, and declining leaves the draft in place", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      const moved = recordFocusMoves();
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Delete layout")
+        .click();
+      await flush();
+
+      // Delete layout's own confirmation does not delete on the spot: there
+      // is a draft to lose, so the shared discard prompt intervenes first.
+      expect(discardConfirmButton(element)).not.toBeNull();
+      expect(deleteLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      // Finding 2: `closePrompt()` destroyed the "Delete layout" button that
+      // held focus before this dialog opened in its place, so without an
+      // explicit hand-off focus falls to `document.body` here too.
+      expect(moved[moved.length - 1]).toBe(keepEditingButton(element));
+      expect(announcement(element)).toBe(DISCARD_ANNOUNCEMENT);
+
+      keepEditingButton(element).click();
+      await flush();
+
+      expect(deleteLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(sectionNames(element)).toEqual(["Daily work"]);
+    });
+
+    it("confirming the discard prompt on Delete layout throws the draft away and deletes the layout", async () => {
+      deleteLayout.mockResolvedValue([]);
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Delete layout")
+        .click();
+      await flush();
+      discardConfirmButton(element).click();
+      await flush();
+      await flush();
+
+      expect(deleteLayout).toHaveBeenCalledWith({
+        layoutId: EXISTING_LAYOUT_ID
+      });
+      expect(updateLayout).not.toHaveBeenCalled();
+      // Back to the seeded arrangement, not to the discarded six-column draft.
+      expect(sectionNames(element)).toEqual(["All Items"]);
+    });
+
+    // ---------------------------------------------------------------
+    // Tier 2 inside an edit session: committed on the spot, and Cancel
+    // does not reach it. The seam is deliberate — see the spec's Traps.
+    // ---------------------------------------------------------------
+
+    it("commits a layout rename made inside an edit session, and a later Cancel does not take it back", async () => {
+      renameLayout.mockResolvedValue({
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "Cases"
+      });
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await commitLayoutName(element, "Cases");
+
+      expect(renameLayout).toHaveBeenCalledWith({
+        layoutId: EXISTING_LAYOUT_ID,
+        name: "Cases"
+      });
+
+      await cancelEdits(element);
+
+      expect(layoutMenu(element).label).toBe("Cases");
+    });
+
+    it("commits a rename made inside an edit session by a user who owns no layout row yet", async () => {
+      // The one Tier 2 act with no Apex call of its own: a user with no row is
+      // renamed by the write that creates the row, which is the autosave — and
+      // the autosave writes nothing in edit mode. Left to the debounce this
+      // rename would sit behind a Save it is not supposed to wait for, and be
+      // thrown away by a Cancel that is not supposed to reach it.
+      //
+      // A canvas change is made *before* the rename, per the spec's trap: a
+      // rename committed against the current canvas rather than the entry
+      // snapshot would carry that unsaved change onto the server the moment
+      // the layout was named — the exact write Cancel is supposed to be able
+      // to undo. A test that renames without first changing the canvas is
+      // green whether or not that bug exists, because there is nothing yet
+      // for the two payloads to disagree about.
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+      await addSection(element);
+      expect(sectionNames(element)).toEqual(["All Items", "New section"]);
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await commitLayoutName(element, "Daily driver");
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(createLayout.mock.calls[0][0].name).toBe("Daily driver");
+      // The payload is the entry snapshot — the canvas as it stood before
+      // "New section" was pressed — never the draft the canvas is showing.
+      const written = createLayout.mock.calls[0][0].layoutJson;
+      expect(
+        JSON.parse(written).sections.map((section) => section.name)
+      ).toEqual(["All Items"]);
+
+      await cancelEdits(element);
+
+      // The row this write created holds the snapshot's payload, and Cancel
+      // must land on it: the section added after the write, and thrown away
+      // by Cancel, is gone — and the layout the row now names is not.
+      expect(layoutMenu(element).label).toBe("Daily driver");
+      expect(sectionNames(element)).toEqual(["All Items"]);
+
+      // Remounted on the payload the write actually captured, so the section
+      // added and then cancelled is confirmed gone on the server, not merely
+      // absent from a canvas that could have been rebuilt from the seed.
+      document.body.removeChild(element);
+      jest.runOnlyPendingTimers();
+      await flush();
+      getLayouts.mockResolvedValue([
+        {
+          layoutId: CREATED_LAYOUT_ID,
+          name: "Daily driver",
+          isActive: true,
+          isReadable: true,
+          layoutJson: written
+        }
+      ]);
+      const reloaded = await navigatorWithTabs();
+
+      expect(sectionNames(reloaded)).toEqual(["All Items"]);
+    });
+
+    /**
+     * Re-review finding A. `commitLayoutNow` calls `captureSaveTarget`
+     * synchronously, and that reads `this.layoutId` — which stays `undefined`
+     * for a user with no row until the rename's create round trip lands. A
+     * Save pressed before it lands must not be captured with `layoutId:
+     * undefined` too, or it becomes a second `createLayout` and the user ends
+     * up with two rows, the server's active flag on whichever lands last.
+     * The first Apex call is deferred so the second act can be made inside
+     * the wait, per the spec's trap on this exact hazard.
+     *
+     * **Updated for the sixth pass's lockout (Jonah's decision, 2026-08-31).**
+     * A Save pressed in this window used to *wait* on the rename's create and
+     * land automatically once it resolved — `commitLayoutNow`'s coalescing
+     * mechanism, finding A's own fix. `isWriteLocked` disables Save outright
+     * for as long as the rename's create is outstanding, so that Save press
+     * is now a no-op rather than a queued wait: nothing lands until the user
+     * presses Save again, which they can once the lock clears. What the
+     * mechanism used to do automatically, the lockout now makes into two
+     * explicit user actions — but the outcome finding A cared about is the
+     * same: never a second row, and the row that exists ends up holding the
+     * full canvas.
+     */
+    it("Save is blocked while a no-row rename's create is still in flight, and updates that row once pressed again after it lands", async () => {
+      let releaseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = () =>
+              resolve({
+                layoutId: CREATED_LAYOUT_ID,
+                name: "Daily driver",
+                isActive: true
+              });
+          })
+      );
+      updateLayout.mockImplementationOnce(({ layoutId, name, layoutJson }) =>
+        Promise.resolve({ layoutId, name, layoutJson, isActive: true })
+      );
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+      await addSection(element);
+      expect(sectionNames(element)).toEqual(["All Items", "New section"]);
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      await commitLayoutName(element, "Daily driver");
+
+      // The rename's create has been issued and is being held open.
+      expect(createLayout).toHaveBeenCalledTimes(1);
+
+      // Save, pressed while that create is still open: blocked, not queued.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
+      await saveEdits(element);
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).not.toHaveBeenCalled();
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
+
+      // The lock has cleared: Save is available again, and pressing it now
+      // is what actually commits the canvas.
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        false
+      );
+      await saveEdits(element);
+
+      // At most one row: the second write landed as an update of the row the
+      // first one created, never as a create of its own.
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).toHaveBeenCalledTimes(1);
+      expect(updateLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ layoutId: CREATED_LAYOUT_ID })
+      );
+      expect(layoutMenu(element).label).toBe("Daily driver");
+      expect(
+        Array.from(
+          element.shadowRoot.querySelectorAll("lightning-menu-item")
+        ).filter((entry) => entry.checked)
+      ).toHaveLength(1);
+      // Save's write is what landed: the section added after the rename
+      // survives, because Save committed the full canvas onto the row the
+      // rename created.
+      expect(sectionNames(element)).toEqual(["All Items", "New section"]);
+    });
+
+    it("commits a layout created inside an edit session, and a later Cancel leaves the new layout on screen", async () => {
+      createLayout.mockResolvedValue({
+        layoutId: CREATED_LAYOUT_ID,
+        name: "Weekly review",
+        isActive: true
+      });
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(layoutMenu(element).label).toBe("Weekly review");
+      expect(sectionNames(element)).toEqual(["All Items"]);
+
+      await cancelEdits(element);
+
+      // Cancel reverts the canvas to what it was on entry — and after a Tier 2
+      // act replaced the canvas wholesale, "on entry" is the created layout's
+      // canvas. Restoring the pre-create snapshot here would paint the old
+      // layout's sections onto the new layout and hold them as unwritten draft.
+      expect(layoutMenu(element).label).toBe("Weekly review");
+      expect(sectionNames(element)).toEqual(["All Items"]);
+    });
+
+    it("commits a layout deletion made inside an edit session, and a later Cancel does not bring it back", async () => {
+      deleteLayout.mockResolvedValue([]);
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Delete layout")
+        .click();
+      await flush();
+      await flush();
+
+      expect(deleteLayout).toHaveBeenCalledWith({
+        layoutId: EXISTING_LAYOUT_ID
+      });
+      expect(sectionNames(element)).toEqual(["All Items"]);
+
+      await cancelEdits(element);
+
+      expect(sectionNames(element)).toEqual(["All Items"]);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    // ---------------------------------------------------------------
+    // Re-review finding D: a Tier 2 prompt cannot outlive the mode that
+    // opened it. The inline prompt renders on `hasItems`, not on `isEditing`,
+    // so leaving edit mode used to leave it standing, with its commit and its
+    // confirm button both still wired to act.
+    // ---------------------------------------------------------------
+
+    it("closes an open delete-layout prompt when Cancel ends edit mode, so the confirm button cannot act", async () => {
+      // Reproduced: enter edit mode, open "Delete layout…", press Cancel —
+      // the affordance comes back, and the confirmation used to still be on
+      // screen with a working button.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      expect(
+        element.shadowRoot.querySelector('[role="alertdialog"]')
+      ).not.toBeNull();
+
+      await cancelEdits(element);
+
+      expect(
+        element.shadowRoot.querySelector('[role="alertdialog"]')
+      ).toBeNull();
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+      expect(deleteLayout).not.toHaveBeenCalled();
+    });
+
+    it("closes an open rename prompt when Save ends edit mode, so a stray commit does not fire afterward", async () => {
+      // New layout and Rename layout leak the same way, through
+      // `handleLayoutNameCommit` — this drives the naming prompt through the
+      // other exit route, Save, so both handlers and both routes out of the
+      // mode are covered between the two tests.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input")
+      ).not.toBeNull();
+
+      await saveEdits(element);
+
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input")
+      ).toBeNull();
+      expect(renameLayout).not.toHaveBeenCalled();
+    });
+
+    // ---------------------------------------------------------------
+    // Accessibility: both transitions are announced, and both move focus
+    // ---------------------------------------------------------------
+
+    it("announces entering edit mode, and announces leaving it by either route", async () => {
+      const element = await storedNavigator();
+
+      await enterEditMode(element);
+      expect(announcement(element)).toBe(ENTER_ANNOUNCEMENT);
+
+      await cancelEdits(element);
+      expect(announcement(element)).toBe(CANCEL_ANNOUNCEMENT);
+
+      // A real change, so this Save is a write — the no-op case is its own
+      // test below, and must not share this one's announcement.
+      await enterEditMode(element);
+      await addSection(element);
+      await saveEdits(element);
+      expect(announcement(element)).toBe(SAVE_ANNOUNCEMENT);
+    });
+
+    it("announces that nothing was saved when Save is pressed with no changes, not a save that did not happen", async () => {
+      // The guard that correctly stops the write does not, on its own, reach
+      // the sentence: the live region is the one channel a screen-reader user
+      // has, and `CANCEL_ANNOUNCEMENT` is already worded as a fact about the
+      // write rather than about the changes. Save has to hold itself to that
+      // same standard, or this is the one path on which it lies about having
+      // saved.
+      const element = await storedNavigator();
+
+      await enterEditMode(element);
+      await saveEdits(element);
+
+      expect(announcement(element)).toBe(CANCEL_ANNOUNCEMENT);
+      expect(createLayout).not.toHaveBeenCalled();
+      expect(updateLayout).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Critique finding A. `announce()` sets one reactive property, so two
+     * calls made without an `await` between them collapse into one render —
+     * only the second is ever flushed. `handleEditSave` calls `beginWrite()`
+     * (which used to announce the busy message unconditionally) and then,
+     * synchronously in the same handler, announces its own outcome — so the
+     * busy message could never have reached a screen reader for Save, held
+     * open or not. `beginWrite({ announceLock: false })` makes that the
+     * decision it always should have been rather than an accident of call
+     * order.
+     *
+     * The rendered text cannot tell "one call" from "two calls, the first
+     * overwritten" apart — both end on `SAVE_ANNOUNCEMENT`. `SalesforceNavigator.prototype`
+     * is frozen once a component instance exists (LWC's own doing, checked
+     * directly: `Object.getOwnPropertyDescriptor` reports non-writable,
+     * non-configurable after `createElement`+`appendChild`), so `announce`
+     * cannot be spied on **from this file** — not from the repo at large,
+     * only from a suite that has already mounted 558 instances by the time
+     * this test runs, which is exactly what freezes the prototype before
+     * this describe ever gets a turn. Corrected here: an earlier version of
+     * this comment claimed spying was unavailable outright, and that
+     * over-broad claim was carried into this slice's own `## Deviations`
+     * record too. `announcementNonce`'s parity is what is read here
+     * instead, and it is weaker than it looks: it constrains the
+     * announcement count *modulo two*, not to one — three calls ending on
+     * the outcome would leave this test green too. It is still worth
+     * keeping, because parity is load-bearing for the "two identical
+     * sentences" case this component relies on elsewhere: it flips on
+     * every call, so an odd number of calls since the last read (Save's
+     * own, alone) flips it and an even number (busy, then outcome) leaves
+     * it exactly where it started.
+     * `salesforceNavigator.announceLog.test.js` installs the module-scope
+     * prototype wrap this file cannot, before *its own* first
+     * `createElement`, and pins the stronger claim this test's name always
+     * meant directly off the call log: Save announces exactly once, and it
+     * is the outcome.
+     */
+    it("announces only Save's own outcome, never the busy message, even while the write is held open", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+      await addSection(element);
+
+      let releaseUpdate;
+      updateLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseUpdate = () =>
+              resolve({ layoutId: EXISTING_LAYOUT_ID, isActive: true });
+          })
+      );
+
+      const nonceChar = String.fromCharCode(0x200b);
+      const region = element.shadowRoot.querySelector(".rstk-nav-announcer");
+      const nonceBefore = region.textContent.includes(nonceChar);
+
+      element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).click();
+      await flush();
+
+      const nonceAfter = region.textContent.includes(nonceChar);
+      expect(nonceAfter).toBe(!nonceBefore);
+      expect(announcement(element)).toBe(SAVE_ANNOUNCEMENT);
+
+      releaseUpdate();
+      await flush();
+      await flush();
+
+      // `endWrite()` announces nothing of its own — the outcome already said
+      // what happened, and the parity from just now still holds.
+      expect(region.textContent.includes(nonceChar)).toBe(nonceAfter);
+      expect(announcement(element)).toBe(SAVE_ANNOUNCEMENT);
+    });
+
+    /**
+     * Critique finding B. The reasoning against announcing when the lock
+     * *clears* is sound and untouched by this test: `endWrite()` still
+     * announces nothing. What it missed is the case where the lock is still
+     * *held* on entry — Save is the only one of the four writing controls
+     * that leaves edit mode while its own write is outstanding, so a user
+     * can re-enter before that write lands and reach a session whose primary
+     * action is already `disabled`, told nothing about it at any point.
+     */
+    it("announces that an earlier save is still finishing when edit mode is re-entered while locked", async () => {
+      let releaseUpdate;
+      updateLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseUpdate = () =>
+              resolve({ layoutId: EXISTING_LAYOUT_ID, isActive: true });
+          })
+      );
+      const element = await storedNavigator();
+      await enterEditMode(element);
+      await addSection(element);
+      await saveEdits(element);
+
+      // Save has already left edit mode; its own write is still open.
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+
+      await enterEditMode(element);
+
+      expect(announcement(element)).toBe(ENTER_LOCKED_ANNOUNCEMENT);
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
+
+      releaseUpdate();
+      await flush();
+      await flush();
+    });
+
+    it("moves focus to the first revealed control on entry, and back to the edit affordance on the way out", async () => {
+      // Entering destroys the element that had focus — the affordance is
+      // replaced, not joined — so focus falls to document.body unless it is
+      // moved explicitly. Invisible to a mouse user, immediate to anyone else.
+      const element = await storedNavigator();
+      const moved = recordFocusMoves();
+
+      await enterEditMode(element);
+
+      expect(moved[moved.length - 1]).toBe(
+        element.shadowRoot.querySelector(NEW_SECTION_BUTTON)
+      );
+      // Not Save. A stray Enter on the control that has just taken focus must
+      // not commit the session.
+      expect(moved).not.toContain(
+        element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)
+      );
+
+      await cancelEdits(element);
+
+      expect(moved[moved.length - 1]).toBe(
+        element.shadowRoot.querySelector(EDIT_AFFORDANCE)
+      );
+
+      // Save is the other route out, and it is order-dependent in a way
+      // Cancel above never exercises: `beginWrite` assigns `EDIT_FOCUS_LOCK`
+      // and `leaveEditMode` assigns `EDIT_FOCUS_LEAVE` in the same handler,
+      // so whichever statement runs second decides where focus lands.
+      // Neither exit above goes through Save, and Cancel never calls
+      // `beginWrite` at all, so nothing until now pinned this ordering.
+      await enterEditMode(element);
+      await addSection(element);
+      await saveEdits(element);
+
+      expect(moved[moved.length - 1]).toBe(
+        element.shadowRoot.querySelector(EDIT_AFFORDANCE)
+      );
+    });
+
+    it("ends any in-flight keyboard grab when edit mode ends", async () => {
+      // A correctness bug rather than a nicety. `renderedCallback` restores
+      // focus to a grabbed card *by index*, so a grab left standing after the
+      // mode ends re-asserts itself on the very render that is supposed to
+      // hand focus back to the edit affordance — and, running second, wins.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+      const moved = recordFocusMoves();
+
+      querySections(element)[0]
+        .shadowRoot.querySelector("article")
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", cancelable: true })
+        );
+      await flush();
+
+      await cancelEdits(element);
+
+      expect(moved[moved.length - 1]).toBe(
+        element.shadowRoot.querySelector(EDIT_AFFORDANCE)
+      );
+    });
+
+    // ---------------------------------------------------------------
+    // The lockout (sixth pass, Jonah's decision, 2026-08-31)
+    // ---------------------------------------------------------------
+
+    function menuItemDisabled(element, value) {
+      const item = Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).find((entry) => entry.value === value);
+      return item ? item.disabled === true : undefined;
+    }
+
+    it("disables Save, New layout and Rename layout while New layout's own create is outstanding, and clears them once it lands", async () => {
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+
+      let releaseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = () =>
+              resolve({
+                layoutId: CREATED_LAYOUT_ID,
+                name: "Weekly review",
+                isActive: true
+              });
+          })
+      );
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
+      expect(menuItemDisabled(element, "new-layout")).toBe(true);
+      expect(menuItemDisabled(element, "rename-layout")).toBe(true);
+
+      releaseCreate();
+      await flush();
+      await flush();
+
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        false
+      );
+      expect(menuItemDisabled(element, "new-layout")).toBe(false);
+      expect(menuItemDisabled(element, "rename-layout")).toBe(false);
+    });
+
+    it("moves focus to the layout switcher when New layout's own create leaves it disabled without leaving edit mode", async () => {
+      // New layout does not leave edit mode, unlike Save — so it cannot rely
+      // on the pencil hand-off `EDIT_FOCUS_LEAVE` gives Save. The prompt it
+      // was pressed from closes (`closePrompt()`) without restoring focus on
+      // its own, so the switcher — the control that opened the prompt in the
+      // first place — is where the deliberate hand-off has to land, or focus
+      // falls to `document.body`, Trap 3's hazard one control over.
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+
+      let releaseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = () =>
+              resolve({
+                layoutId: CREATED_LAYOUT_ID,
+                name: "Weekly review",
+                isActive: true
+              });
+          })
+      );
+
+      const moved = recordFocusMoves();
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+
+      expect(moved[moved.length - 1]).toBe(
+        element.shadowRoot.querySelector(".rstk-nav-layout-menu")
+      );
+
+      releaseCreate();
+      await flush();
+      await flush();
+    });
+
+    it("announces that the writing controls are unavailable while New layout's own create is outstanding, superseded once it lands", async () => {
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+
+      let releaseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = () =>
+              resolve({
+                layoutId: CREATED_LAYOUT_ID,
+                name: "Weekly review",
+                isActive: true
+              });
+          })
+      );
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+
+      expect(announcement(element)).toBe(WRITE_LOCK_ANNOUNCEMENT);
+
+      releaseCreate();
+      await flush();
+      await flush();
+
+      // Superseded once the create lands — a screen reader user is told
+      // what actually happened, not left holding the busy message.
+      expect(announcement(element)).toBe(
+        "Weekly review created and now showing."
+      );
+    });
+
+    /**
+     * Seventh pass, critique finding: `beginWrite()` in `handleEditSave` is a
+     * surviving mutant, and the regression it hides is walkable, not
+     * theoretical. Save is the only one of the four writing controls that
+     * leaves edit mode while its own write is still outstanding, and nothing
+     * disables the pencil in that window, so a user can re-enter edit mode
+     * and reach New layout inside the very round trip Save opened. Without
+     * `beginWrite()`, `writeInFlight` never leaves zero for Save's own write,
+     * `isWriteLocked` stays false through the re-entry, and New layout is
+     * free to open and commit — a second `createLayout` for a user who owned
+     * none.
+     */
+    it("does not let New layout open while Save's own no-row create is still outstanding, even after re-entering edit mode", async () => {
+      let releaseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = () =>
+              resolve({
+                layoutId: CREATED_LAYOUT_ID,
+                name: "My Navigator",
+                isActive: true
+              });
+          })
+      );
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+      await addSection(element);
+
+      await saveEdits(element);
+
+      // Save's own create is issued and held open, and Save has already left
+      // edit mode — nothing disables the pencil while that write is still in
+      // flight.
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+
+      await enterEditMode(element);
+
+      // New layout, attempted inside the window Save's own create opened:
+      // must be blocked exactly as it is when a Rename layout create is the
+      // one outstanding.
+      expect(menuItemDisabled(element, "new-layout")).toBe(true);
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input")
+      ).toBeNull();
+      expect(createLayout).toHaveBeenCalledTimes(1);
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
     });
   });
 });

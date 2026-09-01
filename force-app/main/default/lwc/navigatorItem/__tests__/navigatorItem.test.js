@@ -293,10 +293,91 @@ describe("c-navigator-item", () => {
   });
 
   describe("as a drag source", () => {
-    it("makes the anchor itself draggable, so the clickable link is the drag source", async () => {
+    it("makes the anchor itself draggable in edit mode, so the clickable link is the drag source", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 2, editing: true })
+      );
+
+      // The value, not merely the presence: `draggable` is bound rather than
+      // static now, so the attribute is on the anchor either way — only its
+      // value says whether a drag can start.
+      expect(anchorOf(element).getAttribute("draggable")).toBe("true");
+      expect(anchorOf(element).draggable).toBe(true);
+    });
+
+    it('reports draggable="false" out of edit mode, rather than removing the attribute', async () => {
+      // The one place `lwc:if` absence is deliberately not used: a browser
+      // and an assistive technology both need to be told this element is not
+      // draggable, not merely left to infer it from the attribute's absence.
+      // `editing` defaults to false, so this is the out-of-the-box state.
       const element = await settled(createNavigatorItem({ index: 2 }));
 
-      expect(anchorOf(element).draggable).toBe(true);
+      expect(anchorOf(element).hasAttribute("draggable")).toBe(true);
+      expect(anchorOf(element).getAttribute("draggable")).toBe("false");
+      expect(anchorOf(element).draggable).toBe(false);
+    });
+
+    it('coerces an explicit undefined `editing` to draggable="false" rather than failing open', async () => {
+      // The setter stores whatever it is handed across the `@api` boundary.
+      // Bind `editing` to an expression that resolves `undefined` and LWC
+      // drops the attribute from the template entirely — it never reaches
+      // this component as the string `"false"`, it arrives as the value
+      // `undefined`. An uncoerced setter then leaves `draggable={editing}`
+      // bound to `undefined`, which LWC also renders as an absent attribute
+      // — and a real `<a href>` is natively draggable, so `anchor.draggable`
+      // reads `true`, the opposite of what an absent binding should mean
+      // for a gate whose default is "not draggable".
+      const element = await settled(
+        createNavigatorItem({ index: 2, editing: undefined })
+      );
+
+      expect(anchorOf(element).hasAttribute("draggable")).toBe(true);
+      expect(anchorOf(element).getAttribute("draggable")).toBe("false");
+      expect(anchorOf(element).draggable).toBe(false);
+    });
+
+    it("carries the grab-cursor class only in edit mode", async () => {
+      // The cursor used to sit unconditionally on `.rstk-nav-item`; it now
+      // lives on this class instead, so a link that reports
+      // draggable="false" does not also invite a drag with its cursor —
+      // exactly the visual clutter the Intent names, and it misleads
+      // besides. `editing` defaults to false, so this starts in the
+      // out-of-the-box state.
+      const element = await settled(createNavigatorItem({ index: 2 }));
+
+      expect(
+        anchorOf(element).classList.contains("rstk-nav-item_editing")
+      ).toBe(false);
+
+      element.editing = true;
+      await Promise.resolve();
+
+      expect(
+        anchorOf(element).classList.contains("rstk-nav-item_editing")
+      ).toBe(true);
+    });
+
+    it("keeps the grab cursor off the base rule, so it cannot leak out of edit mode", () => {
+      // jsdom applies no stylesheet, so this cannot be proven by computed
+      // style — see `lwc-jest-ceilings.md`. What can be proven is the
+      // shipped CSS text itself: `cursor` has to live on the
+      // `editing`-conditional class rather than on `.rstk-nav-item`, or
+      // every anchor would show the grab cursor regardless of the class
+      // above. `^` anchors the base-rule match to the start of a line,
+      // because `.rstk-nav-item__row .rstk-nav-item {` further up this file
+      // also contains the substring `.rstk-nav-item {` and would otherwise
+      // match instead of the real base rule.
+      const css = readFileSync(
+        join(__dirname, "..", "navigatorItem.css"),
+        "utf8"
+      );
+      const baseRule = css.match(/^\.rstk-nav-item\s*\{[^}]*\}/m);
+      const editingRule = css.match(/\.rstk-nav-item_editing\s*\{[^}]*\}/);
+
+      expect(baseRule).not.toBeNull();
+      expect(baseRule[0]).not.toMatch(/cursor\s*:/);
+      expect(editingRule).not.toBeNull();
+      expect(editingRule[0]).toContain("cursor: grab");
     });
 
     it("re-emits dragstart as a CustomEvent carrying its own index", async () => {
@@ -330,8 +411,13 @@ describe("c-navigator-item", () => {
 
     it("accepts a drop by cancelling dragover, which is what makes it a drop target", async () => {
       // Without preventDefault() on dragover the browser never fires drop at
-      // all, so this is the whole mechanism rather than a detail.
-      const element = await settled(createNavigatorItem({ index: 1 }));
+      // all, so this is the whole mechanism rather than a detail. This is an
+      // in-edit-mode concern — out of edit mode dragover is not cancelled at
+      // all; see "does not advertise itself as a drop target out of edit
+      // mode" below.
+      const element = await settled(
+        createNavigatorItem({ index: 1, editing: true })
+      );
       const handler = jest.fn();
       element.addEventListener("itemdragover", handler);
 
@@ -347,7 +433,10 @@ describe("c-navigator-item", () => {
       // getData() returns "" during dragover in every browser by the HTML
       // spec's protected mode, so the authoritative drag state is kept in JS
       // and the payload here is the *destination*, which this item knows.
-      const element = await settled(createNavigatorItem({ index: 3 }));
+      // In edit mode, for the same reason as the dragover test above.
+      const element = await settled(
+        createNavigatorItem({ index: 3, editing: true })
+      );
       const handler = jest.fn();
       element.addEventListener("itemdrop", handler);
 
@@ -356,6 +445,68 @@ describe("c-navigator-item", () => {
 
       expect(event.defaultPrevented).toBe(true);
       expect(handler.mock.calls[0][0].detail).toEqual({ index: 3 });
+    });
+
+    it("does not advertise itself as a drop target out of edit mode", async () => {
+      // Unlike a drag *source* — where the design deliberately trusts the
+      // browser to refuse a drag on `draggable="false"` rather than adding a
+      // second guard — a drop *target* has no such attribute to lean on.
+      // `dragover` is native default-prevented or it isn't; nothing about
+      // this anchor's own markup stops a foreign drag (a file, a link, a
+      // text selection) from being offered a "move" cursor here unless the
+      // handler itself declines. `editing` defaults to false, so this is the
+      // out-of-the-box state. This is the item's half of the same gate
+      // `navigatorSection.test.js` pins for the card — the item covers most
+      // of a card's own surface, so it carries more of this than the card
+      // does.
+      const element = await settled(createNavigatorItem({ index: 1 }));
+
+      const event = dragEvent("dragover");
+      anchorOf(element).dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    it("does not dispatch a drop out of edit mode either, and keeps the event off whatever is outside it", async () => {
+      // Corrected on the third fix pass: this comment used to say the
+      // card's own `handleCardDrop` was safely left ungated, because a real
+      // browser never fires `drop` at all once the preceding `dragover`
+      // went uncancelled. That reasoning was correct and did not
+      // distinguish the card from this anchor — a re-review ran the
+      // identical probe against the card and got the identical result, so
+      // `handleCardDrop` is gated the same way now too.
+      //
+      // What actually keeps a drop on this anchor from being read a second
+      // time by the card is `stopPropagation()` firing unconditionally,
+      // ahead of the `editing` check, rather than after it as this handler
+      // used to have it — a composed-level probe found that the old
+      // ordering let an out-of-edit-mode drop bubble straight past this
+      // anchor to the section's `<article>` and land there instead; see
+      // `salesforceNavigator.test.js`'s "does not move an item across
+      // sections when dropped on another item out of edit mode, and writes
+      // nothing" for that composed proof. This unit-level pin checks the
+      // same fact the cheapest way jsdom can show it: `event.cancelBubble`
+      // does not survive past the end of `dispatchEvent` in this
+      // environment even when `stopPropagation()` was genuinely called
+      // (verified independently, outside this suite), so the only real
+      // observable is whether a listener *outside* this component's own
+      // shadow tree ever sees the event — the same shape as the
+      // `stopPropagation`/no-`stopPropagation` sanity pair that motivated
+      // this pin's design.
+      const element = await settled(createNavigatorItem({ index: 1 }));
+      const handler = jest.fn();
+      element.addEventListener("itemdrop", handler);
+      const escaped = jest.fn();
+      document.body.addEventListener("drop", escaped);
+
+      const event = dragEvent("drop");
+      anchorOf(element).dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(handler).not.toHaveBeenCalled();
+      expect(escaped).not.toHaveBeenCalled();
+
+      document.body.removeEventListener("drop", escaped);
     });
 
     it("announces the end of a drag so a drag that dropped on nothing clears state", async () => {
@@ -387,8 +538,13 @@ describe("c-navigator-item", () => {
   });
 
   describe("as a keyboard drag source", () => {
+    // Every gesture below needs `editing: true` now: `handleDragKeydown`
+    // returns early, unconsumed, when the item is not in edit mode — see
+    // "out of edit mode" below for the gate itself.
     it("grabs on Space, and swallows the key so the page does not scroll", async () => {
-      const element = await settled(createNavigatorItem({ index: 2 }));
+      const element = await settled(
+        createNavigatorItem({ index: 2, editing: true })
+      );
       const handler = jest.fn();
       element.addEventListener("itemgrab", handler);
 
@@ -401,7 +557,7 @@ describe("c-navigator-item", () => {
 
     it("drops on the second Space, rather than grabbing again", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 2, grabbed: true })
+        createNavigatorItem({ index: 2, grabbed: true, editing: true })
       );
       const grab = jest.fn();
       const drop = jest.fn();
@@ -421,7 +577,7 @@ describe("c-navigator-item", () => {
       ["ArrowRight", 1]
     ])("moves one place on %s while grabbed", async (key, delta) => {
       const element = await settled(
-        createNavigatorItem({ index: 1, grabbed: true })
+        createNavigatorItem({ index: 1, grabbed: true, editing: true })
       );
       const handler = jest.fn();
       element.addEventListener("itemkeymove", handler);
@@ -452,7 +608,7 @@ describe("c-navigator-item", () => {
 
     it("cancels on Escape while grabbed", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 1, grabbed: true })
+        createNavigatorItem({ index: 1, grabbed: true, editing: true })
       );
       const handler = jest.fn();
       element.addEventListener("itemkeycancel", handler);
@@ -466,16 +622,36 @@ describe("c-navigator-item", () => {
 
     it("holds focus against Tab while grabbed, and releases it when not", async () => {
       const grabbed = await settled(
-        createNavigatorItem({ index: 0, grabbed: true })
+        createNavigatorItem({ index: 0, grabbed: true, editing: true })
       );
       const tabWhileGrabbed = keydown("Tab");
       anchorOf(grabbed).dispatchEvent(tabWhileGrabbed);
       expect(tabWhileGrabbed.defaultPrevented).toBe(true);
 
-      const free = await settled(createNavigatorItem({ index: 0 }));
+      const free = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
       const tabWhileFree = keydown("Tab");
       anchorOf(free).dispatchEvent(tabWhileFree);
       expect(tabWhileFree.defaultPrevented).toBe(false);
+    });
+
+    it("does not grab on Space out of edit mode, and lets the key through", async () => {
+      // `editing` defaults to false. Gating `draggable` in the template is
+      // not enough on its own: `onkeydown` still fires on a non-draggable
+      // element, so the grab has to be refused here too, in JS, or Space
+      // would still pick the item up for a keyboard user with no pointer
+      // equivalent — the asymmetry `lwc-accessible-interactions.md` exists
+      // to catch.
+      const element = await settled(createNavigatorItem({ index: 2 }));
+      const handler = jest.fn();
+      element.addEventListener("itemgrab", handler);
+
+      const event = keydown(" ");
+      anchorOf(element).dispatchEvent(event);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
     });
 
     it("does not navigate on a click or an Enter while grabbed", async () => {
@@ -539,7 +715,13 @@ describe("c-navigator-item", () => {
     });
 
     it("attaches the instruction text only while grabbed, never permanently", async () => {
-      const element = await settled(createNavigatorItem({ index: 0 }));
+      // Mounted in edit mode: the resting hint this test's own comment
+      // relies on (below) is gated on `editing` as of this spec's third fix
+      // pass, and this test's subject — the instructions node's own
+      // grabbed-only lifecycle — is independent of that gate.
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
 
       // The anchor is described at rest — by the four-word hint, tested
       // below — so the criterion is about *this* node: the instruction text
@@ -585,7 +767,14 @@ describe("c-navigator-item", () => {
       // grabbed — arrive too late to be the thing that teaches the gesture.
       // A terse, permanent hint is what closes that. Terse deliberately: it
       // is read on every focus, and a bare org shows ~174 items.
-      const element = await settled(createNavigatorItem({ index: 0 }));
+      //
+      // Mounted in edit mode: the hint is gated on `editing` as of this
+      // spec's third fix pass — see "does not tell a keyboard user to press
+      // a key that does nothing, out of edit mode" below for the out-of-mode
+      // half this test used to cover by omission.
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
 
       const hint = element.shadowRoot.querySelector(".rstk-nav-item__hint");
       expect(hint).not.toBeNull();
@@ -608,7 +797,13 @@ describe("c-navigator-item", () => {
       // The grabbed state must win outright. Two description nodes on one
       // anchor would have a screen reader read the teaser and the
       // instructions back to back on every arrow press.
-      const element = await settled(createNavigatorItem({ index: 0 }));
+      //
+      // Mounted in edit mode for the same reason as the hint test above: the
+      // hint at rest only renders while editing, and this test's own second
+      // half (grabbed released, hint expected back) needs it to.
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
 
       element.grabbed = true;
       await settled(element);
@@ -637,12 +832,37 @@ describe("c-navigator-item", () => {
       );
     });
 
+    it("does not tell a keyboard user to press a key that does nothing, out of edit mode", async () => {
+      // Finding 2 of the third fix pass. The resting hint used to be gated
+      // on `{grabbed}` alone, so out of edit mode every anchor still carried
+      // `aria-describedby` pointing at "Press Space to move." — byte-
+      // identical to edit mode — while `handleDragKeydown` returned early
+      // and Space did nothing. `editing` defaults to false, so this is the
+      // out-of-the-box state a screen reader user meets on first focus.
+      const element = await settled(createNavigatorItem({ index: 0 }));
+
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-item__hint")
+      ).toBeNull();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-item__instructions")
+      ).toBeNull();
+      expect(anchorOf(element).hasAttribute("aria-describedby")).toBe(false);
+    });
+
     it.each([false, true])(
       "uses neither aria-grabbed nor aria-dropeffect when grabbed is %s",
       async (grabbed) => {
         // Both are deprecated in ARIA 1.1+ and Salesforce's own reference
-        // implementation of this pattern uses neither.
-        const element = await settled(createNavigatorItem({ index: 0 }));
+        // implementation of this pattern uses neither. Mounted in edit mode
+        // because that is the one state where the anchor is genuinely a drag
+        // source regardless of `grabbed` — the fact the sanity check below
+        // pins. Out of edit mode `draggable` is still present but "false",
+        // which `toContain("draggable")` alone could not have told apart —
+        // asserting the value, not merely the attribute's presence.
+        const element = await settled(
+          createNavigatorItem({ index: 0, editing: true })
+        );
         element.grabbed = grabbed;
         await settled(element);
 
@@ -652,9 +872,10 @@ describe("c-navigator-item", () => {
 
         expect(attributes).not.toContain("aria-grabbed");
         expect(attributes).not.toContain("aria-dropeffect");
-        // The assertion is only worth anything if it is looking at real
-        // attributes at all.
-        expect(attributes).toContain("draggable");
+        // The assertion is only worth anything if it is looking at a real,
+        // genuinely-draggable anchor — regardless of `grabbed` — and not
+        // merely an attribute name that would be present either way.
+        expect(anchorOf(element).getAttribute("draggable")).toBe("true");
       }
     );
 
@@ -772,6 +993,99 @@ describe("c-navigator-item", () => {
     });
   });
 
+  /**
+   * `## Design`'s "Controls are absent from the DOM, not hidden": jsdom
+   * applies no stylesheet, so "renders no overflow menu" is provable only as
+   * absence from the DOM, never as a hidden-but-present element — the same
+   * reasoning the existing `isRenaming` test already demonstrates for the
+   * rename anchor, and the same the sibling `navigatorSection` gate already
+   * applies to its own header controls. `editing` is driven directly here,
+   * with the item mounted on its own, rather than through a section or the
+   * page — the same test entry point `## Design` names for both children.
+   */
+  describe("the edit-mode gate on this item's overflow menu", () => {
+    const TARGETS = [{ value: "1", label: "Selling" }];
+
+    function menuOf(element) {
+      return element.shadowRoot.querySelector("lightning-button-menu");
+    }
+
+    it("renders no overflow menu out of edit mode, so renaming, removing and moving it to another section are all unreachable", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: false, moveTargets: TARGETS })
+      );
+
+      expect(menuOf(element)).toBeNull();
+    });
+
+    it("renders the full overflow menu — Rename…, Remove and every destination — in edit mode", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
+      );
+
+      const values = Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).map((item) => item.value);
+      expect(values).toEqual(["rename", "remove", "move-to-1"]);
+      expect(menuOf(element)).not.toBeNull();
+    });
+
+    it("removes an already-rendered menu the moment edit mode ends", async () => {
+      // Mounted once, then flipped — not two separate mounts — so this proves
+      // the *transition* removes the menu, which a fresh mount at
+      // `editing: false` cannot distinguish from "never rendered it".
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
+      expect(menuOf(element)).not.toBeNull();
+
+      element.editing = false;
+      await settled(element);
+
+      expect(menuOf(element)).toBeNull();
+    });
+
+    it("cancels an in-progress rename when edit mode ends, so no rename input is left showing with no menu to close it", async () => {
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
+      menuOf(element).dispatchEvent(
+        new CustomEvent("select", { detail: { value: "rename" } })
+      );
+      await Promise.resolve();
+      expect(
+        element.shadowRoot.querySelector("lightning-input")
+      ).not.toBeNull();
+
+      element.editing = false;
+      await Promise.resolve();
+
+      expect(element.shadowRoot.querySelector("lightning-input")).toBeNull();
+      expect(anchorOf(element).textContent.trim()).toBe("Our Site");
+    });
+
+    it("still renders the link, clickable and navigable to the right place, out of edit mode", async () => {
+      // Criterion 4, pinned in the same fixture as the gate itself: the menu's
+      // absence must not be a side effect of the anchor's absence too.
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: false })
+      );
+
+      expect(menuOf(element)).toBeNull();
+      const anchor = anchorOf(element);
+      expect(anchor).not.toBeNull();
+      expect(anchor.getAttribute("href")).toBe("/lightning/o/Account/home");
+
+      anchor.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true })
+      );
+
+      expect(getNavigateCalledWith().pageReference).toEqual(
+        STORED_PAGE_REFERENCE
+      );
+    });
+  });
+
   describe("the Move to… menu", () => {
     // Arrow keys deliberately do not cross a section boundary — that is the
     // pattern, not an omission — so this menu is the cross-section mechanism,
@@ -805,7 +1119,7 @@ describe("c-navigator-item", () => {
 
     it("lists every destination it was given, under the label that section has", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
 
       expect(destinationsOf(element).map((item) => item.label)).toEqual([
@@ -821,7 +1135,7 @@ describe("c-navigator-item", () => {
       // menu withheld here would make renaming unreachable for exactly the
       // user who has never customised anything.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: [] })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: [] })
       );
 
       expect(destinationsOf(element)).toEqual([]);
@@ -833,7 +1147,7 @@ describe("c-navigator-item", () => {
 
     it("reports the chosen destination upward, with its own position", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 2, moveTargets: TARGETS })
+        createNavigatorItem({ index: 2, editing: true, moveTargets: TARGETS })
       );
       const handler = jest.fn();
       element.addEventListener("itemmoveto", handler);
@@ -857,7 +1171,12 @@ describe("c-navigator-item", () => {
       // and a menu move between them, so an arrow that crossed would be the
       // defect, not the feature.
       const element = await settled(
-        createNavigatorItem({ index: 1, moveTargets: TARGETS, grabbed: true })
+        createNavigatorItem({
+          index: 1,
+          moveTargets: TARGETS,
+          grabbed: true,
+          editing: true
+        })
       );
       const crossed = jest.fn();
       const within = jest.fn();
@@ -879,7 +1198,7 @@ describe("c-navigator-item", () => {
       // what is pinned is that the route is that component and not a div with
       // a click handler, which is the choice the keyboard criterion rests on.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
 
       expect(menuOf(element)).not.toBeNull();
@@ -893,7 +1212,7 @@ describe("c-navigator-item", () => {
       // announced only as "Show menu" leaves a screen reader user with a
       // column of identical buttons.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
 
       expect(menuOf(element).alternativeText).toContain("Our Site");
@@ -943,7 +1262,7 @@ describe("c-navigator-item", () => {
       // is the rename — a menu gated on having a destination would put this
       // out of reach of every user who has never made a section.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: [] })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: [] })
       );
 
       const values = Array.from(
@@ -956,6 +1275,7 @@ describe("c-navigator-item", () => {
       const element = await settled(
         createNavigatorItem({
           index: 0,
+          editing: true,
           label: "Clients",
           moveTargets: TARGETS
         })
@@ -991,7 +1311,7 @@ describe("c-navigator-item", () => {
 
       try {
         const element = await settled(
-          createNavigatorItem({ index: 0, moveTargets: TARGETS })
+          createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
         );
 
         await startRenaming(element);
@@ -1004,7 +1324,7 @@ describe("c-navigator-item", () => {
 
     it("reports the wording upward with its own position, on commit", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 2, moveTargets: TARGETS })
+        createNavigatorItem({ index: 2, editing: true, moveTargets: TARGETS })
       );
       const handler = jest.fn();
       element.addEventListener("itemrename", handler);
@@ -1024,7 +1344,7 @@ describe("c-navigator-item", () => {
 
     it("puts the item back under its anchor once the rename is committed", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
 
       const input = await startRenaming(element);
@@ -1040,7 +1360,7 @@ describe("c-navigator-item", () => {
       // A rename per keystroke would re-render the row under the caret and put
       // half-typed wording into the layout the autosave is about to write.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
       const handler = jest.fn();
       element.addEventListener("itemrename", handler);
@@ -1054,7 +1374,7 @@ describe("c-navigator-item", () => {
 
     it("keeps the wording it had when a rename is abandoned with Escape", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
       const handler = jest.fn();
       element.addEventListener("itemrename", handler);
@@ -1077,6 +1397,7 @@ describe("c-navigator-item", () => {
         const element = await settled(
           createNavigatorItem({
             index: 1,
+            editing: true,
             label: "Clients",
             moveTargets: TARGETS
           })
@@ -1102,7 +1423,7 @@ describe("c-navigator-item", () => {
       // platform label into the payload so a later org relabelling stopped
       // reaching it.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
       const handler = jest.fn();
       element.addEventListener("itemrename", handler);
@@ -1126,6 +1447,7 @@ describe("c-navigator-item", () => {
       const element = await settled(
         createNavigatorItem({
           index: 1,
+          editing: true,
           label: "Clients",
           moveTargets: TARGETS
         })
@@ -1155,7 +1477,7 @@ describe("c-navigator-item", () => {
       // over a template that left the anchor sitting there for a real user to
       // Tab onto and Space.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
       const grabbed = jest.fn();
       element.addEventListener("itemgrab", grabbed);
@@ -1205,7 +1527,9 @@ describe("c-navigator-item", () => {
       // fires the menu's own `select` event, and a menu with nothing in it
       // emits that just as happily as a full one — so the entry could be
       // deleted outright with the suite green.
-      const element = await settled(createNavigatorItem({ index: 0 }));
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
 
       expect(menuEntries(element)).toContainEqual(["remove", "Remove"]);
     });
@@ -1216,14 +1540,16 @@ describe("c-navigator-item", () => {
       // has never customised anything — every user, on first open. Same
       // reasoning as slice 06's always-present menu.
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: [] })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: [] })
       );
 
       expect(menuEntries(element)).toContainEqual(["remove", "Remove"]);
     });
 
     it("asks for its own removal, carrying its own position", async () => {
-      const element = await settled(createNavigatorItem({ index: 2 }));
+      const element = await settled(
+        createNavigatorItem({ index: 2, editing: true })
+      );
       const removed = jest.fn();
       element.addEventListener("itemremove", removed);
 
@@ -1236,7 +1562,9 @@ describe("c-navigator-item", () => {
     it("reports its own position and not a constant", async () => {
       // An item that reported `index: 0` would be indistinguishable from one
       // that reported itself in every fixture built at position 0.
-      const element = await settled(createNavigatorItem({ index: 4 }));
+      const element = await settled(
+        createNavigatorItem({ index: 4, editing: true })
+      );
       const removed = jest.fn();
       element.addEventListener("itemremove", removed);
 
@@ -1247,7 +1575,7 @@ describe("c-navigator-item", () => {
 
     it("does not confuse Remove with Rename or with a destination", async () => {
       const element = await settled(
-        createNavigatorItem({ index: 0, moveTargets: TARGETS })
+        createNavigatorItem({ index: 0, editing: true, moveTargets: TARGETS })
       );
       const removed = jest.fn();
       const moved = jest.fn();
@@ -1268,7 +1596,9 @@ describe("c-navigator-item", () => {
       // an unabandoned edit would arrive as an `itemrename` on a position
       // that by then names a different item. Abandoning first is what makes
       // the existing `isRenaming` guard swallow it.
-      const element = await settled(createNavigatorItem({ index: 0 }));
+      const element = await settled(
+        createNavigatorItem({ index: 0, editing: true })
+      );
       selectMenuItem(element, "rename");
       await Promise.resolve();
       const input = element.shadowRoot.querySelector("lightning-input");

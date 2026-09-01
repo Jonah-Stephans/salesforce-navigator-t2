@@ -26,7 +26,7 @@
         href={url}
         class={anchorClass}
         data-tab-id={tabId}
-        draggable="true"
+        draggable={editing}
         aria-label={label}
         aria-describedby={describedById}
         tabindex={fallbackTabIndex}
@@ -54,36 +54,50 @@
          mechanism, since arrow keys deliberately do not cross a section
          boundary.
 
-         The menu is always here, because Rename… is always available: the
-         seeded layout is a single section, so a menu withheld when there is
-         nowhere to move to would put renaming out of reach of exactly the user
-         who has never customised anything. The *destinations* are what come
-         and go, so nobody is offered a list that opens onto nothing. -->
-    <lightning-button-menu
-      class="rstk-nav-item__menu"
-      alternative-text={menuLabel}
-      icon-size="x-small"
-      menu-alignment="auto"
-      variant="border-filled"
-      onselect={handleMenuSelect}
-    >
-      <lightning-menu-item value="rename" label="Rename…"></lightning-menu-item>
-      <!-- Unconditional for the same reason Rename… is: the seeded layout is
-           a single section, so an entry withheld when there is nowhere to move
-           to would put removal out of reach of every user on first open. -->
-      <lightning-menu-item value="remove" label="Remove"></lightning-menu-item>
-      <template lwc:if={hasMoveTargets}>
-        <lightning-menu-divider></lightning-menu-divider>
-        <lightning-menu-subheader label="Move to…"></lightning-menu-subheader>
-        <template for:each={moveMenuItems} for:item="target">
-          <lightning-menu-item
-            key={target.value}
-            value={target.value}
-            label={target.label}
-          ></lightning-menu-item>
+         The menu is Tier 1 customisation and renders only in edit mode —
+         absent from the DOM via `lwc:if`, not hidden by CSS, so neither the
+         tab order nor a screen reader can reach Rename…, Remove or Move to…
+         while the Navigator is display-only. Once it does render, Rename…
+         and Remove stay unconditional within it, for the reason they always
+         have: the seeded layout is a single section, so a menu — or an entry
+         withheld inside it — would put renaming or removal out of reach of
+         exactly the user who has never customised anything. The
+         *destinations* are still what come and go, so nobody is offered a
+         list that opens onto nothing. -->
+    <template lwc:if={editing}>
+      <lightning-button-menu
+        class="rstk-nav-item__menu"
+        alternative-text={menuLabel}
+        icon-size="x-small"
+        menu-alignment="auto"
+        variant="border-filled"
+        onselect={handleMenuSelect}
+      >
+        <lightning-menu-item
+          value="rename"
+          label="Rename…"
+        ></lightning-menu-item>
+        <!-- Unconditional for the same reason Rename… is: the seeded layout is
+             a single section, so an entry withheld when there is nowhere to
+             move to would put removal out of reach of every user on first
+             open. -->
+        <lightning-menu-item
+          value="remove"
+          label="Remove"
+        ></lightning-menu-item>
+        <template lwc:if={hasMoveTargets}>
+          <lightning-menu-divider></lightning-menu-divider>
+          <lightning-menu-subheader label="Move to…"></lightning-menu-subheader>
+          <template for:each={moveMenuItems} for:item="target">
+            <lightning-menu-item
+              key={target.value}
+              value={target.value}
+              label={target.label}
+            ></lightning-menu-item>
+          </template>
         </template>
-      </template>
-    </lightning-button-menu>
+      </lightning-button-menu>
+    </template>
   </div>
 
   <!-- Exactly one description node is present at a time, and the anchor's
@@ -112,8 +126,11 @@
        not something a screen reader reads. Kept to four words on purpose —
        it is spoken on every focus, and a bare org shows around 174 items.
        It deliberately does not repeat the label; `aria-label` on the anchor
-       already carries that. -->
-  <template lwc:else>
+       already carries that. Rendered only in edit mode, as of this spec's
+       third fix pass — see `hintId` in navigatorItem.js — since out of edit
+       mode Space does nothing and this sentence would be false, not merely
+       early. -->
+  <template lwc:elseif={editing}>
     <span id={hintId} class="slds-assistive-text rstk-nav-item__hint">
       Press Space to move.
     </span>

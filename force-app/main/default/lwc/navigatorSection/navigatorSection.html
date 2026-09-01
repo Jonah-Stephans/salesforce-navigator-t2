@@ -5,8 +5,8 @@
        is never read as picking up the whole card. -->
   <article
     class={cardClass}
-    draggable="true"
-    tabindex="0"
+    draggable={editing}
+    tabindex={cardTabIndex}
     aria-label={cardLabel}
     aria-describedby={instructionsId}
     ondragstart={handleCardDragStart}
@@ -38,64 +38,71 @@
         <h2 class="rstk-nav-section__title" title={cardLabel}>{name}</h2>
       </template>
 
-      <!-- The one route into the picker. A button rather than an entry in the
-           overflow menu beside it, because it is the section's primary action
-           and the only way an item that has been removed comes back — and
-           because the empty state below names it, which it could not do if it
-           were hidden behind a menu.
+      <!-- Both controls below are Tier 1 customisation and render only in
+           edit mode — absent from the DOM via `lwc:if`, not hidden by CSS, so
+           neither the tab order nor a screen reader can reach "Add items" or
+           the overflow menu (and so renaming, changing the column count and
+           deleting the section) while the Navigator is display-only. -->
+      <template lwc:if={editing}>
+        <!-- The one route into the picker. A button rather than an entry in
+             the overflow menu beside it, because it is the section's primary
+             action and the only way an item that has been removed comes back
+             — and because the empty state below names it, which it could not
+             do if it were hidden behind a menu.
 
-           Hand-rolled rather than a `lightning-button`, which is the same
-           pattern — and the same reason — as the picker's own entries. The
-           section's name has to be in the button's *content*: a button's
-           accessible name comes from its content before its `title`
-           (HTML-AAM), and `lightning-button` exposes no `aria-label`
-           passthrough, so its only content is `label`, which is also what a
-           sighted user reads. Putting the name there prints it a second time
-           in a header that already shows it. An assistive-text span inside
-           the button is content too, so the name is "Add items to Selling"
-           while the visible wording stays "Add items". The cost, taken
-           deliberately: SLDS 2 adoption on this one control is now ours, in
-           `navigatorSection.css`. No `title` — it would be byte-identical to
-           the name the button already announces, and where an AT voices
-           `title` as the accessible *description* the user hears the same
-           sentence twice. -->
-      <button
-        type="button"
-        class="rstk-nav-section__add"
-        onclick={handleAddItems}
-      >
-        {addItemsText}<span class="slds-assistive-text"
-          >{addItemsAssistive}</span
+             Hand-rolled rather than a `lightning-button`, which is the same
+             pattern — and the same reason — as the picker's own entries. The
+             section's name has to be in the button's *content*: a button's
+             accessible name comes from its content before its `title`
+             (HTML-AAM), and `lightning-button` exposes no `aria-label`
+             passthrough, so its only content is `label`, which is also what a
+             sighted user reads. Putting the name there prints it a second time
+             in a header that already shows it. An assistive-text span inside
+             the button is content too, so the name is "Add items to Selling"
+             while the visible wording stays "Add items". The cost, taken
+             deliberately: SLDS 2 adoption on this one control is now ours, in
+             `navigatorSection.css`. No `title` — it would be byte-identical to
+             the name the button already announces, and where an AT voices
+             `title` as the accessible *description* the user hears the same
+             sentence twice. -->
+        <button
+          type="button"
+          class="rstk-nav-section__add"
+          onclick={handleAddItems}
         >
-      </button>
+          {addItemsText}<span class="slds-assistive-text"
+            >{addItemsAssistive}</span
+          >
+        </button>
 
-      <lightning-button-menu
-        alternative-text={name}
-        icon-size="x-small"
-        menu-alignment="auto"
-        variant="border-filled"
-        onselect={handleMenuSelect}
-      >
-        <lightning-menu-item
-          value="rename"
-          label="Rename section…"
-        ></lightning-menu-item>
-        <lightning-menu-divider></lightning-menu-divider>
-        <lightning-menu-subheader label="Columns"></lightning-menu-subheader>
-        <template for:each={columnChoices} for:item="choice">
+        <lightning-button-menu
+          alternative-text={name}
+          icon-size="x-small"
+          menu-alignment="auto"
+          variant="border-filled"
+          onselect={handleMenuSelect}
+        >
           <lightning-menu-item
-            key={choice.value}
-            value={choice.value}
-            label={choice.label}
-            checked={choice.checked}
+            value="rename"
+            label="Rename section…"
           ></lightning-menu-item>
-        </template>
-        <lightning-menu-divider></lightning-menu-divider>
-        <lightning-menu-item
-          value="delete"
-          label="Delete section"
-        ></lightning-menu-item>
-      </lightning-button-menu>
+          <lightning-menu-divider></lightning-menu-divider>
+          <lightning-menu-subheader label="Columns"></lightning-menu-subheader>
+          <template for:each={columnChoices} for:item="choice">
+            <lightning-menu-item
+              key={choice.value}
+              value={choice.value}
+              label={choice.label}
+              checked={choice.checked}
+            ></lightning-menu-item>
+          </template>
+          <lightning-menu-divider></lightning-menu-divider>
+          <lightning-menu-item
+            value="delete"
+            label="Delete section"
+          ></lightning-menu-item>
+        </lightning-button-menu>
+      </template>
     </header>
 
     <ul class={gridClass}>
@@ -108,6 +115,7 @@
             index={item.index}
             grabbed={item.isGrabbed}
             move-targets={moveTargets}
+            editing={editing}
             onitemdragstart={handleItemDragStart}
             onitemdragover={handleItemDragOver}
             onitemdrop={handleItemDrop}
@@ -125,10 +133,13 @@
     </ul>
 
     <!-- A user who removes every item from a section must not be left looking
-         at a blank card wondering whether they have broken something. The
-         message says both halves: that the section is empty, and the way out
-         of it — which is the Add items button in this card's own header, named
-         so the sentence points at something the user can see. -->
+         at a blank card wondering whether they have broken something. In edit
+         mode the message says both halves: that the section is empty, and the
+         way out of it — which is the Add items button in this card's own
+         header, named so the sentence points at something the user can see.
+         Out of edit mode that button is not on screen (it is Tier 1
+         customisation, gated above), so `emptyMessage` drops the second half
+         rather than point at a control the user cannot reach. -->
     <template lwc:if={isEmpty}>
       <p class="rstk-nav-section__empty">{emptyMessage}</p>
     </template>

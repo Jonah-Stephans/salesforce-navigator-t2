@@ -26,31 +26,93 @@
             checked={choice.checked}
           ></lightning-menu-item>
         </template>
-        <lightning-menu-divider></lightning-menu-divider>
-        <lightning-menu-item
-          value="new-layout"
-          label="New layout…"
-        ></lightning-menu-item>
-        <lightning-menu-item
-          value="rename-layout"
-          label="Rename layout…"
-        ></lightning-menu-item>
-        <!-- Absent, not disabled, for a user with no stored layout: there is
-             nothing to delete, and an entry that cannot do what it says is
-             worse than one that is not offered. -->
-        <template lwc:if={canDeleteLayout}>
+        <!-- The Tier 2 / Tier 3 split, rendered inside one control. Choosing
+             which saved layout you are looking at is navigation and stays
+             available always; naming, creating and deleting layouts is
+             customisation and is gated with everything else. Absent from the
+             DOM rather than disabled, so neither the tab order nor a screen
+             reader can reach an entry the user is not being offered. -->
+        <!-- Sixth pass: New layout, Rename layout and Delete layout are three
+             of the four writing controls the lockout disables while any of
+             them has a round trip outstanding — `disabled`, not `lwc:if`,
+             because this is a transient busy state rather than a mode; the
+             opposite of the absence rule the gate itself uses elsewhere, and
+             deliberately so. See `isWriteLocked`. -->
+        <template lwc:if={isEditing}>
+          <lightning-menu-divider></lightning-menu-divider>
           <lightning-menu-item
-            value="delete-layout"
-            label="Delete layout…"
+            value="new-layout"
+            label="New layout…"
+            disabled={isWriteLocked}
           ></lightning-menu-item>
+          <lightning-menu-item
+            value="rename-layout"
+            label="Rename layout…"
+            disabled={isWriteLocked}
+          ></lightning-menu-item>
+          <!-- Absent, not disabled, for a user with no stored layout: there is
+               nothing to delete, and an entry that cannot do what it says is
+               worse than one that is not offered. -->
+          <template lwc:if={canDeleteLayout}>
+            <lightning-menu-item
+              value="delete-layout"
+              label="Delete layout…"
+              disabled={isWriteLocked}
+            ></lightning-menu-item>
+          </template>
         </template>
       </lightning-button-menu>
 
-      <lightning-button
-        slot="actions"
-        label="New section"
-        onclick={handleAddSection}
-      ></lightning-button>
+      <!-- The top right, in its two states. In edit mode:
+           [ switcher ] [ New section ] [ Cancel ] [ Save ]. Out of it:
+           [ switcher ] [ edit ]. The affordance is *replaced* by Save and
+           Cancel rather than joined by them, so there is exactly one way to
+           leave the mode from the action row; Save carries `variant="brand"`
+           and sits last, per the SLDS convention that the primary action in an
+           action row is the rightmost one. -->
+      <template lwc:if={isEditing}>
+        <lightning-button
+          slot="actions"
+          class="rstk-nav-new-section"
+          label="New section"
+          onclick={handleAddSection}
+        ></lightning-button>
+        <lightning-button
+          slot="actions"
+          class="rstk-nav-edit-cancel"
+          label="Cancel"
+          onclick={handleEditCancel}
+        ></lightning-button>
+        <!-- The fourth writing control the lockout disables — see the note
+             above the layout menu's New/Rename/Delete entries. Cancel is
+             deliberately not one of them: it does not write, and Tier 2's
+             own seam already means Cancel does not reach a Tier 2 act
+             outstanding here regardless of the lockout. -->
+        <lightning-button
+          slot="actions"
+          class="rstk-nav-edit-save"
+          label="Save"
+          variant="brand"
+          disabled={isWriteLocked}
+          onclick={handleEditSave}
+        ></lightning-button>
+      </template>
+      <template lwc:else>
+        <!-- Rendered on `canEdit` alone, which is the one control here that
+             is: a Navigator whose stored layout could not be read must offer
+             no way into a mode that could not save. `alternative-text` is not
+             optional on an icon-only button — without it a screen reader
+             announces the only route into customisation as nothing at all. -->
+        <lightning-button-icon
+          slot="actions"
+          class="rstk-nav-edit"
+          icon-name="utility:edit"
+          variant="border-filled"
+          alternative-text="Edit Navigator"
+          title="Edit Navigator"
+          onclick={handleEditStart}
+        ></lightning-button-icon>
+      </template>
     </template>
 
     <template lwc:if={isLoading}>
@@ -132,7 +194,15 @@
       <template lwc:elseif={isConfirmingLayoutDelete}>
         <!-- `alertdialog` rather than a bare div: a delete is destructive and
              the confirmation has to reach a screen reader user as a decision
-             to make, not as text that appeared somewhere on the page. -->
+             to make, not as text that appeared somewhere on the page.
+
+             As of the second fix pass: `handleLayoutMenuSelect`'s
+             `DELETE_LAYOUT` branch announces this text through the live
+             region as well, and `focusLayoutPrompt()` moves focus into
+             "Cancel" once this renders — the same treatment the discard
+             confirmation below already had, given to its twin so the one
+             irreversible confirmation in this component is not also the one
+             that reaches a screen-reader user as nothing. -->
         <div
           class="rstk-nav-layout-prompt"
           role="alertdialog"
@@ -145,8 +215,51 @@
             variant="destructive"
             onclick={handleLayoutDeleteConfirm}
           ></lightning-button>
+          <!-- `focusLayoutPrompt()` targets this class deliberately: the
+               safe default, never "Delete layout", so a stray Enter on the
+               control that just took focus cannot fire the destructive act. -->
           <lightning-button
+            class="rstk-nav-delete-cancel"
             label="Cancel"
+            onclick={handleLayoutPromptCancel}
+          ></lightning-button>
+        </div>
+      </template>
+      <template lwc:elseif={isConfirmingDiscard}>
+        <!-- The shared discard-confirmation prompt: Cancel, switching to a
+             different saved layout, New layout and Delete layout all reach
+             this one dialog rather than each growing its own, per
+             `## Design`'s "Leaving edit mode with unsaved work" — the same
+             inline-prompt idiom the two prompts above already use, borrowing
+             `PROMPT_DELETE`'s input-less shape rather than adding a third
+             dialog mechanism beside this one and the item picker's
+             `LightningModal`. `alertdialog`, for the same reason the delete
+             confirmation above is one: a screen reader user needs this to
+             read as a decision to make, not as text that appeared.
+
+             As of the fix pass: `openDiscardPrompt()` announces this text
+             through the live region as well, and `focusLayoutPrompt()` moves
+             focus into "Keep editing" once this renders — an `alertdialog`
+             nothing focuses and nothing announces is exactly the failure
+             `lwc-accessible-interactions.md` was written against. -->
+        <div
+          class="rstk-nav-layout-prompt"
+          role="alertdialog"
+          aria-label="Discard unsaved changes"
+          onkeydown={handleLayoutPromptKeydown}
+        >
+          <p class="rstk-nav-layout-prompt__text">{discardPromptMessage}</p>
+          <lightning-button
+            label="Discard changes"
+            variant="destructive"
+            onclick={handleDiscardConfirm}
+          ></lightning-button>
+          <!-- `focusLayoutPrompt()` targets this class deliberately: the
+               safe default, never "Discard changes", so a stray Enter on the
+               control that just took focus cannot fire the destructive act. -->
+          <lightning-button
+            class="rstk-nav-discard-keep-editing"
+            label="Keep editing"
             onclick={handleLayoutPromptCancel}
           ></lightning-button>
         </div>
@@ -167,6 +280,7 @@
             key={section.key}
             class={section.spanClass}
             section={section}
+            editing={isEditing}
             grabbed={section.isGrabbed}
             item-drag-active={isItemDragActive}
             onsectionrename={handleSectionRename}

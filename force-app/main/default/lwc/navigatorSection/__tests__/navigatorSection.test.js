@@ -43,11 +43,12 @@ function resolvedSection({ name = "Selling", columns = 3, itemIds } = {}) {
   )[0];
 }
 
-function createSection(section) {
+function createSection(section, { editing = false } = {}) {
   const element = createElement("c-navigator-section", {
     is: NavigatorSection
   });
   element.section = section || resolvedSection();
+  element.editing = editing;
   document.body.appendChild(element);
   return element;
 }
@@ -152,6 +153,12 @@ function selectMenuItem(element, value) {
   );
 }
 
+// Shared with the "adding and removing items" describe block below and with
+// the edit-mode gate tests: both need to find the same hand-rolled button.
+function addButtonOf(element) {
+  return element.shadowRoot.querySelector(".rstk-nav-section__add");
+}
+
 describe("c-navigator-section", () => {
   afterEach(() => {
     while (document.body.firstChild) {
@@ -187,6 +194,22 @@ describe("c-navigator-section", () => {
     expect(
       element.shadowRoot.querySelector(".rstk-nav-section__empty")
     ).not.toBeNull();
+  });
+
+  it("says only that the section is empty out of edit mode, since there is no button to point at", () => {
+    // `emptyMessage` used to name the Add items button unconditionally, but
+    // that button is Tier 1 customisation and is gated out of the DOM out of
+    // edit mode — so the sentence was telling a display-only user to press a
+    // control that does not exist. `createSection`'s default is
+    // `editing: false`, the state this component renders in most of the
+    // time, so this is the empty state most users actually see.
+    const element = createSection(resolvedSection({ itemIds: [] }));
+
+    const empty = element.shadowRoot.querySelector(".rstk-nav-section__empty");
+    expect(empty).not.toBeNull();
+    expect(empty.textContent).toContain("no items");
+    expect(empty.textContent).not.toContain("Add items");
+    expect(addButtonOf(element)).toBeNull();
   });
 
   it.each([1, 2, 3, 4, 5, 6])(
@@ -239,7 +262,7 @@ describe("c-navigator-section", () => {
   // tests for the ones that can actually fail on that.
 
   it("offers exactly one column choice per supported count, and no others", () => {
-    const element = createSection();
+    const element = createSection(undefined, { editing: true });
 
     const values = Array.from(
       element.shadowRoot.querySelectorAll("lightning-menu-item")
@@ -258,7 +281,9 @@ describe("c-navigator-section", () => {
   });
 
   it("asks its parent to set the column count when a column choice is made", () => {
-    const element = createSection(resolvedSection({ columns: 2 }));
+    const element = createSection(resolvedSection({ columns: 2 }), {
+      editing: true
+    });
     const handler = jest.fn();
     element.addEventListener("sectioncolumns", handler);
 
@@ -278,7 +303,7 @@ describe("c-navigator-section", () => {
       },
       TABS
     );
-    const element = createSection(twoSections[1]);
+    const element = createSection(twoSections[1], { editing: true });
     const handler = jest.fn();
     element.addEventListener("sectiondelete", handler);
 
@@ -291,7 +316,7 @@ describe("c-navigator-section", () => {
   });
 
   it("renames the section on commit, carrying the typed name", async () => {
-    const element = createSection();
+    const element = createSection(undefined, { editing: true });
     const handler = jest.fn();
     element.addEventListener("sectionrename", handler);
 
@@ -318,7 +343,7 @@ describe("c-navigator-section", () => {
     // Every change dispatched upstream would be a rename per keystroke. The
     // autosave would coalesce the writes, but the section header would
     // re-render on every character and the caret would jump.
-    const element = createSection();
+    const element = createSection(undefined, { editing: true });
     const handler = jest.fn();
     element.addEventListener("sectionrename", handler);
 
@@ -333,7 +358,7 @@ describe("c-navigator-section", () => {
   });
 
   it("keeps the name it had when a rename is abandoned with Escape", async () => {
-    const element = createSection();
+    const element = createSection(undefined, { editing: true });
     const handler = jest.fn();
     element.addEventListener("sectionrename", handler);
 
@@ -352,6 +377,95 @@ describe("c-navigator-section", () => {
     expect(handler).not.toHaveBeenCalled();
     expect(element.shadowRoot.querySelector("lightning-input")).toBeNull();
     expect(element.shadowRoot.querySelector("h2").textContent).toBe("Selling");
+  });
+
+  describe("the edit-mode gate on this card's header controls", () => {
+    // `## Design`'s "Controls are absent from the DOM, not hidden": jsdom
+    // applies no stylesheet, so "renders no customisation control" is
+    // provable only as absence from the DOM, never as a hidden-but-present
+    // element — the same reasoning `isRenaming` already demonstrates for the
+    // rename anchor.
+    it("renders no Add items button and no overflow menu out of edit mode", () => {
+      const element = createSection(undefined, { editing: false });
+
+      expect(addButtonOf(element)).toBeNull();
+      expect(menuOf(element)).toBeNull();
+    });
+
+    it("renders the Add items button and the full overflow menu — rename, every column count and delete — in edit mode", () => {
+      const element = createSection(undefined, { editing: true });
+
+      expect(addButtonOf(element)).not.toBeNull();
+      const values = Array.from(
+        element.shadowRoot.querySelectorAll("lightning-menu-item")
+      ).map((item) => item.value);
+      expect(values).toEqual([
+        "rename",
+        "columns-1",
+        "columns-2",
+        "columns-3",
+        "columns-4",
+        "columns-5",
+        "columns-6",
+        "delete"
+      ]);
+    });
+
+    it("removes an already-rendered Add items button and overflow menu the moment edit mode ends", async () => {
+      // Mounted once, then flipped — not two separate mounts — so this proves
+      // the *transition* removes the controls, which a fresh mount at
+      // `editing: false` cannot distinguish from "never rendered them".
+      const element = createSection(undefined, { editing: true });
+      expect(addButtonOf(element)).not.toBeNull();
+      expect(menuOf(element)).not.toBeNull();
+
+      element.editing = false;
+      await Promise.resolve();
+
+      expect(addButtonOf(element)).toBeNull();
+      expect(menuOf(element)).toBeNull();
+    });
+
+    it("cancels an in-progress rename when edit mode ends, so no rename input is left showing with no menu to close it", async () => {
+      // The overflow menu is the only route into `isRenaming`. Once it is
+      // gone, nothing else on this card would ever put the heading back — so
+      // the flag that hides the menu has to close the rename along with it.
+      const element = createSection(undefined, { editing: true });
+      selectMenuItem(element, "rename");
+      await Promise.resolve();
+      expect(
+        element.shadowRoot.querySelector("lightning-input")
+      ).not.toBeNull();
+
+      element.editing = false;
+      await Promise.resolve();
+
+      expect(element.shadowRoot.querySelector("lightning-input")).toBeNull();
+      expect(element.shadowRoot.querySelector("h2").textContent).toBe(
+        "Selling"
+      );
+    });
+
+    it("clears an in-flight keyboard grab on one of its items when edit mode ends", async () => {
+      // Criterion 6. A stale `grabbedItemIndex` left behind by the mode
+      // ending would leave `keepFocusOnGrabbedItem` in `renderedCallback`
+      // chasing an item that can no longer be dragged at all — `editing`
+      // says so — and would leave that item still rendering as grabbed (its
+      // `rstk-nav-item_grabbed` class, its drag instructions) with no live
+      // gesture behind either.
+      const element = createThree();
+      element.editing = true;
+      await Promise.resolve();
+
+      fire(itemsOf(element)[1], "itemgrab", { index: 1 });
+      await Promise.resolve();
+      expect(itemsOf(element)[1].grabbed).toBe(true);
+
+      element.editing = false;
+      await Promise.resolve();
+
+      expect(itemsOf(element).some((item) => item.grabbed)).toBe(false);
+    });
   });
 
   describe("reordering its items", () => {
@@ -750,15 +864,120 @@ describe("c-navigator-section", () => {
       return element.shadowRoot.querySelector("article");
     }
 
-    it("makes the section card itself draggable and focusable", () => {
-      const card = cardOf(createSection());
+    it("makes the section card itself draggable and focusable in edit mode", () => {
+      const card = cardOf(createSection(undefined, { editing: true }));
 
+      // The value, not merely the presence: `draggable` is bound rather than
+      // static now, so the attribute is on the card either way — only its
+      // value says whether a drag can start.
+      expect(card.getAttribute("draggable")).toBe("true");
       expect(card.draggable).toBe(true);
       expect(card.getAttribute("tabindex")).toBe("0");
     });
 
-    it("tells its parent when its own card is picked up and dropped on", () => {
+    it("is not draggable and not a tab stop out of edit mode", () => {
+      // The one place `lwc:if` absence is deliberately not used for
+      // `draggable`: a browser and an assistive technology both need to be
+      // told this card is not draggable, not merely left to infer it from
+      // the attribute's absence. `tabindex` is a getter for the same reason
+      // — a card that cannot be grabbed should not be a tab stop, so a
+      // keyboard user moving through the panel stops only on links.
+      const card = cardOf(createSection());
+
+      expect(card.hasAttribute("draggable")).toBe(true);
+      expect(card.getAttribute("draggable")).toBe("false");
+      expect(card.draggable).toBe(false);
+      expect(card.getAttribute("tabindex")).toBe("-1");
+    });
+
+    it('coerces an explicit undefined `editing` to draggable="false" rather than failing open', () => {
+      // `createSection`'s default parameter can't reach this case — a
+      // caller-supplied `editing: undefined` falls through to its own
+      // `= false` default, which is exactly the uncoerced value this pins
+      // against. Bind `editing` to an expression that resolves `undefined`
+      // and LWC drops the attribute from the template entirely, so this
+      // component receives the value `undefined` across the `@api`
+      // boundary, not the string `"false"`. An uncoerced setter then leaves
+      // `draggable={editing}` bound to `undefined` too, which LWC also
+      // renders as an absent attribute — and this card carries no native
+      // draggable default of its own the way an `<a href>` does, but the
+      // setter must not depend on that; see the `navigatorItem` sibling of
+      // this test, where the native default does fail open.
+      const element = createElement("c-navigator-section", {
+        is: NavigatorSection
+      });
+      element.section = resolvedSection();
+      element.editing = undefined;
+      document.body.appendChild(element);
+
+      const card = cardOf(element);
+      expect(card.hasAttribute("draggable")).toBe(true);
+      expect(card.getAttribute("draggable")).toBe("false");
+      expect(card.draggable).toBe(false);
+    });
+
+    it("carries the grab-cursor class only in edit mode", async () => {
+      // The cursor used to sit unconditionally on `.rstk-nav-section`; it
+      // now lives on this class instead, so a card that reports
+      // draggable="false" does not also invite a drag with its cursor —
+      // exactly the visual clutter the Intent names, and it misleads
+      // besides. `editing` defaults to false, so this starts in the
+      // out-of-the-box state.
       const element = createSection();
+
+      expect(
+        cardOf(element).classList.contains("rstk-nav-section_editing")
+      ).toBe(false);
+
+      element.editing = true;
+      await Promise.resolve();
+
+      expect(
+        cardOf(element).classList.contains("rstk-nav-section_editing")
+      ).toBe(true);
+    });
+
+    it("keeps the grab cursor off the base rule, so it cannot leak out of edit mode", () => {
+      // jsdom applies no stylesheet, so this cannot be proven by computed
+      // style — see `lwc-jest-ceilings.md`. What can be proven is the
+      // shipped CSS text itself: `cursor` has to live on the
+      // `editing`-conditional class rather than on `.rstk-nav-section`, or
+      // every card would show the grab cursor regardless of the class
+      // above.
+      const css = readFileSync(
+        join(__dirname, "..", "navigatorSection.css"),
+        "utf8"
+      );
+      const baseRule = css.match(/^\.rstk-nav-section\s*\{[^}]*\}/m);
+      const editingRule = css.match(/\.rstk-nav-section_editing\s*\{[^}]*\}/);
+
+      expect(baseRule).not.toBeNull();
+      expect(baseRule[0]).not.toMatch(/cursor\s*:/);
+      expect(editingRule).not.toBeNull();
+      expect(editingRule[0]).toContain("cursor: grab");
+    });
+
+    it("does not grab the card on Space out of edit mode, and lets the key through", () => {
+      const element = createSection();
+      const grab = jest.fn();
+      element.addEventListener("sectiongrab", grab);
+
+      const event = new KeyboardEvent("keydown", {
+        key: " ",
+        cancelable: true
+      });
+      cardOf(element).dispatchEvent(event);
+
+      expect(grab).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    it("tells its parent when its own card is picked up and dropped on", () => {
+      // In edit mode: criterion 4 requires the pointer-drag mechanism to
+      // work exactly as it does today, and `over.defaultPrevented` is what
+      // makes the browser fire `drop` at all — the card has to advertise
+      // itself as a drop target for its own reorder to work.
+      const element = createSection(undefined, { editing: true });
       const start = jest.fn();
       const drop = jest.fn();
       element.addEventListener("sectiondragstart", start);
@@ -781,8 +1000,53 @@ describe("c-navigator-section", () => {
       expect(drop.mock.calls[0][0].detail).toEqual({ index: 0 });
     });
 
-    it("grabs, moves, drops and cancels its own card from the keyboard", () => {
+    it("does not advertise itself as a drop target out of edit mode", () => {
+      // Unlike a drag *source* — where the design deliberately trusts the
+      // browser to refuse a drag on `draggable="false"` rather than adding
+      // a second guard — a drop *target* has no such attribute to lean on.
+      // `dragover` is native default-prevented or it isn't; nothing about
+      // this card's own markup stops a foreign drag (a file, a link, a text
+      // selection) from being offered a "move" cursor here unless the
+      // handler itself declines. `editing` defaults to false, so this is
+      // the out-of-the-box state.
       const element = createSection();
+
+      const over = new CustomEvent("dragover", {
+        bubbles: true,
+        cancelable: true
+      });
+      cardOf(element).dispatchEvent(over);
+
+      expect(over.defaultPrevented).toBe(false);
+    });
+
+    it("does not accept a drop directly on the card out of edit mode either", () => {
+      // The item's own half of this gate is pinned in navigatorItem.test.js
+      // as "does not dispatch a drop out of edit mode either, and keeps the
+      // event off whatever is outside it"; this is the card's —
+      // `handleCardDrop` was gated on this spec's third fix pass, the
+      // fourth of the family's four `dragover`/`drop` handlers to carry the
+      // guard. Dispatched directly on the card's own `<article>` rather
+      // than bubbled up from an item, so this discriminates
+      // `handleCardDrop`'s own guard regardless of what an item's
+      // `stopPropagation()` does or does not let through. `editing`
+      // defaults to false.
+      const element = createSection();
+      const handler = jest.fn();
+      element.addEventListener("sectiondrop", handler);
+
+      const drop = new CustomEvent("drop", {
+        bubbles: true,
+        cancelable: true
+      });
+      cardOf(element).dispatchEvent(drop);
+
+      expect(drop.defaultPrevented).toBe(false);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("grabs, moves, drops and cancels its own card from the keyboard", () => {
+      const element = createSection(undefined, { editing: true });
       const grab = jest.fn();
       const move = jest.fn();
       const drop = jest.fn();
@@ -1078,7 +1342,13 @@ describe("c-navigator-section", () => {
     });
 
     it("stops looking like a drop target once the drop has happened", async () => {
-      const element = createSection();
+      // Mounted in edit mode as of this spec's third fix pass: `handleCardDrop`
+      // is now gated on `editing`, the fourth of the family's four
+      // `dragover`/`drop` handlers to get that guard — see "does not
+      // advertise itself as a drop target out of edit mode" above for the
+      // out-of-mode half, which this test's own subject (the drop actually
+      // being accepted and clearing state) does not exercise.
+      const element = createSection(undefined, { editing: true });
       const card = cardOf(element);
       element.itemDragActive = true;
 
@@ -1112,7 +1382,7 @@ describe("c-navigator-section", () => {
   });
 
   it("refuses to rename a section to nothing at all", async () => {
-    const element = createSection();
+    const element = createSection(undefined, { editing: true });
     const handler = jest.fn();
     element.addEventListener("sectionrename", handler);
 
@@ -1129,10 +1399,6 @@ describe("c-navigator-section", () => {
   });
 
   describe("adding and removing items", () => {
-    function addButtonOf(element) {
-      return element.shadowRoot.querySelector(".rstk-nav-section__add");
-    }
-
     // What a screen reader computes for a <button>: the whole of its rendered
     // content, assistive-text spans included, with whitespace collapsed the
     // way the accessible name computation collapses it.
@@ -1151,8 +1417,8 @@ describe("c-navigator-section", () => {
       return copy.textContent.replace(/\s+/g, " ").trim();
     }
 
-    it("offers an Add items button in its header, where a user can find it", () => {
-      const element = createSection();
+    it("offers an Add items button in its header, where a user can find it, in edit mode", () => {
+      const element = createSection(undefined, { editing: true });
 
       const button = addButtonOf(element);
       expect(button).not.toBeNull();
@@ -1165,7 +1431,9 @@ describe("c-navigator-section", () => {
       // tooltip and nothing else — every card in the layout would then be
       // announced as the identical "Add items". An assistive-text span inside
       // the button is content, so it contributes to the name.
-      const element = createSection(resolvedSection({ name: "Support" }));
+      const element = createSection(resolvedSection({ name: "Support" }), {
+        editing: true
+      });
 
       expect(accessibleNameOf(addButtonOf(element))).toBe(
         "Add items to Support"
@@ -1178,7 +1446,9 @@ describe("c-navigator-section", () => {
       // with write access can fill. A button announced as "Add items to" with
       // nothing after it names no target at all, so the assistive text takes
       // the same generic fallback the card label does.
-      const element = createSection(resolvedSection({ name: "   " }));
+      const element = createSection(resolvedSection({ name: "   " }), {
+        editing: true
+      });
 
       expect(accessibleNameOf(addButtonOf(element))).toBe(
         "Add items to Unnamed section"
@@ -1190,7 +1460,9 @@ describe("c-navigator-section", () => {
       // button that printed it again would say it twice in a row and roughly
       // double the header's intrinsic width, so the section name is carried
       // by assistive text rather than by visible text.
-      const element = createSection(resolvedSection({ name: "Support" }));
+      const element = createSection(resolvedSection({ name: "Support" }), {
+        editing: true
+      });
       const button = addButtonOf(element);
 
       expect(visibleTextOf(button)).toBe("Add items");
@@ -1236,7 +1508,7 @@ describe("c-navigator-section", () => {
     });
 
     it("asks the parent to open the picker for its own section", () => {
-      const element = createSection();
+      const element = createSection(undefined, { editing: true });
       const handler = jest.fn();
       element.addEventListener("sectionadditems", handler);
 
@@ -1258,7 +1530,7 @@ describe("c-navigator-section", () => {
         },
         TABS
       )[1];
-      const element = createSection(resolved);
+      const element = createSection(resolved, { editing: true });
       const handler = jest.fn();
       element.addEventListener("sectionadditems", handler);
 
@@ -1271,7 +1543,9 @@ describe("c-navigator-section", () => {
       // Not a blank card, and not a bare "nothing here" either — the message
       // has to name the way out, which is the button in this card's own
       // header.
-      const element = createSection(resolvedSection({ itemIds: [] }));
+      const element = createSection(resolvedSection({ itemIds: [] }), {
+        editing: true
+      });
 
       const empty = element.shadowRoot.querySelector(
         ".rstk-nav-section__empty"

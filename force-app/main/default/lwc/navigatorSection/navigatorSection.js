@@ -113,6 +113,61 @@ export default class NavigatorSection extends LightningElement {
    */
   @api itemDragActive = false;
 
+  /**
+   * Whether the whole Navigator is in edit mode, set by the parent — the
+   * same `@api` down / `CustomEvent` up route `grabbed` and `itemDragActive`
+   * already use, rather than a new state-sharing mechanism. The "Add items"
+   * button and this card's overflow menu — and therefore renaming, changing
+   * this section's column count and deleting it — are all reachable only
+   * while this holds true; out of edit mode neither renders at all
+   * (`lwc:if`, not a CSS class), so neither the tab order nor a screen
+   * reader can reach them. `emptyMessage` also reads this: it names the Add
+   * items button only while editing, since out of edit mode that button is
+   * one of the things this flag hides. Passed straight through to each
+   * `c-navigator-item` (`navigatorSection.html`'s `editing={editing}`) so its
+   * own overflow menu — Rename…, Remove, Move to… — is gated the same way,
+   * one level further down the same route.
+   *
+   * A setter rather than a bare field for one reason: an in-progress rename
+   * is this component's own transient state, entered only through the
+   * overflow menu this flag gates. If the parent leaves edit mode mid-rename,
+   * the menu that could reopen it is gone, but nothing else would close a
+   * rename input left open from before — so leaving edit mode ends any
+   * in-progress rename along with it.
+   */
+  @api
+  get editing() {
+    return this.isEditingSection;
+  }
+
+  set editing(value) {
+    // Coerced rather than stored as-is: this is an `@api` boundary, and LWC
+    // renders a bound expression that resolves `undefined` by omitting the
+    // attribute — the same thing it does for a literal `false` — so an
+    // uncoerced `undefined` here would leave `draggable={editing}` bound to
+    // `undefined` too, which LWC also renders as an absent `draggable`
+    // attribute rather than the explicit `"false"` the design requires.
+    this.isEditingSection = value === true;
+    if (!this.isEditingSection) {
+      this.isRenaming = false;
+      // A keyboard grab on one of this section's items is this section's
+      // own transient state — `grabbedItemIndex` and its neighbours below —
+      // and nothing else clears it when edit mode ends out from under it.
+      // Left in place, the item would keep rendering as `grabbed` (its
+      // `isGrabbed` class, its drag instructions) even though it can no
+      // longer be dragged at all once `editing` is false, and
+      // `keepFocusOnGrabbedItem` in `renderedCallback` would keep chasing a
+      // card that is no longer part of any live gesture. Silent, the same as
+      // `releaseGrabForDepartingItem`: the transition out of edit mode is
+      // already announced by the parent, so a second, contradictory
+      // announcement about the grab itself would only confuse the sentence
+      // the user is already hearing.
+      this.releaseGrab();
+    }
+  }
+
+  isEditingSection = false;
+
   isRenaming = false;
   draftName = "";
 
@@ -196,6 +251,12 @@ export default class NavigatorSection extends LightningElement {
    */
   get cardClass() {
     const classes = ["rstk-nav-section"];
+    // The grab cursor lives on this class rather than on the base rule —
+    // see `navigatorSection.css` — so it is on-screen only while a drag
+    // could actually start, not permanently.
+    if (this.editing) {
+      classes.push("rstk-nav-section_editing");
+    }
     if (this.grabbed) {
       classes.push("rstk-nav-section_grabbed");
     }
@@ -252,6 +313,16 @@ export default class NavigatorSection extends LightningElement {
     return this.grabbed
       ? `rstk-nav-section-drag-${this.sectionIndex}`
       : undefined;
+  }
+
+  /**
+   * A getter rather than the static `"0"` this card used to carry, because a
+   * card that cannot be grabbed should not be a tab stop. Left focusable out
+   * of edit mode would add one empty stop per section to every keyboard
+   * user's journey through a panel whose whole purpose is fast navigation.
+   */
+  get cardTabIndex() {
+    return this.editing ? "0" : "-1";
   }
 
   /**
@@ -332,11 +403,20 @@ export default class NavigatorSection extends LightningElement {
   }
 
   /**
-   * What an emptied section says. Both halves of the criterion — that the
-   * section is empty, and the way out of it — and the way out is named with
-   * the button's own wording rather than a second copy of it.
+   * What an emptied section says.
+   *
+   * In edit mode, both halves of the criterion — that the section is empty,
+   * and the way out of it — and the way out is named with the button's own
+   * wording rather than a second copy of it. Out of edit mode there is no way
+   * out to name: the Add items button this sentence used to point at is
+   * itself gated behind edit mode, so pointing at it here would tell the user
+   * to press a control that is not on screen. Display mode says only that the
+   * section is empty, which is all that stays true.
    */
   get emptyMessage() {
+    if (!this.editing) {
+      return "This section has no items.";
+    }
     return `This section has no items. Use ${ADD_ITEMS} to put tabs you can reach into it.`;
   }
 
@@ -757,6 +837,14 @@ export default class NavigatorSection extends LightningElement {
   }
 
   handleCardDragOver(event) {
+    // Out of edit mode this card is not a drop target at all. Without this
+    // guard the card would still call `preventDefault()` and advertise a
+    // "move" cursor for *any* drag passing over it — a file, a link, a text
+    // selection, none of them the Navigator's own — which is a drag surface
+    // by O1's own definition even though it writes and lights nothing.
+    if (!this.editing) {
+      return;
+    }
     // Without this the browser fires no drop at all.
     event.preventDefault();
     if (event.dataTransfer) {
@@ -777,6 +865,23 @@ export default class NavigatorSection extends LightningElement {
   }
 
   handleCardDrop(event) {
+    // Out of edit mode this card is not a drop target at all — added on this
+    // spec's third fix pass, the fourth of the four `dragover`/`drop`
+    // handlers in this component family to carry the guard. Leaving it off
+    // was reasoned as safe because a real browser never fires `drop` at all
+    // once the preceding `dragover` went uncancelled; that reasoning was
+    // correct and did not, on its own, distinguish this handler from
+    // navigatorItem.js's `handleDrop`, which carries the identical guard for
+    // the identical reason: jsdom enforces none of the browser's own
+    // dragover/drop sequencing, so a synthetic `drop` dispatched straight at
+    // this card reached this handler regardless of `dragover`, and — via
+    // `handleDrop`'s own `stopPropagation()` previously firing only when
+    // editing — reached it even from a drop that landed on one of this
+    // card's own items first. Gated for consistency with the item's own
+    // guard, not because a distinct production gap was found here.
+    if (!this.editing) {
+      return;
+    }
     event.preventDefault();
     this.dragDepth = 0;
     // A drop on the card itself names no position within it, so none is
@@ -792,6 +897,16 @@ export default class NavigatorSection extends LightningElement {
   }
 
   handleCardKeydown(event) {
+    // Out of edit mode this card is not a drag source at all — `draggable`
+    // is bound to `editing` in the template, which the browser respects for
+    // a pointer drag, but `onkeydown` fires whether or not the element is
+    // draggable. Without this the Space key would still grab the card from
+    // the keyboard, which is exactly the asymmetry
+    // `lwc-accessible-interactions.md` exists to catch.
+    if (!this.editing) {
+      return;
+    }
+
     // Keydown bubbles, and an item sits inside this card. Without this guard
     // Space on an item would grab both the item and the whole section.
     // `currentTarget` is this card; `target` is retargeted to the item's host
