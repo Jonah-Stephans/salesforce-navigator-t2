@@ -4894,6 +4894,64 @@ describe("c-salesforce-navigator", () => {
     });
 
     /**
+     * Third fix pass, the sweep finding: `handleLayoutDeleteConfirm`'s guard
+     * agreed with `deleteCurrentLayout`'s own `if (!layoutId) return;` only
+     * by inheritance from `canDeleteLayout` at the menu — a check made when
+     * the dialog *opens*, not when it is *confirmed*. Tier 3 (choosing a
+     * different saved layout) stays reachable whatever `isEditing` is, so a
+     * switch can land — and `adoptFromStore`'s no-active branch can clear
+     * `this.layoutId` — while `PROMPT_DELETE` is still on screen. Nothing
+     * closes it on that transition: it renders off `layoutPrompt`, not off
+     * `canDeleteLayout`, so the dialog outlives its own affordance.
+     */
+    it("a switch that lands with no active row while Delete layout's confirmation is open leaves the dialog outliving its own affordance", async () => {
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+      expect(promptButton(element, "Delete layout")).not.toBeNull();
+
+      // A switch lands while the delete confirmation is still showing, and
+      // the store reports nobody active — `adoptFromStore`'s no-active
+      // branch, which sets `this.layoutId = undefined`.
+      activateLayout.mockResolvedValueOnce([]);
+      selectLayoutMenu(element, `layout:${FIRST_ID}`);
+      await flush();
+      await flush();
+
+      // The dialog is still here — nothing in the switch closed it.
+      expect(promptButton(element, "Delete layout")).not.toBeNull();
+
+      // A canvas change on the freshly-adopted (seeded) layout, so the
+      // confirm would open the shared discard prompt rather than deleting on
+      // the spot — the same widening slice 02 gave every other Tier 2 call
+      // site.
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      promptButton(element, "Delete layout").click();
+      await flush();
+
+      // Fixed: nothing is left to delete, so nothing is asked about it — the
+      // stale confirmation just closes. Unfixed: this opens a *second*
+      // dialog asking to discard changes for a delete that
+      // `deleteCurrentLayout`'s own `layoutId` guard was always going to
+      // refuse — the user presses a `variant="destructive"` button and
+      // nothing is discarded and nothing is deleted.
+      expect(promptButton(element, "Discard changes")).toBeUndefined();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
+      ).toBeNull();
+      expect(deleteLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(
+        element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON)
+      ).not.toBeNull();
+    });
+
+    /**
      * `rememberSaved`'s create-adoption guard does not need a Tier 1 autosave
      * to reach — one from *New layout*, one from an ordinary Tier 1 autosave
      * racing it was the pairing the fix pass measured, and once Tier 2
@@ -6465,6 +6523,59 @@ describe("c-salesforce-navigator", () => {
       // The rename prompt closes. Without `closePrompt()`'s clear, this
       // would instead reopen New layout with "Weekly review" still in it —
       // the exact reproduction the finding measured.
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
+      ).toBeNull();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("choosing Rename layout while the discard prompt is still open replaces it, and its own Cancel closes rather than bringing New layout back", async () => {
+      // Third fix pass, finding A: unlike the Escape route above, which
+      // closes the discard prompt through `handleLayoutPromptKeydown` ->
+      // `closePrompt()`, `handleLayoutMenuSelect`'s three Tier 2 branches
+      // (New layout, Rename layout, Delete layout) call `openPrompt`
+      // directly, with no `closePrompt()` first. Picking one of them while
+      // the discard prompt is showing used to *replace* it without going
+      // through the one place `pendingDiscardAction` was cleared, so the
+      // replacement dialog's own Cancel read the stale action and reopened
+      // New layout instead of closing. One mouse click, nothing async, and
+      // no mutation needed — this reproduces on unfixed code as-is.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+      expect(discardConfirmButton(element)).not.toBeNull();
+
+      // Instead of Escape: the layout switcher stays rendered beside the
+      // discard prompt throughout, with no backdrop and no focus trap, so
+      // Rename layout… is one click away from here.
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      const renamePrompt = element.shadowRoot.querySelector(
+        ".rstk-nav-layout-prompt"
+      );
+      expect(renamePrompt.getAttribute("aria-label")).toBe(
+        "Rename My Navigator"
+      );
+
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Cancel")
+        .click();
+      await flush();
+
+      // On unfixed code this comes back as New layout's own prompt,
+      // labelled "Name for the new layout" with "Weekly review" still in the
+      // input — the stale `pendingDiscardAction` the sibling-open route left
+      // behind, read by this same Cancel button.
       expect(
         element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
       ).toBeNull();

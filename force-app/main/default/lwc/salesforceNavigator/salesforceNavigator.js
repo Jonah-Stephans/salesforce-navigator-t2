@@ -312,11 +312,19 @@ export default class SalesforceNavigator extends LightningElement {
    * the `name` the user had already typed before the prompt intervened —
    * read back by `handleLayoutPromptCancel` on decline, as of the fix pass,
    * so "Keep editing" reopens the naming prompt with it rather than losing
-   * it. Cleared by `closePrompt()` along with everything else transient
-   * about a dialog, so it cannot outlive the prompt that set it — and, on
-   * that one decline path, cleared explicitly by the handler that reads it
-   * instead, since reopening `PROMPT_NEW` there does not go through
-   * `closePrompt()`.
+   * it.
+   *
+   * **Cleared by both `openPrompt()` and `closePrompt()`, as of the third fix
+   * pass.** `closePrompt()` alone was not enough: `handleLayoutMenuSelect`'s
+   * three Tier 2 branches call `openPrompt(...)` directly with no
+   * `closePrompt()` first, so a sibling dialog opening on top of the discard
+   * prompt used to *replace* it without going through the one place this
+   * field was cleared — see the trap this closes in `## Traps`. `openPrompt`
+   * clearing it is the one-place fix, not a clear added at each of those
+   * three call sites, per `rstk-dry-enforcement.md`. On the one decline path
+   * that reopens `PROMPT_NEW` (`handleLayoutPromptCancel`), the clear now
+   * comes from that same call to `openPrompt` rather than a second explicit
+   * assignment beside it.
    */
   pendingDiscardAction;
 
@@ -845,9 +853,28 @@ export default class SalesforceNavigator extends LightningElement {
     }
   }
 
-  /** Opening a dialog is not a change. Nothing here writes, and nothing may. */
+  /**
+   * Opening a dialog is not a change. Nothing here writes, and nothing may.
+   *
+   * **Every dialog's own transient state is reset here, not only in
+   * `closePrompt()`, as of the third fix pass.** `openPrompt` and
+   * `closePrompt` were not a matched pair: five call sites open a dialog, and
+   * three of them (the layout menu's New, Rename and Delete branches) do it
+   * with no `closePrompt()` first, so a sibling dialog opening on top of
+   * another used to *replace* it and skip every clear `closePrompt()`
+   * performs. `draftLayoutName` was already safe from this, but only by
+   * accident — every call site passes its own `draft` value, so the field is
+   * overwritten on every open whether or not that call site meant to guard
+   * it. `pendingDiscardAction` has no equivalent per-call parameter, so it is
+   * cleared here explicitly, deliberately rather than leaving its safety to
+   * ride along on `draft`'s coincidence the way `draftLayoutName`'s did — see
+   * the trap this closes in `## Traps`. One clear, here, rather than one
+   * added at each of the three call sites that were missing it, per
+   * `rstk-dry-enforcement.md`.
+   */
   openPrompt(prompt, draft) {
     this.draftLayoutName = draft;
+    this.pendingDiscardAction = undefined;
     this.layoutPrompt = prompt;
   }
 
@@ -865,10 +892,16 @@ export default class SalesforceNavigator extends LightningElement {
    * once the render this call schedules has actually put the dialog on
    * screen, the same way every other explicit focus hand-off in this file
    * waits for `renderedCallback`.
+   *
+   * **Order matters, as of the third fix pass.** `openPrompt` now clears
+   * `pendingDiscardAction` itself (see its own doc), so the action this call
+   * exists to record has to be set *after* `openPrompt` runs, not before —
+   * setting it first, the way this used to read, would have `openPrompt`
+   * immediately wipe out the action this method's whole job is to keep.
    */
   openDiscardPrompt(action) {
-    this.pendingDiscardAction = action;
     this.openPrompt(PROMPT_DISCARD, "");
+    this.pendingDiscardAction = action;
     this.announce(DISCARD_PROMPT_MESSAGE);
   }
 
@@ -884,16 +917,17 @@ export default class SalesforceNavigator extends LightningElement {
    * user already typed gone, with New layout… needing to be reopened and
    * retyped. Reopening `PROMPT_NEW` with the name `pendingDiscardAction`
    * already carries (see its own doc) hands it back rather than losing it.
-   * `pendingDiscardAction` is cleared explicitly here because `openPrompt`
-   * does not touch it — left set, a genuine Cancel on the *reopened* naming
-   * prompt would misread itself as still declining a discard and reopen
-   * `PROMPT_NEW` a second time instead of closing.
+   * `action` is read into a local *before* that reopen, because `openPrompt`
+   * itself now clears `this.pendingDiscardAction` as of the third fix pass —
+   * left unread first, a genuine Cancel on the *reopened* naming prompt would
+   * still misread itself as still declining a discard, but `openPrompt`'s own
+   * clear is what makes that reopened prompt's Cancel come back here reading
+   * `undefined` rather than needing a second explicit clear in this method.
    */
   handleLayoutPromptCancel() {
     const action = this.pendingDiscardAction;
     if (action && action.type === NEW_LAYOUT) {
       this.openPrompt(PROMPT_NEW, action.name);
-      this.pendingDiscardAction = undefined;
       return;
     }
     this.closePrompt();
@@ -934,6 +968,16 @@ export default class SalesforceNavigator extends LightningElement {
    * between Escape closing the discard prompt directly — which calls this
    * method, not `handleLayoutPromptCancel` — and a later, unrelated dialog's
    * "Cancel" misreading the action Escape left behind as its own decline.
+   *
+   * **No longer the only thing standing between them, as of the third fix
+   * pass.** That doc comment above was true of every exit this method
+   * itself is on, and understated: a dialog can also change without ever
+   * reaching `closePrompt()` at all — `handleLayoutMenuSelect`'s three Tier 2
+   * branches open the next dialog directly, replacing whichever one was
+   * showing. `openPrompt` now carries the equivalent clear for that route
+   * (see its own doc); this method's clear still covers every exit that
+   * *does* run through it — Escape, "Keep editing"'s non-reopen path,
+   * `handleDiscardConfirm`, and `leaveEditMode()`'s own unconditional call.
    */
   closePrompt() {
     this.layoutPrompt = undefined;
@@ -978,8 +1022,28 @@ export default class SalesforceNavigator extends LightningElement {
     }
   }
 
+  /**
+   * **Guards on `this.layoutId` first, copying `deleteCurrentLayout`'s whole
+   * `if (!layoutId) return;`, as of the third fix pass.** The dialog this
+   * confirms opens on `canDeleteLayout` — `Boolean(this.layoutId)`, checked
+   * once, at the *menu* — and that agreement used to be inherited rather than
+   * re-checked here: `adoptFromStore`'s no-active branch can set
+   * `this.layoutId = undefined` asynchronously while `PROMPT_DELETE` is still
+   * open, and nothing closed the dialog on that transition, so it used to
+   * outlive its own affordance. Without this guard, pressing "Delete
+   * layout" on that stale dialog would still open the discard prompt — a
+   * warning about a delete that was always going to no-op the moment
+   * `deleteCurrentLayout`'s own guard saw no id — and "Discard changes" would
+   * then call `deleteCurrentLayout` for nothing: no row deleted, no draft
+   * thrown away, the destructive button pressed and nothing destructed.
+   * Checked before `hasUnsavedCanvasChanges` on purpose: with nothing left to
+   * delete, there is nothing worth asking the user to discard for.
+   */
   handleLayoutDeleteConfirm() {
     this.closePrompt();
+    if (!this.layoutId) {
+      return;
+    }
     // Deleting the active layout adopts whatever the store says replaces it
     // (`deleteCurrentLayout` -> `adoptFromStore` -> `resnapshotEdit`), which
     // is the same "the draft is simply gone" hazard New layout has above —
