@@ -2035,6 +2035,15 @@ export default class SalesforceNavigator extends LightningElement {
       clearTimeout(this.saveTimer);
       this.saveTimer = undefined;
     }
+    // **Seventh pass: a surviving mutant across the whole suite, not a bug.**
+    // No test in the file discriminates this branch any more — short-
+    // circuiting this guard to `if (false)` leaves all 535 tests green — because
+    // `isWriteLocked` (see it and `beginWrite`) now refuses a second of the
+    // four writing controls before either one can reach here, and two
+    // immediate creates racing for the same rowless user is the only
+    // precondition this branch exists to arbitrate. Preserved anyway, as
+    // defence in depth, per `.claude/rules/rstk-preserve-defensive-checks.md`
+    // — not claimed dead by construction, only unproven by the current suite.
     if (!this.layoutId && this.creatingLayout) {
       const inFlight = this.creatingLayout;
       if (layoutJson === undefined || !inFlight.distinct) {
@@ -2058,6 +2067,18 @@ export default class SalesforceNavigator extends LightningElement {
           // Re-reading `this.editSnapshot` here is what keeps the write
           // addressed to the entry snapshot as it stands *now*, not as it
           // stood when this call was made.
+          //
+          // **That liveness predates the lockout and is superseded now, not
+          // corrected.** The re-entry/wire-redelivery route above needed two
+          // of `creatingLayout`'s writers to hold an entry at once, and
+          // `isWriteLocked` forecloses that at the handler level before a
+          // second writing control can even be attempted. No test in the
+          // suite discriminates this ternary today — collapsing it to a bare
+          // `layoutJson` leaves all 535 green — and the lockout is what
+          // stands in front of it now. Preserved as defence in depth per
+          // `.claude/rules/rstk-preserve-defensive-checks.md`, not deleted;
+          // not claimed dead by construction, only unproven by the current
+          // suite.
           const resolvedOverride =
             layoutJson !== undefined && this.editSnapshot
               ? this.editSnapshot.json
@@ -2305,6 +2326,15 @@ export default class SalesforceNavigator extends LightningElement {
         })
       : this.layouts.concat([row]);
 
+    // **Seventh pass: a surviving mutant now, not corrected.** Two creates
+    // racing for the same rowless user — the precondition this guard exists
+    // to arbitrate — is exactly what `isWriteLocked` forecloses before either
+    // one reaches `persist` at all, so no test in the suite discriminates
+    // this guard any more: collapsing it to `if (!target.layoutId)` leaves
+    // all 535 green. The lockout is what stands in front of the race this
+    // guard was written for; kept as defence in depth per
+    // `.claude/rules/rstk-preserve-defensive-checks.md` — not claimed dead by
+    // construction, only unproven by the current suite.
     if (!target.layoutId && this.layoutId === undefined) {
       this.layoutId = savedId;
     }

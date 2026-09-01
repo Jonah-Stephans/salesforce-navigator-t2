@@ -6288,6 +6288,20 @@ describe("c-salesforce-navigator", () => {
       expect(moved[moved.length - 1]).toBe(
         element.shadowRoot.querySelector(EDIT_AFFORDANCE)
       );
+
+      // Save is the other route out, and it is order-dependent in a way
+      // Cancel above never exercises: `beginWrite` assigns `EDIT_FOCUS_LOCK`
+      // and `leaveEditMode` assigns `EDIT_FOCUS_LEAVE` in the same handler,
+      // so whichever statement runs second decides where focus lands.
+      // Neither exit above goes through Save, and Cancel never calls
+      // `beginWrite` at all, so nothing until now pinned this ordering.
+      await enterEditMode(element);
+      await addSection(element);
+      await saveEdits(element);
+
+      expect(moved[moved.length - 1]).toBe(
+        element.shadowRoot.querySelector(EDIT_AFFORDANCE)
+      );
     });
 
     it("ends any in-flight keyboard grab when edit mode ends", async () => {
@@ -6433,6 +6447,63 @@ describe("c-salesforce-navigator", () => {
       expect(announcement(element)).toBe(
         "Weekly review created and now showing."
       );
+    });
+
+    /**
+     * Seventh pass, critique finding: `beginWrite()` in `handleEditSave` is a
+     * surviving mutant, and the regression it hides is walkable, not
+     * theoretical. Save is the only one of the four writing controls that
+     * leaves edit mode while its own write is still outstanding, and nothing
+     * disables the pencil in that window, so a user can re-enter edit mode
+     * and reach New layout inside the very round trip Save opened. Without
+     * `beginWrite()`, `writeInFlight` never leaves zero for Save's own write,
+     * `isWriteLocked` stays false through the re-entry, and New layout is
+     * free to open and commit — a second `createLayout` for a user who owned
+     * none.
+     */
+    it("does not let New layout open while Save's own no-row create is still outstanding, even after re-entering edit mode", async () => {
+      let releaseCreate;
+      createLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = () =>
+              resolve({
+                layoutId: CREATED_LAYOUT_ID,
+                name: "My Navigator",
+                isActive: true
+              });
+          })
+      );
+      const element = await navigatorWithTabs();
+      await enterEditMode(element);
+      await addSection(element);
+
+      await saveEdits(element);
+
+      // Save's own create is issued and held open, and Save has already left
+      // edit mode — nothing disables the pencil while that write is still in
+      // flight.
+      expect(createLayout).toHaveBeenCalledTimes(1);
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+
+      await enterEditMode(element);
+
+      // New layout, attempted inside the window Save's own create opened:
+      // must be blocked exactly as it is when a Rename layout create is the
+      // one outstanding.
+      expect(menuItemDisabled(element, "new-layout")).toBe(true);
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input")
+      ).toBeNull();
+      expect(createLayout).toHaveBeenCalledTimes(1);
+
+      releaseCreate();
+      await flush();
+      await flush();
+      await flush();
+      await flush();
     });
   });
 });
