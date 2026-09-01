@@ -5417,6 +5417,7 @@ describe("c-salesforce-navigator", () => {
       selectSectionMenuItem(element, 0, "columns-6");
       await flush();
 
+      const moved = recordFocusMoves();
       selectLayoutMenu(element, `layout:${THIRD_ID}`);
       await flush();
 
@@ -5427,6 +5428,15 @@ describe("c-salesforce-navigator", () => {
       ).not.toBeNull();
       expect(sectionNames(element)).toEqual(["Support"]);
       expect(activateLayout).not.toHaveBeenCalled();
+      // Finding 2: the alertdialog nothing focused and nothing announced.
+      // Focus lands on "Keep editing" deliberately, never "Discard changes",
+      // and the live region carries the same fact the dialog's own text does.
+      expect(moved[moved.length - 1]).toBe(keepEditingButton(element));
+      expect(
+        spoken(
+          element.shadowRoot.querySelector(".rstk-nav-announcer").textContent
+        )
+      ).toBe("You have unsaved changes. Discard them and continue?");
 
       keepEditingButton(element).click();
       await flush();
@@ -5436,6 +5446,31 @@ describe("c-salesforce-navigator", () => {
       expect(renderedColumns(element, 0)).toBe(6);
       expect(activateLayout).not.toHaveBeenCalled();
       expect(store.activeName()).toBe("Support");
+    });
+
+    it("re-picking the layout already on screen while editing with unsaved changes does not ask, and switches to nothing", async () => {
+      // Finding 1: every layout the user owns is a selectable entry, the
+      // active one included, so this is a click a user makes by re-picking
+      // what they are already looking at. `switchToLayout` itself already
+      // refuses this as a no-op (`layoutId === this.layoutId`) — the Tier 3
+      // guard has to agree before asking, or it asks about a loss that
+      // cannot happen and "Discard changes" then discards nothing.
+      const store = installStore(threeRows());
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, `layout:${SECOND_ID}`);
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(activateLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(sectionNames(element)).toEqual(["Support"]);
+      expect(store.activeName()).toBe("Support");
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
     });
 
     it("confirming the discard prompt on a layout switch throws the draft away and switches, by the same route Cancel uses", async () => {
@@ -5778,6 +5813,8 @@ describe("c-salesforce-navigator", () => {
       "Edit mode on. Customise your Navigator, then press Save.";
     const SAVE_ANNOUNCEMENT = "Changes saved. Edit mode off.";
     const CANCEL_ANNOUNCEMENT = "Edit mode off. Nothing was saved.";
+    const DISCARD_ANNOUNCEMENT =
+      "You have unsaved changes. Discard them and continue?";
 
     function payload(sectionName, columns, items) {
       return JSON.stringify({
@@ -6163,6 +6200,7 @@ describe("c-salesforce-navigator", () => {
       await addSection(element);
       expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
 
+      const moved = recordFocusMoves();
       element.shadowRoot.querySelector(EDIT_CANCEL_BUTTON).click();
       await flush();
 
@@ -6177,6 +6215,13 @@ describe("c-salesforce-navigator", () => {
       expect(dialog).not.toBeNull();
       expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
       expect(sectionNames(element)).toEqual(["Daily work", "New section"]);
+      // Finding 2: focus moves into the dialog deliberately (never onto
+      // "Discard changes"), and the live region announces it — the Cancel
+      // button that opened it survives the render, which is exactly the
+      // "inherited, not measurably broken" half of the finding, but nothing
+      // was reaching a screen reader either way before this pass.
+      expect(moved[moved.length - 1]).toBe(keepEditingButton(element));
+      expect(announcement(element)).toBe(DISCARD_ANNOUNCEMENT);
 
       keepEditingButton(element).click();
       await flush();
@@ -6245,6 +6290,7 @@ describe("c-salesforce-navigator", () => {
       input.dispatchEvent(
         new CustomEvent("change", { detail: { value: "Weekly review" } })
       );
+      const moved = recordFocusMoves();
       input.dispatchEvent(new CustomEvent("commit"));
       await flush();
 
@@ -6253,6 +6299,12 @@ describe("c-salesforce-navigator", () => {
       expect(discardConfirmButton(element)).not.toBeNull();
       expect(createLayout).not.toHaveBeenCalled();
       expect(renderedColumns(element, 0)).toBe(6);
+      // Finding 2: `closePrompt()` destroyed the naming input that held
+      // focus before this dialog opened in its place, so without an explicit
+      // hand-off focus falls to `document.body` here — the measured case,
+      // not just the inherited one.
+      expect(moved[moved.length - 1]).toBe(keepEditingButton(element));
+      expect(announcement(element)).toBe(DISCARD_ANNOUNCEMENT);
 
       keepEditingButton(element).click();
       await flush();
@@ -6260,6 +6312,12 @@ describe("c-salesforce-navigator", () => {
       expect(createLayout).not.toHaveBeenCalled();
       expect(renderedColumns(element, 0)).toBe(6);
       expect(layoutMenu(element).label).toBe("My Navigator");
+      // Finding 4: declining does not lose the name already typed. The
+      // naming prompt reopens with it rather than leaving the user to reopen
+      // "New layout…" and retype.
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input").value
+      ).toBe("Weekly review");
     });
 
     it("confirming the discard prompt on New layout throws the draft away and creates the named layout", async () => {
@@ -6292,6 +6350,40 @@ describe("c-salesforce-navigator", () => {
       expect(sectionNames(element)).toEqual(["All Items"]);
     });
 
+    it("a genuine Cancel on the reopened New layout prompt closes it, rather than reopening it again", async () => {
+      // Finding 4's fix reopens PROMPT_NEW on decline and hands the typed
+      // name back in. Both the reopened prompt's "Cancel" and the discard
+      // prompt's "Keep editing" reach the same `handleLayoutPromptCancel` —
+      // so if `pendingDiscardAction` were left set after the reopen, a real
+      // Cancel here would misread itself as still declining a discard and
+      // reopen PROMPT_NEW a second time instead of closing.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+      keepEditingButton(element).click();
+      await flush();
+
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Cancel")
+        .click();
+      await flush();
+
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
+      ).toBeNull();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
     it("asks before discarding when Delete layout is confirmed with unsaved canvas changes, and declining leaves the draft in place", async () => {
       const element = await storedNavigator();
       await enterEditMode(element);
@@ -6301,6 +6393,7 @@ describe("c-salesforce-navigator", () => {
 
       selectLayoutMenu(element, "delete-layout");
       await flush();
+      const moved = recordFocusMoves();
       Array.from(
         element.shadowRoot.querySelectorAll(
           ".rstk-nav-layout-prompt lightning-button"
@@ -6315,6 +6408,11 @@ describe("c-salesforce-navigator", () => {
       expect(discardConfirmButton(element)).not.toBeNull();
       expect(deleteLayout).not.toHaveBeenCalled();
       expect(renderedColumns(element, 0)).toBe(6);
+      // Finding 2: `closePrompt()` destroyed the "Delete layout" button that
+      // held focus before this dialog opened in its place, so without an
+      // explicit hand-off focus falls to `document.body` here too.
+      expect(moved[moved.length - 1]).toBe(keepEditingButton(element));
+      expect(announcement(element)).toBe(DISCARD_ANNOUNCEMENT);
 
       keepEditingButton(element).click();
       await flush();

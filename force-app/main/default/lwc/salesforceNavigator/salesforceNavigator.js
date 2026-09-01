@@ -309,9 +309,14 @@ export default class SalesforceNavigator extends LightningElement {
    * set while `layoutPrompt === PROMPT_DISCARD`. `type` is one of
    * `DISCARD_CANCEL`, `DISCARD_SWITCH`, `NEW_LAYOUT` or `DELETE_LAYOUT`;
    * `DISCARD_SWITCH` also carries `layoutId`, and `NEW_LAYOUT` also carries
-   * the `name` the user had already typed before the prompt intervened.
-   * Cleared by `closePrompt()` along with everything else transient about a
-   * dialog, so it cannot outlive the prompt that set it.
+   * the `name` the user had already typed before the prompt intervened —
+   * read back by `handleLayoutPromptCancel` on decline, as of the fix pass,
+   * so "Keep editing" reopens the naming prompt with it rather than losing
+   * it. Cleared by `closePrompt()` along with everything else transient
+   * about a dialog, so it cannot outlive the prompt that set it — and, on
+   * that one decline path, cleared explicitly by the handler that reads it
+   * instead, since reopening `PROMPT_NEW` there does not go through
+   * `closePrompt()`.
    */
   pendingDiscardAction;
 
@@ -803,7 +808,19 @@ export default class SalesforceNavigator extends LightningElement {
       // exactly how a Cancel-worthy change disappears with no chance to keep
       // it. Asking first, through the same discard prompt Cancel uses, is
       // this slice's fourth call site for one shared confirmation.
-      if (this.isEditing && this.hasUnsavedCanvasChanges) {
+      //
+      // **`layoutId !== this.layoutId` joins the guard as of the fix pass.**
+      // Every layout the user owns renders as a selectable entry, the active
+      // one included, so re-picking the layout already on screen is a real
+      // click a user makes. Without this, the question was asked about a
+      // switch that `switchToLayout`'s own no-op return below was always
+      // going to refuse — a prompt about a loss that cannot happen, whose
+      // destructive button then discards nothing and switches nothing.
+      if (
+        this.isEditing &&
+        layoutId !== this.layoutId &&
+        this.hasUnsavedCanvasChanges
+      ) {
         this.openDiscardPrompt({ type: DISCARD_SWITCH, layoutId });
         return;
       }
@@ -821,13 +838,47 @@ export default class SalesforceNavigator extends LightningElement {
    * Opens the shared discard-confirmation prompt — reusing `openPrompt` and
    * `PROMPT_DISCARD`'s input-less shape rather than a fifth dialog mechanism
    * — and records what confirming it should do. See `pendingDiscardAction`.
+   *
+   * **Announced, as of the fix pass.** An `alertdialog` a screen-reader user
+   * is never told about is exactly the failure `lwc-accessible-interactions.md`
+   * was written against, and its own cited failure is this component family.
+   * `DISCARD_PROMPT_MESSAGE` is what the dialog's own text already says, so
+   * this reuses it rather than adding a second sentence for the same fact.
+   * Focus follows separately, in `focusLayoutPrompt()` — moved deliberately
+   * once the render this call schedules has actually put the dialog on
+   * screen, the same way every other explicit focus hand-off in this file
+   * waits for `renderedCallback`.
    */
   openDiscardPrompt(action) {
     this.pendingDiscardAction = action;
     this.openPrompt(PROMPT_DISCARD, "");
+    this.announce(DISCARD_PROMPT_MESSAGE);
   }
 
+  /**
+   * Declines whichever of the layout menu's four dialogs is open. Input-less
+   * dialogs (delete, discard) and the naming prompt's own "Cancel" all reach
+   * this one handler.
+   *
+   * **New layout is the one case that does not just close, as of the fix
+   * pass.** `handleLayoutNameCommit` clears `draftLayoutName` via
+   * `closePrompt()` before the discard prompt intervenes, so "Keep editing"
+   * on *that* discard would otherwise leave no prompt at all — the name the
+   * user already typed gone, with New layout… needing to be reopened and
+   * retyped. Reopening `PROMPT_NEW` with the name `pendingDiscardAction`
+   * already carries (see its own doc) hands it back rather than losing it.
+   * `pendingDiscardAction` is cleared explicitly here because `openPrompt`
+   * does not touch it — left set, a genuine Cancel on the *reopened* naming
+   * prompt would misread itself as still declining a discard and reopen
+   * `PROMPT_NEW` a second time instead of closing.
+   */
   handleLayoutPromptCancel() {
+    const action = this.pendingDiscardAction;
+    if (action && action.type === NEW_LAYOUT) {
+      this.openPrompt(PROMPT_NEW, action.name);
+      this.pendingDiscardAction = undefined;
+      return;
+    }
     this.closePrompt();
   }
 
@@ -2089,13 +2140,36 @@ export default class SalesforceNavigator extends LightningElement {
     }
   }
 
+  /**
+   * Puts focus into whichever input-taking layout dialog is open.
+   *
+   * **The discard confirmation joins this, as of the fix pass.** It has no
+   * input, so there is nothing for the naming prompt's own branch to find —
+   * but the `alertdialog` still has to receive focus deliberately or it falls
+   * to `document.body`, exactly Trap 3's hazard at a third and fourth place
+   * (New layout and Delete layout both call `closePrompt()` first, destroying
+   * the control that held focus, before this dialog opens in its place). The
+   * target is "Keep editing", never "Discard changes" — the same "not the
+   * control that commits" reasoning `EDIT_ENTRY_FOCUS_SELECTOR` already uses
+   * for the pencil, so a stray Enter cannot fire the destructive action.
+   */
   focusLayoutPrompt() {
-    if (!this.isNamingLayout) {
+    if (this.isNamingLayout) {
+      const input = this.template.querySelector(
+        ".rstk-nav-layout-prompt__input"
+      );
+      if (input && this.template.activeElement !== input) {
+        input.focus();
+      }
       return;
     }
-    const input = this.template.querySelector(".rstk-nav-layout-prompt__input");
-    if (input && this.template.activeElement !== input) {
-      input.focus();
+    if (this.isConfirmingDiscard) {
+      const keepEditing = this.template.querySelector(
+        ".rstk-nav-discard-keep-editing"
+      );
+      if (keepEditing && this.template.activeElement !== keepEditing) {
+        keepEditing.focus();
+      }
     }
   }
 

@@ -223,7 +223,13 @@
              dialog mechanism beside this one and the item picker's
              `LightningModal`. `alertdialog`, for the same reason the delete
              confirmation above is one: a screen reader user needs this to
-             read as a decision to make, not as text that appeared. -->
+             read as a decision to make, not as text that appeared.
+
+             As of the fix pass: `openDiscardPrompt()` announces this text
+             through the live region as well, and `focusLayoutPrompt()` moves
+             focus into "Keep editing" once this renders — an `alertdialog`
+             nothing focuses and nothing announces is exactly the failure
+             `lwc-accessible-interactions.md` was written against. -->
         <div
           class="rstk-nav-layout-prompt"
           role="alertdialog"
@@ -236,7 +242,11 @@
             variant="destructive"
             onclick={handleDiscardConfirm}
           ></lightning-button>
+          <!-- `focusLayoutPrompt()` targets this class deliberately: the
+               safe default, never "Discard changes", so a stray Enter on the
+               control that just took focus cannot fire the destructive act. -->
           <lightning-button
+            class="rstk-nav-discard-keep-editing"
             label="Keep editing"
             onclick={handleLayoutPromptCancel}
           ></lightning-button>
