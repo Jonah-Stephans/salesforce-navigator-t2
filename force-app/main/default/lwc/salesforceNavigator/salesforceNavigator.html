@@ -194,7 +194,15 @@
       <template lwc:elseif={isConfirmingLayoutDelete}>
         <!-- `alertdialog` rather than a bare div: a delete is destructive and
              the confirmation has to reach a screen reader user as a decision
-             to make, not as text that appeared somewhere on the page. -->
+             to make, not as text that appeared somewhere on the page.
+
+             As of the second fix pass: `handleLayoutMenuSelect`'s
+             `DELETE_LAYOUT` branch announces this text through the live
+             region as well, and `focusLayoutPrompt()` moves focus into
+             "Cancel" once this renders — the same treatment the discard
+             confirmation below already had, given to its twin so the one
+             irreversible confirmation in this component is not also the one
+             that reaches a screen-reader user as nothing. -->
         <div
           class="rstk-nav-layout-prompt"
           role="alertdialog"
@@ -207,7 +215,11 @@
             variant="destructive"
             onclick={handleLayoutDeleteConfirm}
           ></lightning-button>
+          <!-- `focusLayoutPrompt()` targets this class deliberately: the
+               safe default, never "Delete layout", so a stray Enter on the
+               control that just took focus cannot fire the destructive act. -->
           <lightning-button
+            class="rstk-nav-delete-cancel"
             label="Cancel"
             onclick={handleLayoutPromptCancel}
           ></lightning-button>

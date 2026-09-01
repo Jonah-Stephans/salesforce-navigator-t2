@@ -796,6 +796,12 @@ export default class SalesforceNavigator extends LightningElement {
     if (value === DELETE_LAYOUT) {
       if (this.canDeleteLayout) {
         this.openPrompt(PROMPT_DELETE, "");
+        // As of the second fix pass: this is the irreversible one of the two
+        // `alertdialog`s built by copying each other (see `focusLayoutPrompt`
+        // and the delete prompt's Cancel button below), and it was the one
+        // left silent — the discard prompt announces through this same
+        // `announce()` call, and until now nothing here did.
+        this.announce(this.layoutDeleteMessage);
       }
       return;
     }
@@ -809,15 +815,26 @@ export default class SalesforceNavigator extends LightningElement {
       // it. Asking first, through the same discard prompt Cancel uses, is
       // this slice's fourth call site for one shared confirmation.
       //
-      // **`layoutId !== this.layoutId` joins the guard as of the fix pass.**
-      // Every layout the user owns renders as a selectable entry, the active
-      // one included, so re-picking the layout already on screen is a real
-      // click a user makes. Without this, the question was asked about a
-      // switch that `switchToLayout`'s own no-op return below was always
-      // going to refuse — a prompt about a loss that cannot happen, whose
-      // destructive button then discards nothing and switches nothing.
+      // **This guard now copies `switchToLayout`'s whole no-op condition, not
+      // only the id-equality half, as of the second fix pass.** Every layout
+      // the user owns renders as a selectable entry, the active one
+      // included, so re-picking the layout already on screen is a real click
+      // a user makes — `layoutId !== this.layoutId` is what stops the
+      // question being asked about a switch that `switchToLayout`'s own
+      // no-op return below was always going to refuse. But `switchToLayout`
+      // refuses on `!layoutId || layoutId === this.layoutId`, and copying
+      // only the second disjunct left the first live: `get layoutChoices()`
+      // unshifts an entry whose value is the bare `LAYOUT_VALUE_PREFIX`
+      // whenever `!this.layoutId` (a user who owns no row, or one
+      // `adoptFromStore`'s no-active branch has just set `layoutId` to
+      // `undefined` for), so `layoutId` slices to `""` there and `""` is
+      // never `undefined` — the guard asked anyway, about a switch that was
+      // always going to be refused, and "Discard changes" then discarded
+      // nothing and switched nothing. `layoutId &&` closes that: a falsy
+      // `layoutId` cannot pass this guard whatever `this.layoutId` is.
       if (
         this.isEditing &&
+        layoutId &&
         layoutId !== this.layoutId &&
         this.hasUnsavedCanvasChanges
       ) {
@@ -907,6 +924,17 @@ export default class SalesforceNavigator extends LightningElement {
     }
   }
 
+  /**
+   * **This clear of `pendingDiscardAction` is load-bearing, not
+   * belt-and-braces, as of the second fix pass.** It was optional while
+   * `handleLayoutPromptCancel` was a bare `this.closePrompt()`, because
+   * nothing read the field except `PROMPT_DISCARD`'s own path. Once that
+   * handler started reading `pendingDiscardAction` *before* it knows which
+   * prompt is open (see its own doc), this became the only thing standing
+   * between Escape closing the discard prompt directly — which calls this
+   * method, not `handleLayoutPromptCancel` — and a later, unrelated dialog's
+   * "Cancel" misreading the action Escape left behind as its own decline.
+   */
   closePrompt() {
     this.layoutPrompt = undefined;
     this.draftLayoutName = "";
@@ -2143,15 +2171,24 @@ export default class SalesforceNavigator extends LightningElement {
   /**
    * Puts focus into whichever input-taking layout dialog is open.
    *
-   * **The discard confirmation joins this, as of the fix pass.** It has no
-   * input, so there is nothing for the naming prompt's own branch to find —
-   * but the `alertdialog` still has to receive focus deliberately or it falls
-   * to `document.body`, exactly Trap 3's hazard at a third and fourth place
-   * (New layout and Delete layout both call `closePrompt()` first, destroying
-   * the control that held focus, before this dialog opens in its place). The
-   * target is "Keep editing", never "Discard changes" — the same "not the
-   * control that commits" reasoning `EDIT_ENTRY_FOCUS_SELECTOR` already uses
-   * for the pencil, so a stray Enter cannot fire the destructive action.
+   * **The discard confirmation joins this, as of the first fix pass.** It has
+   * no input, so there is nothing for the naming prompt's own branch to find
+   * — but the `alertdialog` still has to receive focus deliberately or it
+   * falls to `document.body`, exactly Trap 3's hazard at a third and fourth
+   * place (New layout and Delete layout both call `closePrompt()` first,
+   * destroying the control that held focus, before this dialog opens in its
+   * place). The target is "Keep editing", never "Discard changes" — the same
+   * "not the control that commits" reasoning `EDIT_ENTRY_FOCUS_SELECTOR`
+   * already uses for the pencil, so a stray Enter cannot fire the destructive
+   * action.
+   *
+   * **The delete confirmation joins this too, as of the second fix pass.**
+   * `PROMPT_DELETE` is the shape `PROMPT_DISCARD` was built by copying — same
+   * container, same `role="alertdialog"`, same `onkeydown` — and the first
+   * fix pass gave the copy this focus hand-off while leaving the original
+   * exactly as silent as it always was. The target is "Cancel", for the same
+   * "not the control that commits" reason: "Delete layout" is destructive and
+   * irreversible, so a stray Enter must not land there.
    */
   focusLayoutPrompt() {
     if (this.isNamingLayout) {
@@ -2160,6 +2197,13 @@ export default class SalesforceNavigator extends LightningElement {
       );
       if (input && this.template.activeElement !== input) {
         input.focus();
+      }
+      return;
+    }
+    if (this.isConfirmingLayoutDelete) {
+      const cancel = this.template.querySelector(".rstk-nav-delete-cancel");
+      if (cancel && this.template.activeElement !== cancel) {
+        cancel.focus();
       }
       return;
     }

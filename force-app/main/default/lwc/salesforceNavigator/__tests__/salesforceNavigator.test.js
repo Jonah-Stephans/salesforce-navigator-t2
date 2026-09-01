@@ -5473,6 +5473,36 @@ describe("c-salesforce-navigator", () => {
       expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
     });
 
+    it("does not ask, and switches to nothing, when a rowless user picks the bare layout entry while editing with unsaved changes", async () => {
+      // Finding 1 of the re-review: the guard above used to copy only the
+      // id-equality half of `switchToLayout`'s own no-op condition
+      // (`!layoutId || layoutId === this.layoutId`). A user who owns no row
+      // gets an extra menu entry whose value is the bare `LAYOUT_VALUE_PREFIX`
+      // (`get layoutChoices()`'s unshifted entry), so picking it slices to
+      // `layoutId === ""`, and `"" !== this.layoutId` (`undefined`) passed
+      // the half-copied guard — the discard prompt opened about a switch
+      // that was always going to be refused, and "Discard changes" then
+      // discarded nothing and switched nothing. `adoptFromStore`'s no-active
+      // branch reaches the same state for a user who holds rows the store
+      // reports none active for, not only one who has never saved.
+      const store = installStore([]);
+      const element = await navigatorOnStore(store);
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "layout:");
+      await flush();
+
+      expect(discardConfirmButton(element)).toBeNull();
+      expect(activateLayout).not.toHaveBeenCalled();
+      expect(renderedColumns(element, 0)).toBe(6);
+      expect(sectionNames(element)).toEqual(["All Items"]);
+      expect(store.rows).toEqual([]);
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON)).not.toBeNull();
+    });
+
     it("confirming the discard prompt on a layout switch throws the draft away and switches, by the same route Cancel uses", async () => {
       const store = installStore(threeRows());
       const element = await navigatorOnStore(store);
@@ -6382,6 +6412,97 @@ describe("c-salesforce-navigator", () => {
         element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
       ).toBeNull();
       expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("a genuine Cancel on Rename layout closes it, not a discard action Escape left stale by closing the prompt directly", async () => {
+      // Finding 2 of the re-review: the fix above made `handleLayoutPromptCancel`
+      // read `pendingDiscardAction` *before* it knows which prompt is open,
+      // which put a live reader of that field on every dialog's Cancel, not
+      // only the reopened New layout prompt's own. Escape closes the discard
+      // prompt through `handleLayoutPromptKeydown` -> `closePrompt()`
+      // directly, never through `handleLayoutPromptCancel` — so
+      // `closePrompt()`'s own clear of `pendingDiscardAction` is the only
+      // thing stopping a later, unrelated dialog's Cancel from misreading
+      // the action Escape left behind as its own decline.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      selectSectionMenuItem(element, 0, "columns-6");
+      await flush();
+
+      selectLayoutMenu(element, "new-layout");
+      await flush();
+      await commitLayoutName(element, "Weekly review");
+      expect(discardConfirmButton(element)).not.toBeNull();
+
+      element.shadowRoot.querySelector(".rstk-nav-layout-prompt").dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true
+        })
+      );
+      await flush();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
+      ).toBeNull();
+
+      selectLayoutMenu(element, "rename-layout");
+      await flush();
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt__input")
+      ).not.toBeNull();
+
+      Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      )
+        .find((button) => button.label === "Cancel")
+        .click();
+      await flush();
+
+      // The rename prompt closes. Without `closePrompt()`'s clear, this
+      // would instead reopen New layout with "Weekly review" still in it —
+      // the exact reproduction the finding measured.
+      expect(
+        element.shadowRoot.querySelector(".rstk-nav-layout-prompt")
+      ).toBeNull();
+      expect(createLayout).not.toHaveBeenCalled();
+    });
+
+    it("announces the delete confirmation and focuses Cancel when Delete layout is chosen with nothing unsaved", async () => {
+      // Finding 3 of the re-review: `PROMPT_DELETE` is the shape
+      // `PROMPT_DISCARD` was built by copying — same container, same
+      // `role="alertdialog"`, same `onkeydown` — but the first fix pass gave
+      // only the copy a focus-and-announce treatment and left the original
+      // exactly as silent and unfocused as it always was, which made the one
+      // irreversible confirmation in this component the one that reached a
+      // screen-reader user as nothing.
+      const element = await storedNavigator();
+      await enterEditMode(element);
+
+      const moved = recordFocusMoves();
+      selectLayoutMenu(element, "delete-layout");
+      await flush();
+
+      const dialog = element.shadowRoot.querySelector(
+        ".rstk-nav-layout-prompt[role='alertdialog']"
+      );
+      expect(dialog).not.toBeNull();
+      const cancelButton = Array.from(
+        element.shadowRoot.querySelectorAll(
+          ".rstk-nav-layout-prompt lightning-button"
+        )
+      ).find((button) => button.label === "Cancel");
+      // Focus lands on "Cancel", never "Delete layout" — the same "not the
+      // control that commits" reasoning the discard prompt's own focus
+      // target already uses, so a stray Enter cannot fire the destructive
+      // act.
+      expect(moved[moved.length - 1]).toBe(cancelButton);
+      expect(announcement(element)).toBe(
+        "Delete My Navigator? You will go back to seeing every tab you can reach in one section."
+      );
     });
 
     it("asks before discarding when Delete layout is confirmed with unsaved canvas changes, and declining leaves the draft in place", async () => {
