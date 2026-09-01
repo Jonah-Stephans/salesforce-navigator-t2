@@ -1794,12 +1794,23 @@ export default class SalesforceNavigator extends LightningElement {
     // **Also what makes `handleLayoutNameCommit` and `handleLayoutDeleteConfirm`
     // safe with no `isWriteLocked` re-check of their own, ninth pass.** Both
     // call a writing act directly, with no lock guard at their own call site.
-    // Safe because a Tier 2 prompt cannot be acted on stale: it can only be
-    // *opened* through `handleLayoutMenuSelect`, which is itself gated on
-    // `isWriteLocked` (see it), so nothing can open one while a write is
-    // already outstanding — and the one act that *can* begin a write while a
-    // prompt is already standing open is Save, the only one of the four that
-    // does not go through that gate. Save always reaches this method,
+    // Safe because a Tier 2 prompt cannot be acted on stale. **Corrected on
+    // review: an earlier version of this comment said such a prompt "can only
+    // be opened through `handleLayoutMenuSelect`". That is false — there are
+    // four `openPrompt(` sites that open a Tier 2 prompt and only three sit
+    // behind that gate; `handleLayoutPromptCancel`'s reopen of `PROMPT_NEW` is
+    // ungated, reached by New layout -> name -> commit with unsaved changes ->
+    // "Keep editing", and driven by a test in this suite. The conclusion held
+    // but the stated reason did not cover that fourth opener, so here is the
+    // one that does.** Three of the four openers are gated on `isWriteLocked`
+    // via `handleLayoutMenuSelect` (see it), so they cannot open a prompt while
+    // a write is outstanding. The fourth is covered instead by `openPrompt`
+    // itself, which clears `this.pendingDiscardAction` on every open, and by
+    // the fact that a live `NEW_LAYOUT` discard action cannot coexist with an
+    // outstanding write in the first place. Beyond the openers, the one act
+    // that *can* begin a write while a prompt is already standing open is
+    // Save, the only one of the four writing controls that does not go through
+    // that gate. Save always reaches this method,
     // synchronously, in the same handler that engages the lock
     // (`handleEditSave` -> `leaveEditMode`), and `this.closePrompt()` above
     // clears `this.layoutPrompt`/`this.pendingDiscardAction` as a plain,
