@@ -5903,6 +5903,11 @@ describe("c-salesforce-navigator", () => {
     const CANCEL_ANNOUNCEMENT = "Edit mode off. Nothing was saved.";
     const DISCARD_ANNOUNCEMENT =
       "You have unsaved changes. Discard them and continue?";
+    const WRITE_LOCK_ANNOUNCEMENT =
+      "Saving. Save, New layout, Rename layout and Delete layout are unavailable until this finishes.";
+    // Finding B: what a user hears re-entering a session an earlier Save's
+    // own write has left locked.
+    const ENTER_LOCKED_ANNOUNCEMENT = `Edit mode on. ${WRITE_LOCK_ANNOUNCEMENT}`;
 
     function payload(sectionName, columns, items) {
       return JSON.stringify({
@@ -7006,6 +7011,102 @@ describe("c-salesforce-navigator", () => {
       expect(updateLayout).not.toHaveBeenCalled();
     });
 
+    /**
+     * Critique finding A. `announce()` sets one reactive property, so two
+     * calls made without an `await` between them collapse into one render —
+     * only the second is ever flushed. `handleEditSave` calls `beginWrite()`
+     * (which used to announce the busy message unconditionally) and then,
+     * synchronously in the same handler, announces its own outcome — so the
+     * busy message could never have reached a screen reader for Save, held
+     * open or not. `beginWrite({ announceLock: false })` makes that the
+     * decision it always should have been rather than an accident of call
+     * order.
+     *
+     * The rendered text cannot tell "one call" from "two calls, the first
+     * overwritten" apart — both end on `SAVE_ANNOUNCEMENT`. `SalesforceNavigator.prototype`
+     * is frozen once a component instance exists (LWC's own doing, checked
+     * directly: `Object.getOwnPropertyDescriptor` reports non-writable,
+     * non-configurable after `createElement`+`appendChild`), so `announce`
+     * cannot be spied on either. What *can* be read is `announcementNonce`'s
+     * parity, already load-bearing for the "two identical sentences" case
+     * this component relies on elsewhere: it flips on every call, so an odd
+     * number of calls since the last read (Save's own, alone) flips it and
+     * an even number (busy, then outcome) leaves it exactly where it
+     * started. That parity is what actually discriminates the fix.
+     */
+    it("announces only Save's own outcome, never the busy message, even while the write is held open", async () => {
+      const element = await storedNavigator();
+      await enterEditMode(element);
+      await addSection(element);
+
+      let releaseUpdate;
+      updateLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseUpdate = () =>
+              resolve({ layoutId: EXISTING_LAYOUT_ID, isActive: true });
+          })
+      );
+
+      const nonceChar = String.fromCharCode(0x200b);
+      const region = element.shadowRoot.querySelector(".rstk-nav-announcer");
+      const nonceBefore = region.textContent.includes(nonceChar);
+
+      element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).click();
+      await flush();
+
+      const nonceAfter = region.textContent.includes(nonceChar);
+      expect(nonceAfter).toBe(!nonceBefore);
+      expect(announcement(element)).toBe(SAVE_ANNOUNCEMENT);
+
+      releaseUpdate();
+      await flush();
+      await flush();
+
+      // `endWrite()` announces nothing of its own — the outcome already said
+      // what happened, and the parity from just now still holds.
+      expect(region.textContent.includes(nonceChar)).toBe(nonceAfter);
+      expect(announcement(element)).toBe(SAVE_ANNOUNCEMENT);
+    });
+
+    /**
+     * Critique finding B. The reasoning against announcing when the lock
+     * *clears* is sound and untouched by this test: `endWrite()` still
+     * announces nothing. What it missed is the case where the lock is still
+     * *held* on entry — Save is the only one of the four writing controls
+     * that leaves edit mode while its own write is outstanding, so a user
+     * can re-enter before that write lands and reach a session whose primary
+     * action is already `disabled`, told nothing about it at any point.
+     */
+    it("announces that an earlier save is still finishing when edit mode is re-entered while locked", async () => {
+      let releaseUpdate;
+      updateLayout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseUpdate = () =>
+              resolve({ layoutId: EXISTING_LAYOUT_ID, isActive: true });
+          })
+      );
+      const element = await storedNavigator();
+      await enterEditMode(element);
+      await addSection(element);
+      await saveEdits(element);
+
+      // Save has already left edit mode; its own write is still open.
+      expect(element.shadowRoot.querySelector(EDIT_AFFORDANCE)).not.toBeNull();
+
+      await enterEditMode(element);
+
+      expect(announcement(element)).toBe(ENTER_LOCKED_ANNOUNCEMENT);
+      expect(element.shadowRoot.querySelector(EDIT_SAVE_BUTTON).disabled).toBe(
+        true
+      );
+
+      releaseUpdate();
+      await flush();
+      await flush();
+    });
+
     it("moves focus to the first revealed control on entry, and back to the edit affordance on the way out", async () => {
       // Entering destroys the element that had focus — the affordance is
       // replaced, not joined — so focus falls to document.body unless it is
@@ -7175,9 +7276,7 @@ describe("c-salesforce-navigator", () => {
       await flush();
       await commitLayoutName(element, "Weekly review");
 
-      expect(announcement(element)).toBe(
-        "Saving. Save, New layout, Rename layout and Delete layout are unavailable until this finishes."
-      );
+      expect(announcement(element)).toBe(WRITE_LOCK_ANNOUNCEMENT);
 
       releaseCreate();
       await flush();

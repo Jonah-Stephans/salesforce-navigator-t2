@@ -192,6 +192,22 @@ const WRITE_LOCK_ANNOUNCEMENT =
   "Saving. Save, New layout, Rename layout and Delete layout are unavailable until this finishes.";
 
 /**
+ * Eighth pass, accessibility finding B. `isWriteLocked` can already be `true`
+ * the instant edit mode is (re-)entered: Save is the only one of the four
+ * writing controls that calls `leaveEditMode()` while its own write is still
+ * outstanding (see `handleEditSave`), and nothing stops the user pressing the
+ * pencil again before that write lands. `ENTER_EDIT_ANNOUNCEMENT` says "press
+ * Save," which is false in that state — Save renders `disabled`, and so do
+ * the three menu entries — and until this pass nothing told a screen reader
+ * user why. Composed from `WRITE_LOCK_ANNOUNCEMENT` rather than a second
+ * sentence saying the same thing, per `rstk-dry-enforcement.md`: the reason
+ * the four controls are unavailable is one fact, stated once, whether the
+ * user is hearing it because they just pressed one of them or because they
+ * walked back into a session that already had one outstanding.
+ */
+const ENTER_EDIT_LOCKED_ANNOUNCEMENT = `Edit mode on. ${WRITE_LOCK_ANNOUNCEMENT}`;
+
+/**
  * Where focus goes on the render that follows an edit-mode transition, and the
  * selectors it goes to.
  *
@@ -1524,7 +1540,16 @@ export default class SalesforceNavigator extends LightningElement {
     this.editSnapshot = this.captureEditSnapshot();
     this.isEditing = true;
     this.editFocusTarget = EDIT_FOCUS_ENTER;
-    this.announce(ENTER_EDIT_ANNOUNCEMENT);
+    // Finding B: an earlier Save can still have a write outstanding — Save is
+    // the only one of the four writing controls that leaves edit mode before
+    // its own round trip settles — so `isWriteLocked` can already be true on
+    // entry. Telling the user only "press Save" would be false in that state;
+    // see `ENTER_EDIT_LOCKED_ANNOUNCEMENT`.
+    this.announce(
+      this.isWriteLocked
+        ? ENTER_EDIT_LOCKED_ANNOUNCEMENT
+        : ENTER_EDIT_ANNOUNCEMENT
+    );
   }
 
   /**
@@ -1549,6 +1574,13 @@ export default class SalesforceNavigator extends LightningElement {
    * `disabled` attribute on the Save button — is not a guarantee about a
    * handler.** This is what actually closes the race the sixth pass exists
    * for, not the attribute; see `isWriteLocked`.
+   *
+   * **`beginWrite({ announceLock: false })`, eighth pass (accessibility
+   * finding A).** Save is the only one of the four writing acts that calls
+   * `leaveEditMode()` — and announces its own outcome — synchronously, right
+   * here, in the same handler `beginWrite` is called from. `announceLock:
+   * false` makes that a decision rather than an accident of call order: see
+   * `beginWrite`'s own doc for the full reasoning.
    */
   handleEditSave() {
     if (this.isWriteLocked) {
@@ -1556,7 +1588,7 @@ export default class SalesforceNavigator extends LightningElement {
     }
     const wroteChanges = this.hasUnsavedCanvasChanges;
     if (wroteChanges) {
-      this.beginWrite();
+      this.beginWrite({ announceLock: false });
       const written = this.commitLayoutNow();
       // `commitLayoutNow` only returns `undefined` when `hasLayoutLoadError`
       // holds, which cannot be true here — reaching Save requires having
@@ -1688,10 +1720,30 @@ export default class SalesforceNavigator extends LightningElement {
    * handler-side re-checks below mean should not happen from a real user
    * gesture, but this stays cheap insurance against announcing "unavailable"
    * twice in a row for one busy period.
+   *
+   * **`announceLock: false`, `handleEditSave`'s own call, eighth pass
+   * (accessibility finding A).** Save is the only one of the four writing
+   * acts that calls `leaveEditMode()` — and its own outcome announcement —
+   * synchronously, in the same handler that calls this. Two `announce()`
+   * calls made without an `await` between them collapse into one render: the
+   * second write to `this.announcement` is the only one that is ever
+   * flushed, so `WRITE_LOCK_ANNOUNCEMENT` could never have reached a screen
+   * reader for Save regardless of this flag, only ever the outcome that
+   * follows it. That was previously true by accident of call order rather
+   * than by decision, and the deviation that used to justify it overstated
+   * the claim to "for all four controls," which is false for Save — its
+   * outcome is not async. `announceLock: false` makes the omission the
+   * decision it always should have been: Save's own announcement is the one
+   * thing a screen reader hears about its press, never superseded by a
+   * message about controls that, by the time of the next render, are no
+   * longer even in the DOM to describe as unavailable. New layout, Rename
+   * layout and Delete layout keep the default: none of the three leaves edit
+   * mode, so their busy message is a real, render-visible fact until their
+   * own `.then()`/`.catch()` supersedes it.
    */
-  beginWrite() {
+  beginWrite({ announceLock = true } = {}) {
     this.writeInFlight += 1;
-    if (this.writeInFlight === 1) {
+    if (announceLock && this.writeInFlight === 1) {
       this.announce(WRITE_LOCK_ANNOUNCEMENT);
     }
     this.editFocusTarget = EDIT_FOCUS_LOCK;
