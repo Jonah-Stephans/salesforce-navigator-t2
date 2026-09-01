@@ -307,3 +307,17 @@ keep the existing autosave and add no save/cancel:
 Jonah, 2026-08-28, in the design conversation, on what O4's "column resizing" means:
 
 > I'm assuming column sizing just means number of fields, like number of columns.
+
+## Outcome checks
+- [x] met O1
+- [x] met O2
+- [x] met O3
+- [x] met O4
+- [x] met O5
+- [x] met O6
+- [x] met O7
+- [x] met O8
+- [x] met O9
+- [x] met O10
+- [x] met O11
+- [x] met O12
