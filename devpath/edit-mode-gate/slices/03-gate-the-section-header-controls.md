@@ -2,7 +2,7 @@
 depends_on:
   - devpath/edit-mode-gate/slices/01-enter-and-leave-edit-mode.md
 done: true
-fix_cycles: 1
+fix_cycles: 2
 touches:
   - force-app/main/default/lwc/salesforceNavigator/salesforceNavigator.html
   - force-app/main/default/lwc/navigatorSection/navigatorSection.js

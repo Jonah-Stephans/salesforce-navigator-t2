@@ -2,7 +2,7 @@
 depends_on:
   - devpath/edit-mode-gate/slices/03-gate-the-section-header-controls.md
 done: true
-fix_cycles: 1
+fix_cycles: 2
 touches:
   - force-app/main/default/lwc/navigatorSection/navigatorSection.html
   - force-app/main/default/lwc/navigatorItem/navigatorItem.js

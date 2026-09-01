@@ -3,7 +3,7 @@ depends_on:
   - devpath/edit-mode-gate/slices/03-gate-the-section-header-controls.md
   - devpath/edit-mode-gate/slices/04-gate-the-item-menu.md
 done: true
-fix_cycles: 3
+fix_cycles: 4
 touches:
   - force-app/main/default/lwc/salesforceNavigator/salesforceNavigator.js
   - force-app/main/default/lwc/navigatorSection/navigatorSection.js
