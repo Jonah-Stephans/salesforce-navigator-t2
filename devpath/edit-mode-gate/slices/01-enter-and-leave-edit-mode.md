@@ -137,7 +137,7 @@ user presses Save, or thrown away when they press Cancel.
   re-run against a targeted mutation each and still kill it. Deployed clean to `sfnav-t2`; full jest
   suite green at 500/500 (498 carried over, plus the two new tests finding 1 and finding 2 each added;
   finding 3 added an assertion to an existing test rather than a new one).
-- [ ] **Sixth pass, Jonah's decision (2026-08-31) to disable the four writing controls while a write is
+- [x] fixed — the pause is resolved and the lockout is built. Jonah resolved it in session on 2026-08-31 by directing that slices 03, 04 and 05 be built first; those three landed and were critiqued, every Tier 1 control is now behind `lwc:if={editing}`, all four drag and drop surfaces are gated, and an independent scan found no route to the save path out of edit mode. The seventh pass then re-ran this box's own verification step, found the premise true, and built the lockout in `f0f1a72`; its critique is in `2e83f6d`. Closed by the orchestrator rather than by a worker, because the pause was answered by the engineer and this is the seat holding that answer. Original pause text follows. **Sixth pass, Jonah's decision (2026-08-31) to disable the four writing controls while a write is
   outstanding: paused at its own mandated Step 1.** The decision assumes every path that can issue a
   write to the server funnels through Save, New layout, Rename layout and Delete layout. It does not.
   `navigatorSection.html`/`.js` and `navigatorItem.html`/`.js` carry no `@api editing` and no reference
